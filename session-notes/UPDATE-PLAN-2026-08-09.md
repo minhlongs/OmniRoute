@@ -73,9 +73,17 @@ docker run -d --name omniroute -p 20128:20128 --restart unless-stopped omniroute
 
 ## Nguồn free tier cần thử (sau update — có thể fix #9675 mở lại opencode)
 1. `opencode-zen/deepseek-v4-flash-free` — test 429 còn không
-2. `agentrouter/claude-haiku-4-5-20251001` (200M one-time) — POST /api/providers
-3. `agy/gemini-3.6-flash-low` (keyless) — cần connection agy
+2. `agentrouter/claude-haiku-4-5-20251001` (200M one-time) — POST /api/providers (cần key agentrouter.org — $200 free signup)
+3. `agy/gemini-3.6-flash-low` (keyless) — cần connection agy (OAuth wizard)
 4. `api-airforce/google/gemini-2.5-flash` (recurring-daily)
 5. `bazaarlink/claude-haiku-4.5` (recurring-daily)
 
 Mỗi provider thêm xong: test 200 trước khi đưa vào combo. KHÔNG thêm provider chưa verify.
+
+## ✅ ĐÃ LÀM (16:37 UTC) — Dahl Free Tier (100M tokens)
+- **Dahl**: POST /api/dahl/tokens → auto-gen token `dahl_...` (100M tokens free, MiniMax M2.7 + Kimi K2.6)
+- POST /api/providers {"provider":"dahl","name":"Dahl Free","apiKey":"<token>"} → connection `abba8a57-d2d1-4834-be49-75233473795f`, test valid 337ms
+- 2 combo mới: `dahl-minimax` (3e84a427) + `dahl-kimi` (c1ac79ec) — đều 200 end-to-end qua /api/v1/messages
+- 18/18 combos gán compression default-caveman
+- GHI CHÚ: POST /api/providers CHỈ admit: FREE_APIKEY_PROVIDER_IDS (qoder/mimocode/opencode/dahl/codebuddy-cn/auggie) + compatible prefix. theoldllm/aihorde/chipotle (noauth) KHÔNG add được qua API — chỉ dashboard wizard.
+
