@@ -144,3 +144,10 @@ Mỗi provider thêm xong: test 200 trước khi đưa vào combo. KHÔNG thêm 
 - **Subagent → opus-4-8[1m]**: suntzu (claude-fable-5→opus), kongming (fable→opus) ở _integration + ~/.claude/agents/kongming.md + copy sang ~/.claude-ak/agents/
 - Verify: main chat mk = fable-5 ✓; @suntzu → log "Trying model 1/19: .../claude-opus-4-8[1m] succeeded 4171ms" ✓
 - Luật: `model: opus` → ANTHROPIC_DEFAULT_OPUS_MODEL = claude-opus-4-8[1m]; `opus`/`sonnet`/`fable` trong frontmatter resolve theo default models env
+
+### ⚖️ Vòng 2 chia tải (03:20 UTC) — deep balancing, loại DeepSeek API trả phí
+- Combo fable-5 weights mới: fable-5=25, opus-4-8[1m]=10, opus-4-8=8, sonnet-5-0=8, opus-4-7[1m]=4, sonnet-4-6=4, opus-4-7=3, opus-4-6[1m]=2, minimax-m3=2, deepseek-flash=2, deepseek-pro=1, opus-4-6=1, qwen/kimi/glm=0.5, **dahl Kimi=12, dahl MiniMax=10, opencode free=6**, DeepSeek API paid=0.05
+- **Loại DeepSeek API trả phí khỏi 16 combo** (openai-compatible-chat-5f198be5.../deepseek-v4-flash) — chỉ giữ zuneF-deepseek (free) + opencode free
+- Verify 30 request: 30/30 = 200; log 150s: zuneF ~30, opencode free 91, dahl 3, DeepSeek paid 0
+- Provider key status: zuneF=Dahl=DeepSeek có key; mimocode=OpenCode Free KHÔNG key (noauth, 429-prone nhưng vẫn hoạt động)
+- Cả 3 free đều live-test OK: dahl Kimi 200, dahl MiniMax 200, opencode free 200
