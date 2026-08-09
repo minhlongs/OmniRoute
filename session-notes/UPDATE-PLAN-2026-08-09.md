@@ -87,3 +87,9 @@ Mỗi provider thêm xong: test 200 trước khi đưa vào combo. KHÔNG thêm 
 - 18/18 combos gán compression default-caveman
 - GHI CHÚ: POST /api/providers CHỈ admit: FREE_APIKEY_PROVIDER_IDS (qoder/mimocode/opencode/dahl/codebuddy-cn/auggie) + compatible prefix. theoldllm/aihorde/chipotle (noauth) KHÔNG add được qua API — chỉ dashboard wizard.
 
+## ✅ ĐÃ LÀM (16:41 UTC) — Phân luồng auto + Dahl vào ladder fable-5
+- **Cơ chế phân luồng đa tab CỦA OmniRoute**: semaphore per-model (`concurrencyPerModel` default 3) → model bận thì queue → `queueTimeoutMs` (8s) → **tự failover model kế**. 429 → mark rate-limited cả phiên. Strategies: priority/weighted/round-robin/least-used/cost-optimized/p2c/auto/headroom... (19 loại, src/shared/constants/routingStrategies.ts, dispatch trong open-sse/services/combo.ts)
+- **Combo `claude-fable-5` (19 models)**: config `{compressionMode: stacked, concurrencyPerModel: 3, queueTimeoutMs: 8000, failoverBeforeRetry: true}`. Ladder: 0-8 zuneF claude → 9-14 zuneF non-claude (deepseek/minimax/qwen/kimi/glm) → 15 DeepSeek API → **16-17 Dahl (Kimi-K2.6, MiniMax-M2.7)** → 18 opencode-free (cuối, hay 429)
+- **Verify đa tab**: 8 request song song → 7 đi zuneF + 1 tự tràn DeepSeek (zuneF bận concurrent) — failover auto chạy đúng
+- Lưu ý: `queueDepth` chỉ áp dụng round-robin (bị strip khi set priority) — muốn failover nhanh hơn có thể đổi strategy round-robin + queueDepth 0-2
+
