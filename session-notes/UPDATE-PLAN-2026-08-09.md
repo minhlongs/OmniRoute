@@ -100,3 +100,26 @@ Mỗi provider thêm xong: test 200 trước khi đưa vào combo. KHÔNG thêm 
 - **KẾT LUẬN**: KHÔNG bật concurrencyPerModel song song với global resilience queue cùng giá trị. Nếu cần failover-theo-bận: đổi hẳn sang round-robin (semaphore per-model riêng) — không trộn 2 lớp trên priority.
 - Config fable-5 hiện tại: `{compressionMode: stacked, failoverBeforeRetry: true}` — failover khi zuneF thật sự fail, không khi bận.
 
+## ✅ HOÀN TẤT LUỒNG (23:55 UTC) — Hardening + kết luận update
+### Update v3.8.50 — BỎ (quyết định 23:46 UTC)
+- **Docker Hub KHÔNG có image v3.8.50**: `latest` = 3.8.49 (build 07-30), `main` = 3.8.49 (build 08-08), tag `3.8.50/v3.8.50/release-v3.8.50` = not found. Repo release/v3.8.50 là branch pre-release chưa tag (1879 commits, CI đang green dần).
+- Quyết định: giữ 3.8.49 (đang ổn định 0 crash sau fix wedge). Khi v3.8.50 release thật: `docker pull diegosouzapw/omniroute:3.8.50` rồi làm theo plan cũ (backup → recreate → verify).
+
+### Volume mount — HOÀN TẤT (data thoát khỏi container layer!)
+- Data giờ ở HOST: `~/omniroute-data/` (mount `-v /Users/macbook/omniroute-data:/app/data`) — KHÔNG còn mất data khi recreate container
+- Container mới (0556d3fe): verify 18 combos + 5 providers + 18 compression assignments + customUserAgent=node + fable-5 200 — nguyên vẹn
+- Image backup `omniroute:with-data-v3849` (f9afdba0) + sqlite `session-notes/storage-v3849.sqlite` vẫn giữ
+
+### Backup định kỳ — launchd `com.user.omniroute-backup`
+- `~/.claude/omniroute-backup.sh`: cp storage.sqlite → `~/omniroute-backups/`, giữ 14 bản, mỗi 6h
+- Verify: bản đầu `storage-20260809-235319.sqlite` 8.1MB ✓
+
+### Monitor — launchd `com.user.omniroute-monitor`
+- `~/.claude/omniroute-monitor.sh`: đếm 502/WEDGED trong 5 phút, mỗi 5 phút, log `~/.claude/omniroute-monitor.log`
+- Verify: "OK: no 502/wedge" ✓
+
+### Semantic cache — kết luận
+- Setting đúng: `semanticCacheEnabled=true`, TTL 1800000ms (30 phút), max 100 entries
+- **Test chứng minh**: 2 request giống nhau + `temperature:0` → semantic_cache 2 rows ✓ (hoạt động)
+- **NHƯNG vô dụng với Claude Code**: `isCacheableForRead/Write` (src/lib/semanticCache.ts:357/371) yêu cầu `body.temperature === 0` EXPLICIT — CC không gửi temperature → không bao giờ cache. Giữ bật (không hại). Đã clear test rows.
+
