@@ -123,3 +123,24 @@ Mỗi provider thêm xong: test 200 trước khi đưa vào combo. KHÔNG thêm 
 - **Test chứng minh**: 2 request giống nhau + `temperature:0` → semantic_cache 2 rows ✓ (hoạt động)
 - **NHƯNG vô dụng với Claude Code**: `isCacheableForRead/Write` (src/lib/semanticCache.ts:357/371) yêu cầu `body.temperature === 0` EXPLICIT — CC không gửi temperature → không bao giờ cache. Giữ bật (không hại). Đã clear test rows.
 
+
+## ✅ BỔ SUNG (02:00 UTC 10/08) — Chia tải + fix ambiguous + mk/ak role
+### Combo claude-fable-5: priority → **random (weighted)**
+- fable-5=45, opus-4-8[1m]=15, opus-4-8=10, sonnet-5-0=8, opus-4-7[1m]=5, opus-4-7=4, sonnet-4-6=3, opus-4-6[1m]=3, opus-4-6=2, deepseek-flash=2, deepseek-pro=1, minimax-m3=1, còn lại=0.5
+- Verify: 20 request → dàn đều (fable-5, opus-4-6[1m], glm, sonnet-5-0, deepseek, minimax...), 20/20 200
+- ⚠️ Bug resolver: `m.weight || 1` → weight 0 = 1 thực tế → dùng 0.5 cho model "không muốn tự chọn"
+- ⚠️ Warning `NAME_SHADOWS_MODEL` khi combo trùng tên model — vô hại
+
+### Fix 3 model Ambiguous (11 combo)
+- qwen/qwen3.5-397b-a17b, moonshotai/kimi-k2.6, z-ai/glm-5.2 thiếu prefix → thêm `anthropic-compatible-c33c2c9c-e3e4-47ae-b231-fda23ffef734/`
+- provider prefix zuneF = `zunef` (provider_nodes); log hết "Ambiguous model"
+- Combo đã sửa: opus-4-8[1m]/4-8/4-7[1m]/4-7/4-6[1m]/4-6, sonnet-5-0/4-6, zunef-qwen/kimi/glm
+
+### mk = Chủ công, ak = tướng
+- `~/bin/mk`: fix path claude (homebrew → PATH), subcommand `init` → `ak init` (AgentKit)
+- `~/.claude-mk/agents/` → symlink tới mekong-cli/.claude/_integration/agents (27 agents)
+- `~/.claude-mk/settings.json`: zunef → **OmniRoute** (localhost:20128 + token) — đây là lý do "Execution error" trước đó
+- mk-init.md command: mekong init → ak init
+- **Subagent → opus-4-8[1m]**: suntzu (claude-fable-5→opus), kongming (fable→opus) ở _integration + ~/.claude/agents/kongming.md + copy sang ~/.claude-ak/agents/
+- Verify: main chat mk = fable-5 ✓; @suntzu → log "Trying model 1/19: .../claude-opus-4-8[1m] succeeded 4171ms" ✓
+- Luật: `model: opus` → ANTHROPIC_DEFAULT_OPUS_MODEL = claude-opus-4-8[1m]; `opus`/`sonnet`/`fable` trong frontmatter resolve theo default models env
