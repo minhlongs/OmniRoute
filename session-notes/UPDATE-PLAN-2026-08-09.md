@@ -93,3 +93,10 @@ Mỗi provider thêm xong: test 200 trước khi đưa vào combo. KHÔNG thêm 
 - **Verify đa tab**: 8 request song song → 7 đi zuneF + 1 tự tràn DeepSeek (zuneF bận concurrent) — failover auto chạy đúng
 - Lưu ý: `queueDepth` chỉ áp dụng round-robin (bị strip khi set priority) — muốn failover nhanh hơn có thể đổi strategy round-robin + queueDepth 0-2
 
+## ⚠️ BUG PHÁT HIỆN + FIX (16:50 UTC) — Claude Code văng do wedge queue
+- **Triệu chứng**: Claude Code thoát đột ngột (0 crash report, 0 jetsam — KHÔNG phải RAM/Docker; RAM 95% free)
+- **Nguyên nhân**: `concurrencyPerModel: 3` trên combo CHỒNG LÊN global rate-limit queue (resilience concurrent=3) → 2 lớp quản lý concurrent race → `WEDGED: queued=2 running=0 executing=0 stalled=141418ms` → force-reset → 502 → Claude Code exit. Chỉ 1 lần trong log, đúng lúc test 8 parallel.
+- **Fix**: BỎ `concurrencyPerModel` khỏi combo config (giữ global resilience concurrent=3 — vốn ổn định cả ngày 10 tab). Verify: 8 parallel → 8/8 thành công, 0 wedge, tất cả đi zuneF.
+- **KẾT LUẬN**: KHÔNG bật concurrencyPerModel song song với global resilience queue cùng giá trị. Nếu cần failover-theo-bận: đổi hẳn sang round-robin (semaphore per-model riêng) — không trộn 2 lớp trên priority.
+- Config fable-5 hiện tại: `{compressionMode: stacked, failoverBeforeRetry: true}` — failover khi zuneF thật sự fail, không khi bận.
+
