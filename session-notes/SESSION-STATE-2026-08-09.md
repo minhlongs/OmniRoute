@@ -77,9 +77,9 @@
 - RỦI RO: data trong container layer — nếu image mới khởi tạo DB mới, phải `docker cp` storage.sqlite cũ vào
 
 ### P2 — Tối ưu sâu (từ brainstorm trước)
-- **RTK compression** (engineCatalog.ts: `rtk` — command-output filtering 60-90% savings): bật qua dashboard Settings → Compression
+- ✅ **RTK + Caveman compression ĐÃ BẬT (16:17 UTC)**: gán cả 16 routing combos → compression combo `default-caveman` (pipeline RTK standard + Caveman full) qua PUT `/api/context/combos/default-caveman/assignments` {"routingComboIds":[16 ids]}. Verify: payload 40KB tool result → upstream chỉ `in=9 tokens` (log USAGE). Đừng nhầm `config.compressionMode` trên combo (không được executor thực thi trong v3.8.49 — chỉ là field legacy map từ compressionOverride) — compression THẬT qua compression_combos + compression_combo_assignments. Analytics chưa ghi (compression_analytics=0) — có thể flush định kỳ; đánh giá qua log USAGE in= là chuẩn nhất.
 - **Semantic cache**: đã bật (`semanticCacheEnabled=true`, TTL 30 phút) — verify hit rate
-- **Caveman compression**: `cavemanConfig` đã enabled (compressRoles user, minMessageLength 50)
+- **Caveman compression**: `cavemanConfig` đã enabled (compressRoles user, minMessageLength 50) + giờ nằm trong pipeline default-caveman luôn
 - **Free tiers**: README tuyên bố 1.53B free tokens/tháng (43 pools) — kích hoạt thêm provider free: agentrouter (200M one-time), agy (keyless), bazaarlink. Lưu ý: đa số cần credentials riêng; test kỹ trước khi thêm vào combo
 
 ### P3 — Nguồn tinh hoa free (đã research)
