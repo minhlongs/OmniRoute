@@ -20,7 +20,8 @@
 | mimocode | `mimocode` | `9f48f0f4-b81c-49ad-ae99-9c1294731272` | "Unsupported model" — không dùng được, giữ chờ fix upstream |
 
 ### Combos (16) — ladder priority
-- **10 combo claude** (tên = model ID): `claude-fable-5` (chuẩn) → `claude-opus-4-8[1m]` → `claude-opus-4-8` → `claude-opus-4-7[1m]` → `claude-opus-4-7` → `claude-opus-4-6[1m]` → `claude-opus-4-6` → `claude-sonnet-5-0` → `claude-sonnet-4-6` → `claude-sonnet-4-5` (tên mới của combo haiku)
+- **`claude-fable-5` = combo chính**: strategy **`weighted`** (đã sửa từ `random` 2026-08-10) + `config.disableSessionStickiness: true` + `compressionMode: stacked` — weights: fable-5=25, dahl Kimi=12, dahl MiniMax=10, opus-4-8[1m]=10, opus-4-8=8, sonnet-5-0=8, opencode-free=6, opus-4-7[1m]=4, sonnet-4-6=4, opus-4-7=3, opus-4-6[1m]=2, deepseek-flash=2, minimax-m3=2, còn lại 0.5-1. Có 2 combo dahl (free 100M tokens) riêng.
+- 10 combo claude (tên = model ID): `claude-fable-5` (chuẩn) → `claude-opus-4-8[1m]` → `claude-opus-4-8` → `claude-opus-4-7[1m]` → `claude-opus-4-7` → `claude-opus-4-6[1m]` → `claude-opus-4-6` → `claude-sonnet-5-0` → `claude-sonnet-4-6` → `claude-sonnet-4-5` (tên mới của combo haiku)
 - **6 combo cheap** (`zunef-*`): deepseek-flash/pro, minimax-m3, qwen-397b, kimi-k26, glm-52 + 6 mapping pattern model thật
 - **`claude-haiku-4-5` ĐÃ BỎ** (100% 502 từ zuneF) → mapping `claude-haiku-4-5` → combo `claude-sonnet-4-5` (id `ab8ba99d-660a-4b19-829e-bbfd4deca9b8`)
 - Mỗi combo kết thúc: DeepSeek API `deepseek-v4-flash` → opencode free
@@ -51,6 +52,7 @@
 
 ## 3. Việc đã hoàn thành hôm nay
 
+- [x] **FIX CHIA TẢI (02:55 UTC+7)**: combo `claude-fable-5` strategy `random` → **`weighted`** + `config.disableSessionStickiness: true` (giữ `compressionMode: stacked`, weights cũ fable-5=25/opus-4-8[1m]=10/dahl kimi=12/minimax=10/opencode=6). Root cause: (1) `random` chỉ shuffle đều KHÔNG đọc weight (`applyStrategyOrdering.ts:122` — chỉ `weighted` mới dùng `selectWeightedUnit`), (2) session stickiness pin cả phiên CC 15 phút vào connection thắng shuffle 1 lần (`sessionStickiness.ts`, hash first-user-message), (3) filter `kept 11/18` loại 7 model zuneF khi CC gửi `max_tokens` lớn (hard fail `output_tokens` khi max_out=64000 < 96000, `comboStructure.ts:597`). Verify: 47 request test — opencode-free từ 88% → 4%, fable-5 19%, dahl 11+4, phân phối khớp weight. PUT qua `/api/combos/571d898e-fb60-4068-b34b-d1f1c14892f4` với cookie `/private/tmp/omni_cookies.txt` (còn hạn đến 2036).
 - [x] Fix Claude Code CLI crash (NODE_OPTIONS 8192, bỏ heap caps) — plan cũ `/private/tmp/plans/2026-08-09-fix-claude-code-oom-crash/`
 - [x] Fix focus-cleanup.sh giết opencode (pkill -f "opencode") — bỏ dòng, backup `.bak-20260809`
 - [x] Deploy OmniRoute :20128 + login admin@local
