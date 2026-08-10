@@ -11,6 +11,16 @@
 - Đã thêm 4 model vào combo fable-5 (22 models): kimi-k3 w=4, grok-4.5 w=3, qwen3.8-max w=3, gpt-5.6-luna w=2
 - Verify: qwen3.8-max + kimi-k3 trúng phân phối weighted; compression + failover hoạt động
 
+### Tối ưu deep (2026-08-10) — trên MBP
+- **Compression**: RTK standard → **aggressive** + Caveman full (32% → **38.9% saved**, 495K → 302K tokens). Verify log: `Prompt compressed (stacked): 495012 -> 302338 (38.92% saved)`
+- **Adaptive compression**: contextBudget `mode=floor`, pct 0.85, outputReserve 4096 — tự chọn cường độ theo context window
+- **Compression cache**: cacheMinutes 5 → **60**
+- **Auto-trigger**: 40000 → **20000 tokens** (nén sớm hơn)
+- **Zen free models** thêm vào combo fable-5 (25 models): `opencode-zen/mimo-v2.5-free` w=2, `ling-3.0-tiny-free` w=1.5, `nemotron-3-ultra-free` w=1.5 — **lợi prompt cache** (Zen cache_read=396K = 99.9% hit; zuneF cache_read=0!). Chỉ 8 free models thật trên Zen: deepseek-v4-flash-free, mimo-v2.5-free, ling-3.0-flash/tiny-free, nemotron-3-ultra-free, north-mini-code-free, laguna-s-2.1-free, longcat-2.0-free
+- **Zen premium (claude-fable-5, opus...)**: 402 `Insufficient balance` — gói Go $5 KHÔNG phủ Zen premium tier, cần balance riêng tại `https://opencode.ai/workspace/wrk_01KW11AXTBDPKD94EAHV8BC4HK/billing`
+- **Go deepseek-v4-flash (2x)**: RegionError — cần opt-in China tại `.../wrk_01KW11AXTBDPKD94EAHV8BC4HK/go`
+- **opencode-zen provider**: connection `81fbadc2-f153-4f8a-99b4-d2fa7f3c1301` (key GO đã gắn, nhưng premium vẫn 402) — free models dùng noauth fallback OK
+
 ### Kiến trúc mới (giảm tải M1 Max)
 - **M1 Max (client)**: Claude Code ×1-2 phiên, opencode — chỉ là client, colima/Docker ĐÃ TẮT
 - **MBP M1 16GB (server)**: OmniRoute **native** (không Docker) chạy 24/7
