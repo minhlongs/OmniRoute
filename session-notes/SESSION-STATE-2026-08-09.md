@@ -4,6 +4,14 @@
 
 ## 0. MIGRATE SANG MBP M1 (2026-08-10) — HỆ THỐNG HIỆN TẠI
 
+### Deep optimize round 2 (2026-08-10) — fix claude-opus-5 401
+- **Vấn đề**: CC session cũ gọi `claude-opus-5` (không [1m]) → OmniRoute resolve thẳng vào `opencode-zen` connection → `[401] Insufficient balance` → connection bị mark `credits_exhausted` → **toàn bộ zen free models cũng chết** (mimo-v2.5-free, ling, nemotron)
+- **Fix**:
+  1. Tạo combo `claude-opus-5` (15 models, priority — clone từ claude-opus-4-8[1m]) → request opus-5 chạy ladder thay vì 401. Verify: `Combo "claude-opus-5" [priority] with 15 models`, 200 OK 11.6s
+  2. Reset connection opencode-zen `81fbadc2` testStatus → active
+- **Bài học**: model alias không có combo riêng sẽ resolve vào provider trực tiếp — nếu provider đó premium fail → cả connection chết. Nên tạo combo cho MỌI model alias mà CC có thể gọi (opus-5, fable-5, sonnet-5...)
+- **Hiện trạng log**: sonnet-5-0 2.7s, opus-4-8[1m] 6.5s, nemotron zen 9-13s, 0 fallbacks, 0 lỗi
+
 ### Fix Mekong CLI audit (2026-08-10) — 4 lớp
 1. **Registry module_path sai prefix**: `src/harness/agents/config/registry.yaml` ghi `src.seed.agents.ceo` nhưng import thật là `seed.agents.ceo` → circular import crash → đã fix cả 6 module_path
 2. **Root registry YAML BROKEN**: `agents/registry.yaml` indent sai (line 23 `- id: ceo` lồng trong slash_commands của sun-tzu) → yaml.safe_load FAIL hoàn toàn → đã rewrite đúng indent, 6 agents (sun-tzu/ceo/ae/pm/eng/ops) + 6 delegation_rules parse OK
