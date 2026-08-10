@@ -4,6 +4,14 @@
 
 ## 0. MIGRATE SANG MBP M1 (2026-08-10) — HỆ THỐNG HIỆN TẠI
 
+### Khôi phục NIM + Ollama keys (2026-08-10)
+- **Nguồn**: Crashpad dump của Antigravity IDE trên M1 Pro (`Library/Application Support/Antigravity/Crashpad/pending/*.dmp`) — user từng gửi 17 NIM keys + 8 Ollama keys qua chat Antigravity
+- **Tìm thấy**: 6 NIM keys (`nvapi-*`) + 8 Ollama keys (`id.secret`, trong env `OLLAMA_KEYS`) — lưu tại `~/.config/opencode/.secure/nim-ollama-keys.json`
+- **NIM**: 6/6 keys valid (200 /v1/models — 100 models) nhưng **403 trên chat** (inference bị hạn chế) → KHÔNG add vào OmniRoute (vô ích)
+- **Ollama**: **8/8 keys HOẠT ĐỘNG** — endpoint `https://ollama.com/v1` (OpenAI-compatible), model free chạy được: `gpt-oss:20b`, `nemotron-3-nano:30b` (model subscription như glm-5.2/kimi-k3 bị 403)
+- **Đã add vào OmniRoute**: 8 connections `ollama-cloud` (ollama-1 → ollama-8) + 2 model vào combo fable-5 (gpt-oss:20b w=2, nemotron-3-nano:30b w=1.5) — 25 models tổng
+- **Verify**: gpt-oss:20b + nemotron trúng weighted qua ladder (200 OK)
+
 ### Deep optimize round 3 (2026-08-10) — log spam + 400 deepseek + 429 GO
 1. **Log spam 143×/request**: `session_key has no available affinity target` — auth.ts:1474 log.info → **log.debug** (đã sửa code + rebuild 5.1min trên MBP)
 2. **opencode-go 429 liên tục**: gói $5 chạm "5-hour usage limit" (reset sau 2h) → **weight 0** cho 4 model GO trong combo fable-5 (kimi-k3, grok-4.5, qwen3.8-max, gpt-5.6-luna) — hết thử lại vô ích
