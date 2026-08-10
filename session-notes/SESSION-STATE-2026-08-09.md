@@ -2,7 +2,30 @@
 
 > Handoff document for the next agent. Everything done + everything planned + how to update.
 
-## 1. Hệ thống hiện tại (RUNNING)
+## 0. MIGRATE SANG MBP M1 (2026-08-10) — HỆ THỐNG HIỆN TẠI
+
+### Kiến trúc mới (giảm tải M1 Max)
+- **M1 Max (client)**: Claude Code ×1-2 phiên, opencode — chỉ là client, colima/Docker ĐÃ TẮT
+- **MBP M1 16GB (server)**: OmniRoute **native** (không Docker) chạy 24/7
+  - SSH: `macbookprom1@169.254.129.138` (cáp Ethernet trực tiếp, link-local) — hoặc `omnimbp.local` (đã ghim /etc/hosts trên M1 Max)
+  - App: `~/omniroute/` (node 22.20.0 ở `~/node22/bin`), build 5.3 phút
+  - Data: `~/omniroute/data/storage.sqlite` (17MB, migrate từ colima)
+  - Env: `~/omniroute/.env` (JWT_SECRET + API_KEY_SECRET + STORAGE_ENCRYPTION_KEY từ container cũ — srv-secrets)
+  - **Auto-start**: launchd `com.user.omniroute` (KeepAlive, tự restart) — log `~/omniroute/data/omniroute.log`
+  - **Backup**: launchd `com.user.omniroute-backup` mỗi 6h → `~/omniroute-backups/` (giữ 14 bản)
+  - Port: **20128** (giống cũ — settings M1 Max không đổi port, chỉ đổi host)
+- **Verify**: 18 combos + weighted + compression nguyên vẹn; fable-5/opus/sonnet/dahl/opencode 200 qua `omnimbp.local:20128`
+
+### 2 lỗi build phải fix khi migrate (quan trọng cho update sau này)
+1. `package.json` override `sharp: ^0.35.0` conflict direct dep `^0.35.3` → npm EOVERRIDE (npm 10 bug). Fix: đổi override thành `^0.35.3`.
+2. `open-sse/services/adobeFireflyClient.ts:2319` — `pollAdobeJob` không export nhưng `adobeFireflyUpscale.ts:31` import → build fail. Fix: thêm `export`. **Đây là lý do image v3.8.50 chưa có trên Docker Hub** (branch release/v3.8.50 build chết ở đây).
+
+### Kết nối M1 Max → MBP
+- Cáp Ethernet trực tiếp (en10 ↔ en10), IP link-local `169.254.129.138` (MBP) — KHÔNG qua router
+- M1 Max /etc/hosts: `169.254.129.138 omnimbp.local`
+- Settings đã trỏ `http://omnimbp.local:20128/api`: `~/.claude/settings.json`, `~/.claude-mk/settings.json`, `~/algo-trader/.claude/settings.json`
+
+## 1. Hệ thống cũ (colima trên M1 Max — ĐÃ TẮT, giữ để tham khảo)
 
 ### Infrastructure
 - **Colima VM**: 4 CPU / 8GB RAM (`colima start --cpu 4 --memory 8`)
