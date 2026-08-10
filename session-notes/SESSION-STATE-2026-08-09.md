@@ -4,6 +4,14 @@
 
 ## 0. MIGRATE SANG MBP M1 (2026-08-10) — HỆ THỐNG HIỆN TẠI
 
+### Fix 503 opencode-zen noauth (2026-08-10)
+- **Vấn đề**: `opencode-zen` free models (ling-3.0-tiny-free, mimo-v2.5-free, nemotron-3-ultra-free) bị **503 Endpoint unavailable** lặp lại — OmniRoute chọn **synthetic noauth** (không key) thay vì connection có key GO (do `anonymousFallback: true` trên provider def)
+- **Fix 2 lớp**:
+  1. `settings.noAuthFallbackDisabledProviders = ["opencode-zen"]` (namespace **`settings`**, KHÔNG phải `databaseSettings`!) → tắt noauth fallback
+  2. Reset `testStatus=active` cho connection `81fbadc2` (bị `credits_exhausted` từ lần thử premium 402 trước)
+- **Kết quả**: `Using opencode-zen account: 81fbadc2...` — key GO thật sự được dùng, free models 200 OK ổn định
+- ⚠️ Bài học: sau khi thêm key vào connection, phải reset testStatus — connection bị mark terminal từ lỗi cũ vẫn bị skip dù key đã đúng
+
 ### opencode-go (2026-08-10) — gói trả phí $5/tháng ĐÃ THÊM
 - Provider: **opencode-go** (connection `aaa3e8b7-0c24-44e7-aaa6-f4f435b2d211`), endpoint `https://opencode.ai/zen/go/v1` (OpenAI-compatible)
 - Key: `sk-Ty1iaE3cWC21mQHxOZngZIHjdFN61GPmBV8OPC2l1u4vMIDAZ4yWPBuh4NRFaxQf` (đã lưu trong auth.json opencode + connection OmniRoute)
