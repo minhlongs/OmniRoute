@@ -4,6 +4,16 @@
 
 ## 0. MIGRATE SANG MBP M1 (2026-08-10) — HỆ THỐNG HIỆN TẠI
 
+### Fix auto-compact CC (2026-08-10) — context_length cho combo
+- **Vấn đề**: CC không auto-compact 100% — vì `/api/v1/models/claude-fable-5` trả `context_length: null` → CC không biết context window → không bao giờ compact
+- **Gốc rễ**: combo chưa set `context_length` (field hợp lệ qua API, schema `z.number().int().min(1000).max(2000000)`) → catalog `buildComboCatalogMetadata` bỏ qua
+- **Fix**:
+  1. Set `context_length: 1000000` cho **18 combo** (12 claude + 6 zunef) qua PUT /api/combos/[id]
+  2. Verify: `/api/v1/models/claude-fable-5` → `context_length: 1000000, max_input_tokens: 200000` ✅ (⚠️ phải gửi `Authorization: Bearer` — thiếu header thì trả None vì auth reject)
+  3. Thêm `CLAUDE_CODE_AUTO_COMPACT_WINDOW=400000` + `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE=80` + `CLAUDE_CODE_MAX_OUTPUT_TOKENS=128000` vào `~/.claude/settings.json` (settings chính — .claude-mk đã có)
+- **Lưu ý**: `normalizeComboRecord` giữ nguyên mọi field (spread `...combo`) — không strip context_length. Vấn đề chỉ là chưa set.
+- **Kết nối**: cáp Ethernet link-local 169.254.129.138 ĐÃ CHẾT (MBP không ping được) — MBP vẫn sống qua WiFi **192.168.1.205** (SSH + OmniRoute OK). Nếu dùng lại cáp phải kiểm tra adapter; hiện tại các lệnh dùng 192.168.1.205.
+
 ### Deep optimize round 2 (2026-08-10) — fix claude-opus-5 401
 - **Vấn đề**: CC session cũ gọi `claude-opus-5` (không [1m]) → OmniRoute resolve thẳng vào `opencode-zen` connection → `[401] Insufficient balance` → connection bị mark `credits_exhausted` → **toàn bộ zen free models cũng chết** (mimo-v2.5-free, ling, nemotron)
 - **Fix**:
