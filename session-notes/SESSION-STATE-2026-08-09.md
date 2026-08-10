@@ -4,6 +4,13 @@
 
 ## 0. MIGRATE SANG MBP M1 (2026-08-10) — HỆ THỐNG HIỆN TẠI
 
+### Deep optimize round 3 (2026-08-10) — log spam + 400 deepseek + 429 GO
+1. **Log spam 143×/request**: `session_key has no available affinity target` — auth.ts:1474 log.info → **log.debug** (đã sửa code + rebuild 5.1min trên MBP)
+2. **opencode-go 429 liên tục**: gói $5 chạm "5-hour usage limit" (reset sau 2h) → **weight 0** cho 4 model GO trong combo fable-5 (kimi-k3, grok-4.5, qwen3.8-max, gpt-5.6-luna) — hết thử lại vô ích
+3. **deepseek-ai/* 400 qua zuneF**: zuneF allowed list yêu cầu prefix (`deepseek-ai/deepseek-v4-flash`) nhưng executor gửi bare → 400 "Unsupported model" mọi lần → **gỡ khỏi combo fable-5** (đã có deepseek qua opencode-go + opencode free)
+4. **Kết quả**: log sạch (0 spam, 0 429, 0 400), fable-5 → claude-opus-4-8 200 OK 14s
+5. **Network tối ưu**: cả 2 máy cắm cáp Gigabit 1000baseT vào CR8809 (M1 Max en7=192.168.1.206, MBP en10=192.168.1.231) — 0 WiFi, latency 1ms, `omnimbp.local` → 192.168.1.231. Router đã chạy optimize.sh (DNS Cloudflare, MSS clamp, conntrack, TCP Fast Open)
+
 ### Fix auto-compact CC (2026-08-10) — context_length cho combo
 - **Vấn đề**: CC không auto-compact 100% — vì `/api/v1/models/claude-fable-5` trả `context_length: null` → CC không biết context window → không bao giờ compact
 - **Gốc rễ**: combo chưa set `context_length` (field hợp lệ qua API, schema `z.number().int().min(1000).max(2000000)`) → catalog `buildComboCatalogMetadata` bỏ qua
