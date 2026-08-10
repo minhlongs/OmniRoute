@@ -11,6 +11,13 @@
 - Đã thêm 4 model vào combo fable-5 (22 models): kimi-k3 w=4, grok-4.5 w=3, qwen3.8-max w=3, gpt-5.6-luna w=2
 - Verify: qwen3.8-max + kimi-k3 trúng phân phối weighted; compression + failover hoạt động
 
+### auto-ship-fast combo (2026-08-10) — Auto-Combo ship-fast mode
+- Combo mới **`auto-ship-fast`** (id `f923c932-c5c3-40f6-a5fd-0edbbfa7c3b1`): strategy `auto`, **10 models nhanh** (sonnet-5-0, deepseek-flash, dahl kimi/minimax, minimax-m3, glm-5.2, opencode-free, zen-free ×3)
+- **13-factor scoring** chạy: `Auto selection: opencode/deepseek-v4-flash-free | score=0.811`
+- Config: `modePack: "ship-fast"` (latencyInv=0.32, health=0.28 — tối ưu tốc độ) + `explorationRate: 0.05` + compression stacked
+- ⚠️ LƯU Ý: `modePack`/`explorationRate` phải nằm trong **`config`** (KHÔNG phải `autoConfig` — schema combo chỉ nhận qua config). POST tạo combo không giữ autoConfig → phải PUT sau khi tạo.
+- Gọi thử: model `auto-ship-fast` qua /api/v1/messages
+
 ### Tối ưu deep (2026-08-10) — trên MBP
 - **Compression**: RTK standard → **aggressive** + Caveman full (32% → **38.9% saved**, 495K → 302K tokens). Verify log: `Prompt compressed (stacked): 495012 -> 302338 (38.92% saved)`
 - **Adaptive compression**: contextBudget `mode=floor`, pct 0.85, outputReserve 4096 — tự chọn cường độ theo context window
