@@ -4,6 +4,13 @@
 
 ## 0. MIGRATE SANG MBP M1 (2026-08-10) — HỆ THỐNG HIỆN TẠI
 
+### Fix Mekong CLI audit (2026-08-10) — 4 lớp
+1. **Registry module_path sai prefix**: `src/harness/agents/config/registry.yaml` ghi `src.seed.agents.ceo` nhưng import thật là `seed.agents.ceo` → circular import crash → đã fix cả 6 module_path
+2. **Root registry YAML BROKEN**: `agents/registry.yaml` indent sai (line 23 `- id: ceo` lồng trong slash_commands của sun-tzu) → yaml.safe_load FAIL hoàn toàn → đã rewrite đúng indent, 6 agents (sun-tzu/ceo/ae/pm/eng/ops) + 6 delegation_rules parse OK
+3. **5 agent file thiếu**: ceo/ae/pm/eng/ops không có file → đã tạo trong `mekong-cli/.claude/_integration/agents/` + `~/.claude-mk/agents/` (frontmatter chuẩn: name khớp file, model sonnet)
+4. **16 slash_commands**: 12 lệnh thiếu → đã tạo file (ae-outreach/deal-prep/follow-up/close-report, product-spec, roadmap-update, priority-review, audit-itgc/sox/trail/compliance, algo-status) vào `~/.claude/commands/` + `~/.claude-mk/commands/`; 5 gate còn lại là approval_required/hard_gates metadata (đúng thiết kế)
+5. **Fix lỗi `claude-opus-5[1m]`**: `~/.claude/settings.json` thiếu `ANTHROPIC_DEFAULT_*_MODEL` → CC resolve subagent `model: opus` về mặc định opus-5[1m] (không tồn tại trong OmniRoute) → đã thêm 4 env (FABLE=claude-fable-5, OPUS=claude-opus-4-8[1m], SONNET=claude-sonnet-5-0, HAIKU=claude-haiku-4-5) vào 6 settings (main, mk, ak, algo-trader, mekong-cli, ak-engineer)
+
 ### Fix 503 opencode-zen noauth (2026-08-10)
 - **Vấn đề**: `opencode-zen` free models (ling-3.0-tiny-free, mimo-v2.5-free, nemotron-3-ultra-free) bị **503 Endpoint unavailable** lặp lại — OmniRoute chọn **synthetic noauth** (không key) thay vì connection có key GO (do `anonymousFallback: true` trên provider def)
 - **Fix 2 lớp**:
