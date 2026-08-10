@@ -4,6 +4,13 @@
 
 ## 0. MIGRATE SANG MBP M1 (2026-08-10) — HỆ THỐNG HIỆN TẠI
 
+### opencode-go (2026-08-10) — gói trả phí $5/tháng ĐÃ THÊM
+- Provider: **opencode-go** (connection `aaa3e8b7-0c24-44e7-aaa6-f4f435b2d211`), endpoint `https://opencode.ai/zen/go/v1` (OpenAI-compatible)
+- Key: `sk-Ty1iaE3cWC21mQHxOZngZIHjdFN61GPmBV8OPC2l1u4vMIDAZ4yWPBuh4NRFaxQf` (đã lưu trong auth.json opencode + connection OmniRoute)
+- **25 models sync**: kimi-k3, kimi-k2.7-code, grok-4.5, qwen3.8-max, qwen3.7-max, gpt-5.6-luna, glm-5.2, deepseek-v4-pro/flash, minimax-m3...
+- Đã thêm 4 model vào combo fable-5 (22 models): kimi-k3 w=4, grok-4.5 w=3, qwen3.8-max w=3, gpt-5.6-luna w=2
+- Verify: qwen3.8-max + kimi-k3 trúng phân phối weighted; compression + failover hoạt động
+
 ### Kiến trúc mới (giảm tải M1 Max)
 - **M1 Max (client)**: Claude Code ×1-2 phiên, opencode — chỉ là client, colima/Docker ĐÃ TẮT
 - **MBP M1 16GB (server)**: OmniRoute **native** (không Docker) chạy 24/7
