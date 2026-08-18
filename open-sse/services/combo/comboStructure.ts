@@ -141,6 +141,11 @@ function normalizeRuntimeStep(
     // `prompt` is a per-step pipeline input and only exists on a model step —
     // #8894 widened the union with ComboProviderWildcardStep, which has no prompt.
     prompt: (step.kind === "model" ? step.prompt : null) || null,
+    // Per-target timeout override (Auto-Combo per-model tuning): carried from
+    // the combo model entry into the target so the timeout runner can use it.
+    ...(step.kind === "model" && typeof step.timeoutMs === "number" && step.timeoutMs > 0
+      ? { timeoutMs: step.timeoutMs }
+      : {}),
   } satisfies ResolvedComboTarget;
 }
 
@@ -615,11 +620,9 @@ export type CompatFilterOptions = {
   failOpen?: boolean;
 };
 
-
 function hasHardCapabilityFailure(reasons: string[]): boolean {
   return reasons.some((reason) => HARD_COMPAT_REASONS.has(reason));
 }
-
 
 /**
  * Summarize a capability-filter exhaustion for a 400-class combo error (#8488).

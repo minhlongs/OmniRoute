@@ -34,6 +34,8 @@ import {
 } from "./combo/failureTracker.ts";
 import { buildNoUpstreamResponseDiagnostics, buildRecoveryHint } from "./combo/pinRecovery.ts";
 import { buildTargetTimeoutRunner } from "./combo/targetTimeoutRunner.ts";
+import { loadAdaptationScores, recordOutcome } from "./combo/adaptation/store.ts";
+import type { AdaptationState } from "./combo/adaptation/score.ts";
 import { recordComboRequest, recordComboShadowRequest, getComboMetrics } from "./comboMetrics.ts";
 import {
   resolveComboConfig,
@@ -62,7 +64,11 @@ import * as semaphore from "./rateLimitSemaphore.ts";
 import { getCircuitBreaker } from "../../src/shared/utils/circuitBreaker";
 import { parseModel } from "./model.ts";
 import { createComboContext } from "./combo/context.ts";
-import { phaseComboSetup } from "./combo/comboSetup.ts";
+import {
+  adaptComboWeightsForWeightedStrategy,
+  applyComboAdaptationOrdering,
+  phaseComboSetup,
+} from "./combo/comboSetup.ts";
 import { checkCredentialGate, logCredentialSkip } from "./credentialGate.ts";
 import { emit } from "../../src/lib/events/eventBus";
 import { notifyWebhookEvent } from "../../src/lib/webhookDispatcher";
@@ -265,6 +271,53 @@ export function releaseStickyPinOnFailure(
   if (!messageHash || !failedConnectionId) return;
   if (peekStickyConnectionId(messageHash) !== failedConnectionId) return;
   clearStickyBinding(messageHash);
+}
+
+// ── Auto-Combo Adaptation Engine — record hook (OMNIROUTE_COMBO_ADAPTATION=1) ──
+// Fire-and-forget outcome recording for the combo attempt loop. Flag-off is a
+// byte-identical no-op; flag-on is strictly best-effort — callers never await it,
+// it never throws, and any load/record failure fails open to neutral defaults
+// (score 0.5 / baseline 0) so dispatch behavior is never affected.
+const comboAdaptationScoreLoads = new Map<string, Promise<Map<string, AdaptationState>>>();
+
+/**
+ * Lazily load the (combo, provider) adaptation scores once per combo per process,
+ * memoizing the in-flight promise so concurrent requests share a single DB read.
+ */
+function loadComboAdaptationScores(comboId: string): Promise<Map<string, AdaptationState>> {
+  let loading = comboAdaptationScoreLoads.get(comboId);
+  if (!loading) {
+    loading = loadAdaptationScores(comboId).catch(() => new Map<string, AdaptationState>());
+    comboAdaptationScoreLoads.set(comboId, loading);
+  }
+  return loading;
+}
+
+/**
+ * Fire-and-forget adaptation record for one attempted target. Total function:
+ * every failure path is swallowed so recording can never block or break dispatch.
+ */
+async function recordComboAdaptationOutcome(
+  combo: ComboLike,
+  providerOrModelStr: string,
+  success: boolean,
+  latencyMs: number
+): Promise<void> {
+  try {
+    const comboId = combo.id || combo.name;
+    const scores = await loadComboAdaptationScores(comboId);
+    const state = scores.get(providerOrModelStr);
+    await recordOutcome(
+      comboId,
+      providerOrModelStr,
+      success ? "success" : "failure",
+      latencyMs,
+      state?.learnedScore ?? 0.5,
+      state?.avgLatencyMs ?? 0
+    );
+  } catch {
+    /* fail-open: adaptation recording must never affect combo dispatch */
+  }
 }
 
 const DEFAULT_MODEL_P95_MS: Record<string, number> = {
@@ -706,9 +759,16 @@ export async function handleComboChat({
   const maxSetRetries = config.maxSetRetries ?? 0;
   const setRetryDelayMs = resolveDelayMs(config.setRetryDelayMs, 2000);
 
+  // Auto-Combo Adaptation Engine — weighted strategy must fold learned scores
+  // into the combo's model weights BEFORE target resolution (selectWeightedTarget
+  // reads weights from the combo during the pipeline). Fail-open: returns the
+  // same combo when the flag is off or the load fails.
+  const pipelineCombo =
+    strategy === "weighted" ? await adaptComboWeightsForWeightedStrategy(combo, log) : combo;
+
   const targetResolution = await resolveComboTargetPipeline({
     body,
-    combo,
+    combo: pipelineCombo,
     strategy,
     config,
     settings,
@@ -727,6 +787,14 @@ export async function handleComboChat({
   const { stickyWeightedLimit, getWeightedStepKeyForTarget, preScreenMap } = targetResolution;
   const _sticky = targetResolution.sticky;
   let orderedTargets = targetResolution.orderedTargets;
+
+  // Auto-Combo Adaptation Engine (flag-gated, fail-open): fold learned per-target
+  // scores into the pre-dispatch order — priority reorders by learned score with
+  // quarantined providers last. (Weighted scaling happens earlier, before target
+  // resolution, via adaptComboWeightsForWeightedStrategy.)
+  if (process.env.OMNIROUTE_COMBO_ADAPTATION === "1") {
+    orderedTargets = await applyComboAdaptationOrdering(strategy, orderedTargets, combo, log);
+  }
 
   // #5923 (Finding #4) — reset-window config for the shared per-target quota-
   // exhaustion cutoff below. The "auto" strategy already applies its own cutoff
@@ -1244,6 +1312,9 @@ export async function handleComboChat({
                 strategy,
                 target: toRecordedTarget(target),
               });
+              if (process.env.OMNIROUTE_COMBO_ADAPTATION === "1") {
+                void recordComboAdaptationOutcome(combo, modelStr, false, Date.now() - startTime);
+              }
               recordedAttempts++;
               // Fix #1707: Set terminal state so the fallback doesn't emit
               // misleading ALL_ACCOUNTS_INACTIVE when the real issue is quality.
@@ -1314,6 +1385,9 @@ export async function handleComboChat({
               strategy,
               target: toRecordedTarget(target),
             });
+            if (process.env.OMNIROUTE_COMBO_ADAPTATION === "1") {
+              void recordComboAdaptationOutcome(combo, modelStr, true, latencyMs);
+            }
             recordedAttempts++;
 
             // Reset cooldown on success
@@ -1561,6 +1635,9 @@ export async function handleComboChat({
               strategy,
               target: toRecordedTarget(target),
             });
+            if (process.env.OMNIROUTE_COMBO_ADAPTATION === "1") {
+              void recordComboAdaptationOutcome(combo, modelStr, false, Date.now() - startTime);
+            }
             recordedAttempts++;
             // executeTarget must return the {ok,response} contract — a raw Response
             // here makes the speculative loop's res.ok/res.response checks both miss,
@@ -1621,6 +1698,9 @@ export async function handleComboChat({
               strategy,
               target: toRecordedTarget(target),
             });
+            if (process.env.OMNIROUTE_COMBO_ADAPTATION === "1") {
+              void recordComboAdaptationOutcome(combo, modelStr, false, Date.now() - startTime);
+            }
             recordedAttempts++;
             if (i > 0) fallbackCount++;
             return { ok: false, response: result };
@@ -1717,6 +1797,9 @@ export async function handleComboChat({
               strategy,
               target: toRecordedTarget(target),
             });
+            if (process.env.OMNIROUTE_COMBO_ADAPTATION === "1") {
+              void recordComboAdaptationOutcome(combo, modelStr, false, Date.now() - startTime);
+            }
             recordedAttempts++;
             lastError = errorText || String(result.status);
             comboErrors.push({
@@ -1836,6 +1919,9 @@ export async function handleComboChat({
             strategy,
             target: toRecordedTarget(target),
           });
+          if (process.env.OMNIROUTE_COMBO_ADAPTATION === "1") {
+            void recordComboAdaptationOutcome(combo, modelStr, false, Date.now() - startTime);
+          }
           recordedAttempts++;
           lastError = errorText || String(result.status);
           comboErrors.push({

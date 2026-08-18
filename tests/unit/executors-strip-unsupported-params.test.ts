@@ -193,11 +193,54 @@ test("stripUnsupportedParams: volcengine kimi-k2-5-260127 also clamps max_comple
 test("stripUnsupportedParams: volcengine non-kimi model (glm-4-7-251222) is NOT clamped by the kimi rule", () => {
   const body: Record<string, unknown> = { max_tokens: 65536 };
   stripUnsupportedParams("volcengine", "glm-4-7-251222", body);
-  assert.equal(body.max_tokens, 65536, "kimi-specific cap must not apply to other volcengine models");
+  assert.equal(
+    body.max_tokens,
+    65536,
+    "kimi-specific cap must not apply to other volcengine models"
+  );
 });
 
 test("stripUnsupportedParams: kimi rule is provider-scoped (no-op for non-volcengine providers)", () => {
   const body: Record<string, unknown> = { max_tokens: 65536 };
   stripUnsupportedParams("kimi", "kimi-k2-5-260127", body);
-  assert.equal(body.max_tokens, 65536, "the Ark-specific cap must not leak to other kimi-hosting providers");
+  assert.equal(
+    body.max_tokens,
+    65536,
+    "the Ark-specific cap must not leak to other kimi-hosting providers"
+  );
+});
+
+test("stripUnsupportedParams: local-llm strips grammar (llama.cpp cannot parse deep nested GBNF)", () => {
+  const body: Record<string, unknown> = {
+    model: "qwen2.5-7b-instruct",
+    grammar: 'tool-a ::= "{" space "a" space "}"\nroot ::= tool-a\n',
+    max_tokens: 100,
+  };
+  stripUnsupportedParams(
+    "openai-compatible-local-llm",
+    "openai-compatible-local-llm/qwen2.5-7b-instruct",
+    body
+  );
+  assert.equal(body.grammar, undefined, "grammar must be stripped for local-llm");
+  assert.equal(body.max_tokens, 100, "other params must survive");
+});
+
+test("stripUnsupportedParams: local-llm without grammar is untouched", () => {
+  const body: Record<string, unknown> = { max_tokens: 50 };
+  stripUnsupportedParams(
+    "openai-compatible-local-llm",
+    "openai-compatible-local-llm/qwen2.5-7b-instruct",
+    body
+  );
+  assert.equal("grammar" in body, false, "no grammar key should be introduced");
+  assert.equal(body.max_tokens, 50);
+});
+
+test("stripUnsupportedParams: grammar rule is provider-scoped (survives for non-local providers)", () => {
+  const body: Record<string, unknown> = {
+    model: "claude-opus-4",
+    grammar: 'root ::= "a"',
+  };
+  stripUnsupportedParams("anthropic", "claude-opus-4", body);
+  assert.ok(body.grammar !== undefined, "grammar must survive for non-local-llm providers");
 });

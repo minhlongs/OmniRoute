@@ -93,6 +93,13 @@ const STRIP_RULES: StripRule[] = [
   // to read), hence the fixed cap.
   { provider: "azure-openai", match: /^gpt-4o-mini/i, maxOutputCap: 16384 },
   { provider: "azure-ai", match: /^gpt-4o-mini/i, maxOutputCap: 16384 },
+  // llama.cpp (local-llm provider): GBNF grammar generated from client tool
+  // schemas (e.g. opencode CLI with many MCP tools) nests deeper than the
+  // grammar parser can handle and fails with "Failed to initialize samplers:
+  // failed to parse grammar" (HTTP 400). Verified live: flat rules parse, but
+  // ~60-level nested tool schemas fail. Strip the field so the local fallback
+  // serves free-form output instead of failing the whole request.
+  { provider: "openai-compatible-local-llm", match: /.*/, drop: ["grammar"] },
 ];
 
 function matches(rule: StripRule, model: string): boolean {

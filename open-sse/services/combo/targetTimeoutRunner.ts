@@ -30,7 +30,16 @@ export function buildTargetTimeoutRunner(deps: {
     modelStr: string,
     target?: SingleModelTarget
   ): Promise<Response> => {
-    if (comboTargetTimeoutMs <= 0) {
+    // Per-target timeoutMs override wins when set (Auto-Combo per-model tuning);
+    // otherwise fall back to the combo-level target timeout.
+    const effectiveTimeoutMs =
+      target &&
+      "timeoutMs" in target &&
+      typeof target.timeoutMs === "number" &&
+      target.timeoutMs > 0
+        ? target.timeoutMs
+        : comboTargetTimeoutMs;
+    if (effectiveTimeoutMs <= 0) {
       return handleSingleModel(b, modelStr, target).catch((err) =>
         errorResponse(502, err?.message ?? "Upstream model error")
       );
@@ -44,7 +53,7 @@ export function buildTargetTimeoutRunner(deps: {
         timedOut = true;
         log.warn(
           "COMBO",
-          `Model ${modelStr} exceeded ${comboTargetTimeoutMs}ms timeout — falling back`
+          `Model ${modelStr} exceeded ${effectiveTimeoutMs}ms timeout — falling back`
         );
         timeoutController.abort(new Error("combo-per-model-timeout"));
         // HTTP 504 (not proprietary 524): this is OmniRoute's own per-target timer.
@@ -65,7 +74,7 @@ export function buildTargetTimeoutRunner(deps: {
             }
           )
         );
-      }, comboTargetTimeoutMs);
+      }, effectiveTimeoutMs);
     });
     const targetWithSignal = {
       ...(target ?? {}),

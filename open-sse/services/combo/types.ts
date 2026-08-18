@@ -173,6 +173,8 @@ export type ResolvedComboTarget = {
   prompt?: string | null;
   failoverBeforeRetry?: unknown;
   trafficType?: "production" | "shadow";
+  /** Per-target timeout override (ms). Overrides the combo-level targetTimeoutMs when set. */
+  timeoutMs?: number | null;
   /**
    * Fingerprint-based account pin resolved from a combo builder composite
    * connectionId (`${rowId}|fp|${fingerprint}`, see
