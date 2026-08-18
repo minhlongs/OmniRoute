@@ -86,6 +86,54 @@ describe("RTK file-read tool result — #4559 no over-truncation", () => {
     );
   });
 
+  it("does not truncate a document read whose content contains error markers", () => {
+    // Realistic source files (and even RTK's own index.ts) contain "Error:" /
+    // "Exception:" strings inside code. The generic error-marker heuristic alone
+    // would classify such a file as NOT document-like and fire the hard-cap.
+    // The authoritative signal is skipFilters=true: resolveToolMeta() sets it for
+    // every non-shell tool (Read, grep, glob, ...). Truncation must respect it.
+    const lines: string[] = ["# module: error-handler", ""];
+    for (let i = 0; i < 70; i++) {
+      lines.push(`export function handle${i}(input: Input${i}): Result${i} {`);
+      lines.push(`  try { return compute${i}(input); }`);
+      lines.push(`  catch (e) { throw new Error("step${i} failed: " + e.message); }`);
+      lines.push("}");
+      lines.push("");
+    }
+    lines.push('const LOG_PREFIX = "Error: step failed in batch";');
+    const sourceFile = lines.join("\n");
+    const totalLines = sourceFile.split("\n").length;
+    assert.ok(totalLines > 120, `fixture should exceed default cap; got ${totalLines}`);
+    assert.ok(
+      sourceFile.includes("Error: "),
+      "fixture must contain a contiguous generic error marker or it does not reproduce the bug"
+    );
+
+    const result = processRtkText(sourceFile, {
+      // Simulates the Read-tool path: resolveToolMeta() returns skipFilters=true
+      // for non-shell tools, which must disable the truncating hard-cap.
+      skipFilters: true,
+      config: { maxLinesPerResult: 120, maxCharsPerResult: 12000 },
+    });
+
+    assert.ok(
+      !result.techniquesUsed.includes("rtk-truncate"),
+      `error-marker-bearing file read must not be hard-cap truncated; techniquesUsed: ${result.techniquesUsed.join(
+        ", "
+      )}`
+    );
+    assert.ok(
+      !result.text.includes("[rtk:truncated"),
+      "no truncation marker should be injected into an error-marker-bearing file read"
+    );
+    assert.ok(result.text.includes("handle35("), "middle content survives");
+    const outLines = result.text.split("\n").length;
+    assert.ok(
+      outLines >= totalLines * 0.9,
+      `expected to retain >=90% of lines; kept ${outLines}/${totalLines}`
+    );
+  });
+
   it("still truncates genuine repetitive command output (RTK value preserved)", () => {
     // npm install-style repetitive log lines, with a detected command so RTK
     // recognizes it as repetitive output worth truncating.
@@ -100,9 +148,6 @@ describe("RTK file-read tool result — #4559 no over-truncation", () => {
       config: { maxLinesPerResult: 120, maxCharsPerResult: 12000 },
     });
 
-    assert.ok(
-      result.compressed,
-      "repetitive npm install output should still be compressed"
-    );
+    assert.ok(result.compressed, "repetitive npm install output should still be compressed");
   });
 });

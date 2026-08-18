@@ -247,7 +247,10 @@ export function processRtkText(
       if (config.enabledFilters.length === 0 || config.enabledFilters.includes(filter.id)) {
         const filtered = applyLineFilter(result, {
           ...filter,
-          maxLines: effectiveMaxLines(filter.maxLines || config.maxLinesPerResult, config.intensity),
+          maxLines: effectiveMaxLines(
+            filter.maxLines || config.maxLinesPerResult,
+            config.intensity
+          ),
         });
         result = filtered.text;
         if (filtered.appliedRules.length > 0) {
@@ -325,15 +328,20 @@ export function processRtkText(
   });
   // #4559: skip the generic line/char hard-cap for document/file reads (see
   // isDocumentLikeRead above) so the middle of a code/prose read is not dropped.
-  const truncated = isDocumentLikeRead
-    ? { text: result, truncated: false, droppedLines: 0 }
-    : smartTruncate(result, {
-        maxLines: effectiveMaxLines(config.maxLinesPerResult, config.intensity),
-        maxChars: config.maxCharsPerResult,
-        preserveHead: config.intensity === "aggressive" ? 16 : 24,
-        preserveTail: config.intensity === "aggressive" ? 16 : 24,
-        priorityPatterns: [...defaultPriorityPatterns, ...filterPriorityPatterns],
-      });
+  // options.skipFilters is the authoritative signal from resolveToolMeta(): it is
+  // true for every non-shell tool (Read, grep, glob, ...), so those results are
+  // document reads by definition — regardless of content heuristics like
+  // hasGenericErrorMarkers (source files legitimately contain "Error:" strings).
+  const truncated =
+    isDocumentLikeRead || options.skipFilters === true
+      ? { text: result, truncated: false, droppedLines: 0 }
+      : smartTruncate(result, {
+          maxLines: effectiveMaxLines(config.maxLinesPerResult, config.intensity),
+          maxChars: config.maxCharsPerResult,
+          preserveHead: config.intensity === "aggressive" ? 16 : 24,
+          preserveTail: config.intensity === "aggressive" ? 16 : 24,
+          priorityPatterns: [...defaultPriorityPatterns, ...filterPriorityPatterns],
+        });
   if (truncated.truncated) {
     result = truncated.text;
     techniquesUsed.push("rtk-truncate");
