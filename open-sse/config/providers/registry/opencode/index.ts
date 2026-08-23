@@ -23,6 +23,22 @@ export const opencodeProvider: RegistryEntry = {
       interleavedField: "reasoning_content",
     },
     { id: "deepseek-v4-flash-free", name: "DeepSeek V4 Flash Free", supportsReasoning: true },
+    // #9418 (2026-08-23): Ox Alpha Free — stealth preview reasoning model, free
+    // for a limited window. 1M context, multimodal (text/image/video), 131K max
+    // output, low|high|max reasoning variants, zero data retention on the Zen
+    // route. Upstream id is `x-preview-f-free`; OpenRouter lists the same model
+    // as `stealth/ox-alpha`. Reasoning is mandatory and interleaved on
+    // reasoning_content (same contract as big-pickle's DeepSeek thinking mode).
+    {
+      id: "x-preview-f-free",
+      name: "Ox Alpha Free (Unlimited)",
+      supportsReasoning: true,
+      interleavedField: "reasoning_content",
+      contextLength: 1048576,
+      maxOutputTokens: 131072,
+      supportsVision: true,
+      supportedThinkingEfforts: ["low", "high", "max"],
+    },
     // #6998: 2026-07-14 refresh — the upstream free tier rotated its lineup;
     // minimax-m3-free, minimax-m2.5-free, ling-2.6-1t-free,
     // trinity-large-preview-free, nemotron-3-super-free and qwen3.6-plus-free

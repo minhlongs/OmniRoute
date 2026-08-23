@@ -93,5 +93,21 @@ export const opencode_zenProvider: RegistryEntry = {
     { id: "hy3-free", name: "HY3 Free", contextLength: 200000 },
     { id: "nemotron-3-ultra-free", name: "Nemotron 3 Ultra Free", contextLength: 1000000 },
     { id: "north-mini-code-free", name: "North Mini Code Free", contextLength: 200000 },
+    // #9418 (2026-08-23): Ox Alpha Free — stealth preview reasoning model, free
+    // for a limited window. 1M context, multimodal (text/image/video), 131K max
+    // output, low|high|max reasoning variants, zero data retention on the Zen
+    // route. Upstream id is `x-preview-f-free`; OpenRouter lists the same model
+    // as `stealth/ox-alpha`. Reasoning is mandatory and interleaved on
+    // reasoning_content (same contract as big-pickle's DeepSeek thinking mode).
+    {
+      id: "x-preview-f-free",
+      name: "Ox Alpha Free (Unlimited)",
+      supportsReasoning: true,
+      interleavedField: "reasoning_content",
+      contextLength: 1048576,
+      maxOutputTokens: 131072,
+      supportsVision: true,
+      supportedThinkingEfforts: ["low", "high", "max"],
+    },
   ],
 };
