@@ -68,6 +68,19 @@ export const ENGINE_CATALOG: Record<string, EngineMeta> = {
       cacheImpact: "none",
     },
   },
+  "read-lifecycle": {
+    id: "read-lifecycle",
+    label: "Read Lifecycle",
+    stackPriority: 6,
+    isSingleMode: false,
+    description: "Collapses superseded file-Read tool results when re-read or modified later.",
+    guidance: {
+      tradeoffs:
+        "Lossy — collapses earlier Read results to a short stub when the same file is modified or read again later in the conversation, keeping the latest view intact. Huge token savings in long coding sessions.",
+      lossy: true,
+      cacheImpact: "low",
+    },
+  },
   rtk: {
     id: "rtk",
     label: "RTK",

@@ -783,6 +783,45 @@ export async function getCompressionSettings(): Promise<CompressionConfig> {
       case "exclusions":
         config.exclusions = normalizeCompressionExclusions(parsed);
         break;
+      case "fidelityGate":
+        config.fidelityGate = {
+          enabled: toRecord(parsed).enabled === true,
+          minTokenSurvivalPercent:
+            typeof toRecord(parsed).minTokenSurvivalPercent === "number"
+              ? (toRecord(parsed).minTokenSurvivalPercent as number)
+              : 95,
+          minJsonKeyPercent:
+            typeof toRecord(parsed).minJsonKeyPercent === "number"
+              ? (toRecord(parsed).minJsonKeyPercent as number)
+              : 90,
+          checkNumericIntegrity: toRecord(parsed).checkNumericIntegrity !== false,
+          checkDiffHunks: toRecord(parsed).checkDiffHunks !== false,
+        };
+        break;
+      case "pipelineCircuitBreaker":
+        config.pipelineCircuitBreaker = {
+          enabled: toRecord(parsed).enabled === true,
+          failureThreshold:
+            typeof toRecord(parsed).failureThreshold === "number"
+              ? (toRecord(parsed).failureThreshold as number)
+              : 3,
+          cooldownMs:
+            typeof toRecord(parsed).cooldownMs === "number"
+              ? (toRecord(parsed).cooldownMs as number)
+              : 30000,
+        };
+        break;
+      case "quantumLock":
+        config.quantumLock = {
+          enabled: toRecord(parsed).enabled === true,
+          categories: Array.isArray(toRecord(parsed).categories)
+            ? (toRecord(parsed).categories as any)
+            : undefined,
+        };
+        break;
+      case "memoizeCompressionResults":
+        config.memoizeCompressionResults = parsed === true;
+        break;
     }
   }
 

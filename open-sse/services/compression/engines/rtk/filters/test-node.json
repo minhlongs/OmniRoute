@@ -1,0 +1,41 @@
+{
+  "id": "test-node",
+  "label": "Node Native Test Runner",
+  "description": "Keep failing tests, assertion diffs, and stacktraces while stripping passing test noise.",
+  "category": "test",
+  "priority": 91,
+  "match": {
+    "outputTypes": ["test-node"],
+    "commands": ["^node\\s+(?:--\\S+\\s+)*--test\\b"],
+    "patterns": ["^[#ℹ]\\s*pass\\s+\\d+", "^[#ℹ]\\s*tests\\s+\\d+"]
+  },
+  "rules": {
+    "includePatterns": [
+      "^\\s*▶\\s+",
+      "^\\s*✖\\s+",
+      "AssertionError",
+      "Expected values",
+      "^\\s*[+-]\\s+",
+      "\\s+at\\s+",
+      "^[#ℹ]\\s*(?:fail|pass|tests|suites|duration_ms)"
+    ],
+    "dropPatterns": ["^\\s*✔\\s+"],
+    "collapsePatterns": ["^\\s*at "],
+    "deduplicate": true,
+    "maxLines": 140,
+    "headLines": 24,
+    "tailLines": 50
+  },
+  "preserve": {
+    "errorPatterns": ["✖", "AssertionError", "fail", "[ERR_ASSERTION]"],
+    "summaryPatterns": ["^[#ℹ]\\s*tests"]
+  },
+  "tests": [
+    {
+      "name": "node test sample",
+      "command": "node --test",
+      "input": "▶ suite\n  ✔ test 1 (1.2ms)\n  ✖ test 2 (2.5ms)\n    AssertionError: bad\n      at fn (/a.ts:1:1)\nℹ fail 1\n",
+      "expected": "▶ suite\n  ✖ test 2 (2.5ms)\n    AssertionError: bad\n      at fn (/a.ts:1:1)\nℹ fail 1"
+    }
+  ]
+}

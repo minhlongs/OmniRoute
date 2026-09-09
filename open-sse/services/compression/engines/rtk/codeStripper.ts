@@ -112,6 +112,10 @@ export function detectCodeLanguage(text: string): CodeLanguage {
  * division without parser context). Bails out entirely when JSX is present so
  * JSX expression-container comments are never corrupted.
  */
+// Compiler & linter directives, pragmas, and vital code annotations that MUST NOT be stripped.
+const COMPILER_DIRECTIVE_PATTERN =
+  /(?:@ts-|\b(?:eslint-|biome-|prettier-|babel-|vite-|webpack-|flow|noinspection)|pragma:|#region|#endregion|\b(?:TODO|FIXME|NOTE|IMPORTANT|SAFETY|INVARIANT):)/i;
+
 function stripJsTsComments(text: string, preserveDocstrings: boolean): string {
   const ts = resolveTypeScript();
   // Graceful degradation: when `typescript` is unavailable (e.g. after
@@ -156,6 +160,9 @@ function stripJsTsComments(text: string, preserveDocstrings: boolean): string {
     // Keep JSDoc/docstring block comments (`/** ... */`) when preserveDocstrings is on — they
     // carry API documentation that is worth more than the bytes they cost.
     if (preserveDocstrings && text.startsWith("/**", range.pos)) continue;
+    // Always preserve compiler and linter directives (@ts-ignore, eslint-disable, etc.)
+    const commentSlice = text.slice(range.pos, range.end);
+    if (COMPILER_DIRECTIVE_PATTERN.test(commentSlice)) continue;
     result = result.slice(0, range.pos) + result.slice(range.end);
   }
   return result;

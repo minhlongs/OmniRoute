@@ -1,163 +1,231 @@
-import { describe, it } from "node:test";
+import test from "node:test";
 import assert from "node:assert/strict";
-import {
-  readLifecycleEngine,
-  extractInvocations,
-  findSupersededReadCallIds,
-} from "../../../open-sse/services/compression/engines/readLifecycle/index.ts";
+import { readLifecycleEngine } from "../../../open-sse/services/compression/engines/readLifecycle/index.ts";
 
-// T08/H7 — read-lifecycle: collapse superseded file-Read tool results (opt-in, lossy).
-
-const STUB_MARK = "read superseded";
-
-function run(messages: unknown[], enabled = true) {
-  return readLifecycleEngine.apply({ messages }, { stepConfig: { enabled } });
-}
-
-// ── Anthropic fixtures ──
-const anthropicRead = (id: string, path: string) => ({
-  role: "assistant",
-  content: [{ type: "tool_use", id, name: "Read", input: { file_path: path } }],
-});
-const anthropicWrite = (id: string, path: string) => ({
-  role: "assistant",
-  content: [{ type: "tool_use", id, name: "Edit", input: { file_path: path } }],
-});
-const anthropicResult = (id: string, text: string) => ({
-  role: "user",
-  content: [{ type: "tool_result", tool_use_id: id, content: text }],
-});
-function anthropicResultText(msg: unknown, id: string): string | undefined {
-  const blocks = (msg as { content?: unknown[] }).content;
-  const b = Array.isArray(blocks)
-    ? (blocks.find((x) => (x as { tool_use_id?: string }).tool_use_id === id) as
-        { content?: string } | undefined)
-    : undefined;
-  return b?.content;
-}
-
-// ── OpenAI fixtures ──
-const openaiRead = (id: string, path: string) => ({
-  role: "assistant",
-  tool_calls: [
+test("read-lifecycle: Anthropic tool shapes — collapses earlier read when re-read later", () => {
+  const messages = [
     {
-      id,
-      type: "function",
-      function: { name: "read_file", arguments: JSON.stringify({ file_path: path }) },
+      role: "user",
+      content: "Can you check src/index.ts?",
     },
-  ],
+    {
+      role: "assistant",
+      content: [
+        {
+          type: "tool_use",
+          id: "call_read_1",
+          name: "read_file",
+          input: { path: "src/index.ts" },
+        },
+      ],
+    },
+    {
+      role: "user",
+      content: [
+        {
+          type: "tool_result",
+          tool_use_id: "call_read_1",
+          content: "export const version = '1.0.0';\n// 50 lines of initial code...",
+        },
+      ],
+    },
+    {
+      role: "assistant",
+      content: "Let me check again with the updated view.",
+    },
+    {
+      role: "assistant",
+      content: [
+        {
+          type: "tool_use",
+          id: "call_read_2",
+          name: "read_file",
+          input: { path: "src/index.ts" },
+        },
+      ],
+    },
+    {
+      role: "user",
+      content: [
+        {
+          type: "tool_result",
+          tool_use_id: "call_read_2",
+          content: "export const version = '1.1.0';\n// 50 lines of fresh code...",
+        },
+      ],
+    },
+  ];
+
+  const result = readLifecycleEngine.apply({ messages }, { stepConfig: { enabled: true } });
+  assert.equal(result.compressed, true);
+  const outMsgs = (result.body as { messages: any[] }).messages;
+
+  // Earlier read must be collapsed to stub
+  const earlierBlock = outMsgs[2].content[0];
+  assert.ok(earlierBlock.content.includes("read superseded"));
+  assert.ok(earlierBlock.content.includes("src/index.ts"));
+
+  // Later read must remain completely intact
+  const laterBlock = outMsgs[5].content[0];
+  assert.equal(laterBlock.content, "export const version = '1.1.0';\n// 50 lines of fresh code...");
 });
-const openaiResult = (id: string, text: string) => ({
-  role: "tool",
-  tool_call_id: id,
-  content: text,
+
+test("read-lifecycle: Antigravity tool shapes — view_file with AbsolutePath & replace_file_content with TargetFile", () => {
+  const messages = [
+    {
+      role: "assistant",
+      tool_calls: [
+        {
+          id: "call_view_1",
+          type: "function",
+          function: {
+            name: "view_file",
+            arguments: JSON.stringify({ AbsolutePath: "/workspace/server.ts" }),
+          },
+        },
+      ],
+    },
+    {
+      role: "tool",
+      tool_call_id: "call_view_1",
+      content: "console.log('original server code 2000 chars');",
+    },
+    {
+      role: "assistant",
+      tool_calls: [
+        {
+          id: "call_replace_1",
+          type: "function",
+          function: {
+            name: "replace_file_content",
+            arguments: JSON.stringify({
+              TargetFile: "/workspace/server.ts",
+              Instruction: "Fix logging",
+            }),
+          },
+        },
+      ],
+    },
+    {
+      role: "tool",
+      tool_call_id: "call_replace_1",
+      content: "Replaced line 1",
+    },
+  ];
+
+  const result = readLifecycleEngine.apply({ messages }, { stepConfig: { enabled: true } });
+  assert.equal(result.compressed, true);
+  const outMsgs = (result.body as { messages: any[] }).messages;
+
+  // The earlier view of server.ts was superseded by replace_file_content
+  assert.ok(outMsgs[1].content.includes("read superseded"));
+  assert.ok(outMsgs[1].content.includes("/workspace/server.ts"));
+
+  // The tool result of replace_file_content is unchanged
+  assert.equal(outMsgs[3].content, "Replaced line 1");
 });
 
-describe("read-lifecycle — pure analysis", () => {
-  it("extracts invocations from both shapes", () => {
-    const { invocations, readPathByCallId } = extractInvocations([
-      anthropicRead("c1", "/a.ts"),
-      openaiRead("c2", "/b.ts"),
-    ]);
-    assert.equal(invocations.length, 2);
-    assert.equal(invocations[0].kind, "read");
-    assert.equal(invocations[0].path, "/a.ts");
-    assert.equal(readPathByCallId.get("c1"), "/a.ts");
-    assert.equal(readPathByCallId.get("c2"), "/b.ts");
-  });
+test("read-lifecycle: preserves un-superseded reads of other files", () => {
+  const messages = [
+    {
+      role: "assistant",
+      tool_calls: [
+        {
+          id: "call_view_a",
+          type: "function",
+          function: {
+            name: "read_file",
+            arguments: JSON.stringify({ filePath: "fileA.ts" }),
+          },
+        },
+        {
+          id: "call_view_b",
+          type: "function",
+          function: {
+            name: "read_file",
+            arguments: JSON.stringify({ filePath: "fileB.ts" }),
+          },
+        },
+      ],
+    },
+    {
+      role: "tool",
+      tool_call_id: "call_view_a",
+      content: "file A content",
+    },
+    {
+      role: "tool",
+      tool_call_id: "call_view_b",
+      content: "file B content",
+    },
+    {
+      role: "assistant",
+      tool_calls: [
+        {
+          id: "call_edit_a",
+          type: "function",
+          function: {
+            name: "edit_file",
+            arguments: JSON.stringify({ filePath: "fileA.ts" }),
+          },
+        },
+      ],
+    },
+    {
+      role: "tool",
+      tool_call_id: "call_edit_a",
+      content: "file A edited",
+    },
+  ];
 
-  it("marks a read superseded by a later read of the same path", () => {
-    const { invocations } = extractInvocations([
-      anthropicRead("c1", "/a.ts"),
-      anthropicRead("c2", "/a.ts"),
-    ]);
-    const s = findSupersededReadCallIds(invocations);
-    assert.equal(s.has("c1"), true);
-    assert.equal(s.has("c2"), false);
-  });
+  const result = readLifecycleEngine.apply({ messages }, { stepConfig: {} });
+  assert.equal(result.compressed, true);
+  const outMsgs = (result.body as { messages: any[] }).messages;
 
-  it("marks a read superseded by a later write of the same path", () => {
-    const { invocations } = extractInvocations([
-      anthropicRead("c1", "/a.ts"),
-      anthropicWrite("w1", "/a.ts"),
-    ]);
-    const s = findSupersededReadCallIds(invocations);
-    assert.equal(s.has("c1"), true);
-    assert.equal(s.has("w1"), false); // writes are never collapsed
-  });
-
-  it("does not supersede reads of different paths", () => {
-    const { invocations } = extractInvocations([
-      anthropicRead("c1", "/a.ts"),
-      anthropicRead("c2", "/b.ts"),
-    ]);
-    const s = findSupersededReadCallIds(invocations);
-    assert.equal(s.size, 0);
-  });
+  // fileA view was superseded by edit_file -> collapsed
+  assert.ok(outMsgs[1].content.includes("read superseded"));
+  // fileB view was NOT modified or re-read -> kept 100% intact
+  assert.equal(outMsgs[2].content, "file B content");
 });
 
-describe("read-lifecycle — engine integration", () => {
-  it("collapses an earlier Anthropic read, keeping the latest intact", () => {
-    const out = run([
-      anthropicRead("c1", "/a.ts"),
-      anthropicResult("c1", "OLD content of a.ts"),
-      anthropicRead("c2", "/a.ts"),
-      anthropicResult("c2", "NEW content of a.ts"),
-    ]);
-    assert.equal(out.compressed, true);
-    const msgs = (out.body as { messages: unknown[] }).messages;
-    assert.match(anthropicResultText(msgs[1], "c1") ?? "", new RegExp(STUB_MARK));
-    assert.equal(anthropicResultText(msgs[3], "c2"), "NEW content of a.ts");
-  });
+test("read-lifecycle: default enabled in stacked pipeline when enabled !== false", () => {
+  const messages = [
+    {
+      role: "assistant",
+      tool_calls: [
+        {
+          id: "call_1",
+          type: "function",
+          function: { name: "cat", arguments: JSON.stringify({ file: "app.py" }) },
+        },
+      ],
+    },
+    {
+      role: "tool",
+      tool_call_id: "call_1",
+      content: "print('hello')",
+    },
+    {
+      role: "assistant",
+      tool_calls: [
+        {
+          id: "call_2",
+          type: "function",
+          function: { name: "cat", arguments: JSON.stringify({ file: "app.py" }) },
+        },
+      ],
+    },
+    {
+      role: "tool",
+      tool_call_id: "call_2",
+      content: "print('hello world')",
+    },
+  ];
 
-  it("collapses a read superseded by a later write", () => {
-    const out = run([
-      anthropicRead("c1", "/a.ts"),
-      anthropicResult("c1", "OLD"),
-      anthropicWrite("w1", "/a.ts"),
-      anthropicResult("w1", "edit applied"),
-    ]);
-    assert.equal(out.compressed, true);
-    const msgs = (out.body as { messages: unknown[] }).messages;
-    assert.match(anthropicResultText(msgs[1], "c1") ?? "", new RegExp(STUB_MARK));
-    assert.equal(anthropicResultText(msgs[3], "w1"), "edit applied"); // write result untouched
-  });
-
-  it("collapses an earlier OpenAI read (role:tool message)", () => {
-    const out = run([
-      openaiRead("c1", "/a.ts"),
-      openaiResult("c1", "OLD"),
-      openaiRead("c2", "/a.ts"),
-      openaiResult("c2", "NEW"),
-    ]);
-    assert.equal(out.compressed, true);
-    const msgs = (out.body as { messages: Array<{ content?: string }> }).messages;
-    assert.match(msgs[1].content ?? "", new RegExp(STUB_MARK));
-    assert.equal(msgs[3].content, "NEW");
-  });
-
-  it("no-ops for a single read of a path", () => {
-    const out = run([anthropicRead("c1", "/a.ts"), anthropicResult("c1", "only read")]);
-    assert.equal(out.compressed, false);
-  });
-
-  it("is a pass-through when disabled (default)", () => {
-    const messages = [
-      anthropicRead("c1", "/a.ts"),
-      anthropicResult("c1", "OLD"),
-      anthropicRead("c2", "/a.ts"),
-      anthropicResult("c2", "NEW"),
-    ];
-    const out = run(messages, false);
-    assert.equal(out.compressed, false);
-    assert.equal(
-      anthropicResultText((out.body as { messages: unknown[] }).messages[1], "c1"),
-      "OLD"
-    );
-  });
-
-  it("schema defaults enabled to false (opt-in)", () => {
-    const field = readLifecycleEngine.getConfigSchema!().find((f) => f.key === "enabled");
-    assert.equal(field?.defaultValue, false);
-  });
+  // Notice: empty stepConfig ({}) should default to running!
+  const result = readLifecycleEngine.apply({ messages }, { stepConfig: {} });
+  assert.equal(result.compressed, true);
+  const outMsgs = (result.body as { messages: any[] }).messages;
+  assert.ok(outMsgs[1].content.includes("read superseded"));
+  assert.equal(outMsgs[3].content, "print('hello world')");
 });

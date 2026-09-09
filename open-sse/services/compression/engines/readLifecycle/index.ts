@@ -27,28 +27,40 @@ import type { CompressionResult } from "../../types.ts";
 
 const ENGINE_ID = "read-lifecycle";
 
-/** Conservative tool-name classification (exact, lower-cased) — avoids false collapses. */
-const READ_NAMES = new Set(["read", "read_file", "readfile", "view", "view_file", "cat"]);
+/** Conservative tool-name classification (normalized, lower-cased) — avoids false collapses. */
+const READ_NAMES = new Set([
+  "read",
+  "readfile",
+  "view",
+  "viewfile",
+  "cat",
+  "readfilecontent",
+]);
 const WRITE_NAMES = new Set([
   "write",
-  "write_file",
   "writefile",
+  "writetofile",
   "edit",
-  "edit_file",
+  "editfile",
   "multiedit",
-  "str_replace",
-  "str_replace_editor",
-  "str_replace_based_edit_tool",
-  "apply_patch",
-  "create_file",
-  "update_file",
+  "replacefilecontent",
+  "multireplacefilecontent",
+  "replaceinfile",
+  "editfilecontent",
+  "strreplace",
+  "strreplaceeditor",
+  "strreplacebasededittool",
+  "applypatch",
+  "patchfile",
+  "createfile",
+  "updatefile",
 ]);
 
 function classifyTool(name: unknown): "read" | "write" | null {
   if (typeof name !== "string") return null;
-  const lc = name.trim().toLowerCase();
-  if (READ_NAMES.has(lc)) return "read";
-  if (WRITE_NAMES.has(lc)) return "write";
+  const normalized = name.trim().toLowerCase().replace(/[^a-z0-9]/g, "");
+  if (READ_NAMES.has(normalized)) return "read";
+  if (WRITE_NAMES.has(normalized)) return "write";
   return null;
 }
 
@@ -56,12 +68,22 @@ function isRecord(v: unknown): v is Record<string, unknown> {
   return v !== null && typeof v === "object" && !Array.isArray(v);
 }
 
-/** Extract a file path from a tool input object across common field names. */
+/** Extract a file path from a tool input object across common field names and casings. */
 function extractPath(input: unknown): string | null {
   if (!isRecord(input)) return null;
-  for (const key of ["file_path", "path", "filePath", "filename", "file", "target_file"]) {
-    const v = input[key];
-    if (typeof v === "string" && v.trim()) return v.trim();
+  for (const [key, value] of Object.entries(input)) {
+    if (typeof value !== "string" || !value.trim()) continue;
+    const cleanKey = key.toLowerCase().replace(/[^a-z0-9]/g, "");
+    if (
+      cleanKey === "path" ||
+      cleanKey === "filepath" ||
+      cleanKey === "filename" ||
+      cleanKey === "file" ||
+      cleanKey === "targetfile" ||
+      cleanKey === "absolutepath"
+    ) {
+      return value.trim();
+    }
   }
   return null;
 }
@@ -249,7 +271,7 @@ export const readLifecycleEngine: CompressionEngine = {
 
   apply(body: Record<string, unknown>, options?: CompressionEngineApplyOptions): CompressionResult {
     const stepConfig = options?.stepConfig ?? {};
-    if (stepConfig["enabled"] !== true) {
+    if (stepConfig["enabled"] === false) {
       return { body, compressed: false, stats: null };
     }
     const messages = body["messages"];

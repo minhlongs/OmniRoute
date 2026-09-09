@@ -19,7 +19,11 @@ REGISTRY["git-diff"] = renderGitDiff;
 REGISTRY["test-pytest"] = renderTestGreen;
 REGISTRY["test-jest"] = renderTestGreen;
 REGISTRY["test-vitest"] = renderTestGreen;
+REGISTRY["test-node"] = renderTestGreen;
+REGISTRY["test-cargo"] = renderTestGreen;
+REGISTRY["test-go"] = renderTestGreen;
 REGISTRY["build-eslint"] = renderTestGreen;
+REGISTRY["build-typescript"] = renderTestGreen;
 
 // Task 4: terraform-plan renderer
 REGISTRY["terraform-plan"] = renderTerraformPlan;

@@ -323,9 +323,12 @@ export function matchRtkFilter(
           detectedCommand &&
           filter.commandPatterns.some((pattern) => cachedMatchPattern(pattern, detectedCommand))
       ) ??
-      scoped.find((filter) =>
-        filter.matchPatterns.some((pattern) => cachedMatchPattern(pattern, text))
-      );
+      scoped.find((filter) => {
+        if (detectedCommand && filter.commandPatterns.length > 0) {
+          return false;
+        }
+        return filter.matchPatterns.some((pattern) => cachedMatchPattern(pattern, text));
+      });
     if (matched) return matched;
   }
   return filters.find((filter) => filter.commandTypes.includes("generic-output")) ?? null;
