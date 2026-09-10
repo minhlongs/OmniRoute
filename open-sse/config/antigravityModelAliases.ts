@@ -1,10 +1,9 @@
 export const ANTIGRAVITY_PUBLIC_MODELS = Object.freeze([
-  // Gemini 3.7 Flash tiers listed by the current official Antigravity model catalog.
-  // Keep the upstream model ids unchanged so discovery and execution address the same
-  // models selected by the native client.
+  // Gemini 3.6 Flash tiers returned by the live model selector for both the IDE 2.1.1
+  // and CLI 1.1.x client identities. High is the current defaultAgentModelId.
   {
-    id: "gemini-3.7-flash-high",
-    name: "Gemini 3.7 Flash (High)",
+    id: "gemini-3.6-flash-high",
+    name: "Gemini 3.6 Flash (High)",
     contextLength: 1048576,
     maxOutputTokens: 65536,
     supportsReasoning: true,
@@ -12,8 +11,8 @@ export const ANTIGRAVITY_PUBLIC_MODELS = Object.freeze([
     toolCalling: true,
   },
   {
-    id: "gemini-3.7-flash-medium",
-    name: "Gemini 3.7 Flash (Medium)",
+    id: "gemini-3.6-flash-medium",
+    name: "Gemini 3.6 Flash (Medium)",
     contextLength: 1048576,
     maxOutputTokens: 65536,
     supportsReasoning: true,
@@ -21,8 +20,22 @@ export const ANTIGRAVITY_PUBLIC_MODELS = Object.freeze([
     toolCalling: true,
   },
   {
-    id: "gemini-3.7-flash-low",
-    name: "Gemini 3.7 Flash (Low)",
+    id: "gemini-3.6-flash-low",
+    name: "Gemini 3.6 Flash (Low)",
+    contextLength: 1048576,
+    maxOutputTokens: 65536,
+    supportsReasoning: true,
+    supportsVision: true,
+    toolCalling: true,
+  },
+  // Claude (Antigravity backend). The `agy` provider already ships these from the live
+  // :fetchAvailableModels probe (see agyModels.ts) and discussion #3184 confirmed they
+  // are user-callable through the `antigravity` OAuth provider too — same backend.
+  // `antigravity/claude-opus-4-6-thinking` and `antigravity/claude-sonnet-4-6` both work.
+  // They are upstream IDs, so no alias remapping is required.
+  {
+    id: "claude-opus-4-6-thinking",
+    name: "Claude Opus 4.6 (Thinking)",
     contextLength: 1048576,
     maxOutputTokens: 65536,
     supportsReasoning: true,
@@ -30,8 +43,8 @@ export const ANTIGRAVITY_PUBLIC_MODELS = Object.freeze([
     toolCalling: true,
   },
   {
-    id: "gemini-3.7-flash-tiered",
-    name: "Gemini 3.7 Flash (Tiered)",
+    id: "claude-sonnet-4-6",
+    name: "Claude Sonnet 4.6 (Thinking)",
     contextLength: 1048576,
     maxOutputTokens: 65536,
     supportsReasoning: true,
@@ -59,6 +72,38 @@ export const ANTIGRAVITY_PUBLIC_MODELS = Object.freeze([
     supportsVision: true,
     toolCalling: true,
   },
+  // Gemini 3.5 Flash tiers exposed by Antigravity's model selector. Public ids match
+  // fetchAvailableModels and are forwarded upstream unchanged:
+  //   High   -> gemini-3-flash-agent       (displayName: Gemini 3.5 Flash (High))
+  //   Medium -> gemini-3.5-flash-low       (displayName: Gemini 3.5 Flash (Medium))
+  //   Low    -> gemini-3.5-flash-extra-low (displayName: Gemini 3.5 Flash (Low))
+  {
+    id: "gemini-3-flash-agent",
+    name: "Gemini 3.5 Flash (High)",
+    contextLength: 1048576,
+    maxOutputTokens: 65536,
+    supportsReasoning: true,
+    supportsVision: true,
+    toolCalling: true,
+  },
+  {
+    id: "gemini-3.5-flash-low",
+    name: "Gemini 3.5 Flash (Medium)",
+    contextLength: 1048576,
+    maxOutputTokens: 65536,
+    supportsReasoning: true,
+    supportsVision: true,
+    toolCalling: true,
+  },
+  {
+    id: "gemini-3.5-flash-extra-low",
+    name: "Gemini 3.5 Flash (Low)",
+    contextLength: 1048576,
+    maxOutputTokens: 65536,
+    supportsReasoning: true,
+    supportsVision: true,
+    toolCalling: true,
+  },
   {
     id: "gemini-3.1-flash-lite",
     name: "Gemini 3.1 Flash Lite",
@@ -66,27 +111,25 @@ export const ANTIGRAVITY_PUBLIC_MODELS = Object.freeze([
     maxOutputTokens: 65535,
     toolCalling: true,
   },
-  // Claude (Antigravity backend). The `agy` provider already ships these from the live
-  // :fetchAvailableModels probe (see agyModels.ts) and discussion #3184 confirmed they
-  // are user-callable through the `antigravity` OAuth provider too — same backend.
-  // `antigravity/claude-opus-4-6-thinking` and `antigravity/claude-sonnet-4-6` both work.
-  // They are upstream IDs, so no alias remapping is required.
   {
-    id: "claude-opus-4-6-thinking",
-    name: "Claude Opus 4.6 (Thinking)",
+    id: "gemini-2.5-flash-thinking",
+    name: "Gemini 2.5 Flash Thinking",
     contextLength: 1048576,
-    maxOutputTokens: 65536,
-    supportsReasoning: true,
-    supportsVision: true,
+    maxOutputTokens: 65535,
     toolCalling: true,
   },
   {
-    id: "claude-sonnet-4-6",
-    name: "Claude Sonnet 4.6 (Thinking)",
+    id: "gemini-2.5-flash",
+    name: "Gemini 2.5 Flash",
     contextLength: 1048576,
-    maxOutputTokens: 65536,
-    supportsReasoning: true,
-    supportsVision: true,
+    maxOutputTokens: 65535,
+    toolCalling: true,
+  },
+  {
+    id: "gemini-2.5-flash-lite",
+    name: "Gemini 2.5 Flash Lite",
+    contextLength: 1048576,
+    maxOutputTokens: 65535,
     toolCalling: true,
   },
   {
@@ -97,21 +140,174 @@ export const ANTIGRAVITY_PUBLIC_MODELS = Object.freeze([
     supportsReasoning: true,
     toolCalling: true,
   },
+  {
+    id: "gemini-3.8-flash-tiered",
+    name: "Gemini 3.8 Flash (Tiered)",
+    contextLength: 1048576,
+    maxOutputTokens: 65536,
+    supportsReasoning: true,
+    supportsVision: true,
+    toolCalling: true,
+  },
+  {
+    id: "gemini-3.7-flash-tiered",
+    name: "Gemini 3.7 Flash (Tiered)",
+    contextLength: 1048576,
+    maxOutputTokens: 65536,
+    supportsReasoning: true,
+    supportsVision: true,
+    toolCalling: true,
+  },
+  {
+    id: "gemini-3.6-flash-tiered",
+    name: "Gemini 3.6 Flash (Tiered)",
+    contextLength: 1048576,
+    maxOutputTokens: 65536,
+    supportsReasoning: true,
+    supportsVision: true,
+    toolCalling: true,
+  },
+  {
+    id: "gemini-3.5-flash-lite",
+    name: "Gemini 3.5 Flash Lite",
+    contextLength: 1048576,
+    maxOutputTokens: 65536,
+    supportsReasoning: true,
+    supportsVision: true,
+    toolCalling: true,
+  },
+  {
+    id: "gemini-3-flash",
+    name: "Gemini 3 Flash",
+    contextLength: 1048576,
+    maxOutputTokens: 65536,
+    supportsReasoning: true,
+    supportsVision: true,
+    toolCalling: true,
+  },
+  {
+    id: "gemini-3.1-flash-image",
+    name: "Gemini 3.1 Flash Image",
+    contextLength: 1048576,
+    maxOutputTokens: 65536,
+    supportsReasoning: false,
+    supportsVision: true,
+    supportsImageGeneration: true,
+    toolCalling: true,
+  },
+  {
+    id: "gemini-3-pro-image",
+    name: "Gemini 3 Pro Image",
+    contextLength: 1048576,
+    maxOutputTokens: 65536,
+    supportsReasoning: false,
+    supportsVision: true,
+    supportsImageGeneration: true,
+    toolCalling: true,
+  },
+  {
+    id: "gemini-3-pro-image-preview",
+    name: "Gemini 3 Pro Image (Preview)",
+    contextLength: 1048576,
+    maxOutputTokens: 65536,
+    supportsReasoning: false,
+    supportsVision: true,
+    supportsImageGeneration: true,
+    toolCalling: true,
+  },
+  {
+    id: "gemini-2.5-flash-image",
+    name: "Gemini 2.5 Flash Image",
+    contextLength: 1048576,
+    maxOutputTokens: 65536,
+    supportsReasoning: false,
+    supportsVision: true,
+    supportsImageGeneration: true,
+    toolCalling: true,
+  },
+  {
+    id: "imagen-3.0-generate-002",
+    name: "Imagen 3.0 Generate",
+    contextLength: 32768,
+    maxOutputTokens: 8192,
+    supportsReasoning: false,
+    supportsVision: false,
+    supportsImageGeneration: true,
+    toolCalling: false,
+  },
+  {
+    id: "claude-sonnet-4-6-high",
+    name: "Claude Sonnet 4.6 (High)",
+    contextLength: 1048576,
+    maxOutputTokens: 65536,
+    supportsReasoning: true,
+    supportsVision: true,
+    toolCalling: true,
+  },
+  {
+    id: "claude-sonnet-4-6-medium",
+    name: "Claude Sonnet 4.6 (Medium)",
+    contextLength: 1048576,
+    maxOutputTokens: 65536,
+    supportsReasoning: true,
+    supportsVision: true,
+    toolCalling: true,
+  },
+  {
+    id: "claude-sonnet-4-6-low",
+    name: "Claude Sonnet 4.6 (Low)",
+    contextLength: 1048576,
+    maxOutputTokens: 65536,
+    supportsReasoning: true,
+    supportsVision: true,
+    toolCalling: true,
+  },
+  {
+    id: "claude-opus-4-6-thinking-high",
+    name: "Claude Opus 4.6 (Thinking High)",
+    contextLength: 1048576,
+    maxOutputTokens: 65536,
+    supportsReasoning: true,
+    supportsVision: true,
+    toolCalling: true,
+  },
+  {
+    id: "claude-opus-4-6-thinking-medium",
+    name: "Claude Opus 4.6 (Thinking Medium)",
+    contextLength: 1048576,
+    maxOutputTokens: 65536,
+    supportsReasoning: true,
+    supportsVision: true,
+    toolCalling: true,
+  },
+  {
+    id: "claude-opus-4-6-thinking-low",
+    name: "Claude Opus 4.6 (Thinking Low)",
+    contextLength: 1048576,
+    maxOutputTokens: 65536,
+    supportsReasoning: true,
+    supportsVision: true,
+    toolCalling: true,
+  },
 ]);
 
 export const ANTIGRAVITY_MODEL_ALIASES = Object.freeze({
-  // Gemini 3.7 Flash tiers map to the upstream tiered endpoint model; the thinking
-  // budget is steered via generationConfig.thinkingConfig.thinkingBudget.
-  "gemini-3.7-flash": "gemini-3.7-flash-tiered",
-  "gemini-3.7-flash-high": "gemini-3.7-flash-tiered",
-  "gemini-3.7-flash-medium": "gemini-3.7-flash-tiered",
-  "gemini-3.7-flash-low": "gemini-3.7-flash-tiered",
-  "gpt-oss-120b": "gpt-oss-120b-medium",
   // gemini-3.1-pro-low is not aliased: the upstream accepts it verbatim.
   // gemini-3.1-pro-high: the discovery slot returns HTTP 400 on v1internal;
   // the live upstream id is gemini-pro-agent (see ANTIGRAVITY_PUBLIC_MODELS).
   "gemini-3.1-pro-high": "gemini-pro-agent",
   "gemini-3-pro-image-preview": "gemini-3-pro-image",
+  "gemini-3-flash": "gemini-3-flash-agent",
+  "gemini-3.5-flash": "gemini-3-flash-agent",
+  "gemini-3.5-flash-lite": "gemini-3.1-flash-lite",
+  "gemini-2.5-flash-image": "gemini-3.1-flash-image",
+  "imagen-3": "imagen-3.0-generate-002",
+  "claude-sonnet-4-6-high": "claude-sonnet-4-6",
+  "claude-sonnet-4-6-medium": "claude-sonnet-4-6",
+  "claude-sonnet-4-6-low": "claude-sonnet-4-6",
+  "claude-opus-4-6-thinking-high": "claude-opus-4-6-thinking",
+  "claude-opus-4-6-thinking-medium": "claude-opus-4-6-thinking",
+  "claude-opus-4-6-thinking-low": "claude-opus-4-6-thinking",
   // Legacy Claude display ids → current upstream ids. NOTE: an earlier comment here
   // assumed Claude was removed from Antigravity 2.0 and would 404; discussion #3184
   // disproved that — the Antigravity OAuth backend still serves claude-opus-4-6-thinking
@@ -159,17 +355,52 @@ const UPSTREAM_PUBLIC_MODEL_IDS = new Set(
   ANTIGRAVITY_PUBLIC_MODELS.map((model) => resolveAntigravityModelId(model.id))
 );
 
-// The authenticated Antigravity `:fetchAvailableModels` response is the source of truth for
-// the models enabled for the current account and client version. Keep only known non-chat
-// surfaces out of that live catalog; do not require every newly launched chat model to be
-// added to this static fallback catalog first.
-const ANTIGRAVITY_NON_CHAT_MODEL_IDS = new Set([
-  "gemini-3-pro-image-preview",
+export function resolveAntigravityModelId(modelId: string): string {
+  if (!modelId) return modelId;
+  return (ANTIGRAVITY_MODEL_ALIASES as AntigravityModelAliasMap)[modelId] || modelId;
+}
+
+export function toClientAntigravityModelId(modelId: string): string {
+  if (!modelId) return modelId;
+  return ANTIGRAVITY_REVERSE_MODEL_ALIASES[modelId] || modelId;
+}
+
+// Retired/hidden upstream preview buckets that must be dropped from client-facing usage.
+const ANTIGRAVITY_DROPPED_QUOTA_BUCKETS = new Set<string>([
+  "gemini-3.5-flash-preview",
+  "gemini-3-flash-preview",
+]);
+
+/**
+ * Keep Antigravity quota buckets in the upstream model-id namespace used by the public
+ * catalog, or return `null` when a retired preview bucket should be hidden from clients.
+ */
+export function toClientAntigravityQuotaModelId(modelId: string): string | null {
+  if (!modelId) return null;
+  if (ANTIGRAVITY_DROPPED_QUOTA_BUCKETS.has(modelId)) return null;
+  return toClientAntigravityModelId(modelId);
+}
+
+export function getClientVisibleAntigravityModelName(
+  modelId: string,
+  fallbackName?: string
+): string {
+  return CLIENT_VISIBLE_MODEL_NAMES[modelId] || fallbackName || modelId;
+}
+
+export function isUserCallableAntigravityModelId(modelId: string): boolean {
+  if (!modelId) return false;
+  const clientId = toClientAntigravityModelId(modelId);
+  const upstreamId = resolveAntigravityModelId(modelId);
+  return PUBLIC_MODEL_IDS.has(clientId) || UPSTREAM_PUBLIC_MODEL_IDS.has(upstreamId);
+}
+
+const ANTIGRAVITY_NON_CHAT_MODEL_IDS = new Set<string>([
   "gemini-3.1-flash-image",
-  "gemini-3.1-flash-tts-preview",
-  "gemini-2.5-flash-preview-tts",
-  "tab_flash_lite_preview",
-  "tab_jump_flash_lite_preview",
+  "gemini-3-pro-image",
+  "gemini-3-pro-image-preview",
+  "gemini-2.5-flash-image",
+  "imagen-3.0-generate-002",
 ]);
 
 const ANTIGRAVITY_RETIRED_MODEL_IDS = new Set([
@@ -195,51 +426,6 @@ const ANTIGRAVITY_RETIRED_MODEL_IDS = new Set([
 const ANTIGRAVITY_NON_CHAT_MODEL_PATTERN =
   /(?:^|[-_])(image|imagen|audio|tts|embedding|embed|video|veo)(?:[-_]|$)/i;
 
-export function resolveAntigravityModelId(modelId: string): string {
-  if (!modelId) return modelId;
-  return (ANTIGRAVITY_MODEL_ALIASES as AntigravityModelAliasMap)[modelId] || modelId;
-}
-
-export function toClientAntigravityModelId(modelId: string): string {
-  if (!modelId) return modelId;
-  return ANTIGRAVITY_REVERSE_MODEL_ALIASES[modelId] || modelId;
-}
-
-// Retired/hidden upstream preview buckets that must be dropped from client-facing usage.
-const ANTIGRAVITY_DROPPED_QUOTA_BUCKETS = new Set<string>([
-  "gemini-3.5-flash-preview",
-  "gemini-3-flash-preview",
-]);
-
-/**
- * Keep Antigravity quota buckets in the upstream model-id namespace used by the public
- * catalog, or return `null` when a retired preview bucket should be hidden from clients.
- */
-export function toClientAntigravityQuotaModelId(modelId: string): string | null {
-  if (!modelId) return null;
-  if (
-    ANTIGRAVITY_DROPPED_QUOTA_BUCKETS.has(modelId) ||
-    ANTIGRAVITY_RETIRED_MODEL_IDS.has(modelId)
-  ) {
-    return null;
-  }
-  return toClientAntigravityModelId(modelId);
-}
-
-export function getClientVisibleAntigravityModelName(
-  modelId: string,
-  fallbackName?: string
-): string {
-  return CLIENT_VISIBLE_MODEL_NAMES[modelId] || fallbackName || modelId;
-}
-
-export function isUserCallableAntigravityModelId(modelId: string): boolean {
-  if (!modelId) return false;
-  const clientId = toClientAntigravityModelId(modelId);
-  const upstreamId = resolveAntigravityModelId(modelId);
-  return PUBLIC_MODEL_IDS.has(clientId) || UPSTREAM_PUBLIC_MODEL_IDS.has(upstreamId);
-}
-
 /**
  * Return whether a model reported by Antigravity's authenticated live catalog is eligible for
  * chat discovery. The upstream response already applies account/subscription gating and marks
@@ -252,3 +438,4 @@ export function isDiscoverableAntigravityModelId(modelId: string): boolean {
   }
   return !ANTIGRAVITY_NON_CHAT_MODEL_PATTERN.test(id);
 }
+
