@@ -256,3 +256,23 @@ test("preflight family lock covers both agy and antigravity spellings", async ()
   assert.equal(fallback.isModelLocked("antigravity", connId, "gemini-3.1-flash-lite"), false);
   assert.equal(fallback.isModelLocked("agy", connId, "gemini-3.1-flash-lite"), false);
 });
+
+test("Opus quota exhaustion locks only Opus and keeps Sonnet eligible", async () => {
+  fallback.clearAllModelLockouts();
+  const conn = await providersDb.createProviderConnection({
+    provider: "antigravity",
+    authType: "oauth",
+    name: "ag-opus-isolation",
+  });
+  const connId = (conn as { id: string }).id;
+
+  const { markAntigravityModelQuotaExhausted } = await import(
+    "../../open-sse/services/antigravityFamilyCooldown.ts"
+  );
+  markAntigravityModelQuotaExhausted(connId, 60 * 60 * 1000, "claude-opus-4-6-thinking");
+
+  assert.equal(fallback.isModelLocked("antigravity", connId, "claude-opus-4-6-thinking"), true);
+  assert.equal(fallback.isModelLocked("antigravity", connId, "claude-sonnet-4-6"), false);
+  assert.equal(fallback.isModelLocked("agy", connId, "claude-sonnet-4-6"), false);
+  assert.equal(providersDb.isConnectionRateLimited(connId), false);
+});

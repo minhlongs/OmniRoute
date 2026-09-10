@@ -2,7 +2,7 @@
  * Persist Antigravity/agy quota cooldowns per model family (gemini vs claude)
  * on the connection row, without cooling the whole account.
  */
-import { lockModel } from "./accountFallback.ts";
+import { lockModel, lockExactModel } from "./accountFallback.ts";
 import {
   getAntigravityQuotaFamily,
   isAntigravityQuotaProvider,
@@ -47,6 +47,8 @@ export async function persistAntigravityFamilyCooldown(params: {
   rateLimitedUntil: string;
 }): Promise<JsonRecord | null> {
   if (!params.model.trim()) return null;
+  // Opus models in Antigravity have independent quotas; never lock the shared Claude family.
+  if (params.model.toLowerCase().includes("opus")) return null;
   const family = getAntigravityQuotaFamily(params.model);
   if (family === "other") return null;
 
@@ -85,6 +87,7 @@ export function persistAntigravityFamilyCooldownIfQuota(params: {
 }): void {
   if (!isAntigravityQuotaProvider(params.provider)) return;
   if (!params.model?.trim() || params.cooldownMs <= 0) return;
+  if (params.model.toLowerCase().includes("opus")) return;
   if (params.reason != null && params.reason !== "quota_exhausted") return;
   void persistAntigravityFamilyCooldown({
     connectionId: params.connectionId,
@@ -100,6 +103,11 @@ export async function persistAntigravityPreflightFamilyLock(params: {
   unavailableUntil: string;
 }): Promise<void> {
   const cooldownMs = Math.max(0, Date.parse(params.unavailableUntil) - Date.now());
+  if (params.model.toLowerCase().includes("opus")) {
+    lockExactModel("agy", params.connectionId, params.model, "quota_exhausted", cooldownMs);
+    lockExactModel("antigravity", params.connectionId, params.model, "quota_exhausted", cooldownMs);
+    return;
+  }
   lockAntigravityFamilyModel(params.connectionId, params.model, "quota_exhausted", cooldownMs);
   await persistAntigravityFamilyCooldown({
     connectionId: params.connectionId,
@@ -146,6 +154,12 @@ export function markAntigravityModelQuotaExhausted(
   model?: string | null
 ): boolean {
   if (!model) return false;
+  // Opus models in Antigravity have independent per-model quotas; lock only that exact model.
+  if (model.toLowerCase().includes("opus")) {
+    lockExactModel("agy", connectionId, model, "quota_exhausted", retryAfterMs);
+    lockExactModel("antigravity", connectionId, model, "quota_exhausted", retryAfterMs);
+    return true;
+  }
   lockAntigravityFamilyModel(connectionId, model, "quota_exhausted", retryAfterMs);
   persistAntigravityFamilyCooldownIfQuota({
     provider: "agy",
