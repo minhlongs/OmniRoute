@@ -259,6 +259,14 @@ export async function tryPinnedModelDispatch(args: {
   // combo's resolved targets (refs flattened) before honoring it. Only validate
   // when allCombos is authoritative (non-empty) so we can resolve combo-refs;
   // the auto-combo redirect path passes an empty list and keeps prior behavior.
+  const haveFullCombos = Boolean(
+    allCombos &&
+      (Array.isArray(allCombos)
+        ? allCombos.length > 0
+        : (allCombos as { combos?: unknown[] })?.combos
+          ? (allCombos as { combos?: unknown[] }).combos!.length > 0
+          : typeof allCombos === "object" && Object.keys(allCombos).length > 0)
+  );
   const comboTargets = resolveComboTargets(
     combo,
     haveFullCombos ? allCombos : null,
