@@ -543,7 +543,7 @@ function hasKnownCompatibleContextLimit(
   return evaluateContextLimit(capabilities, requirements, target.modelStr) === true;
 }
 
-const HARD_COMPAT_REASONS = new Set(["tools", "vision", "structured_output", "output_tokens"]);
+const HARD_COMPAT_REASONS = new Set(["tools", "vision", "structured_output"]);
 
 /**
  * #8332: vision is a hard requirement, not a soft preference — a target whose vision
@@ -671,7 +671,7 @@ export function describeCapabilityFilterExhaustion(
     reasons: getTargetCompatibilityFailures(target, requirements),
   }));
   const unmet = Array.from(
-    new Set(rejected.flatMap((entry) => entry.reasons.filter((r) => HARD_COMPAT_REASONS.has(r))))
+    new Set(rejected.flatMap((entry) => entry.reasons.filter((r) => HARD_COMPAT_REASONS.has(r) || r === "output_tokens")))
   );
   if (unmet.length === 0) return null;
 
@@ -756,8 +756,29 @@ export function filterTargetsByRequestCompatibility(
       hasKnownCompatibleContextLimit(target, requirements)
     );
     if (knownContextCompatible.length > 0 && knownContextCompatible.length < compatible.length) {
-      const knownSet = new Set(knownContextCompatible);
-      return [...knownContextCompatible, ...compatible.filter((target) => !knownSet.has(target))];
+      log.info?.(
+        "COMBO",
+        `Context guard: filtered out ${compatible.length - knownContextCompatible.length} model(s) known to exceed context limit (${requirements.requiredContextTokens} tokens needed)`
+      );
+      return knownContextCompatible;
+    }
+  }
+
+  const hadKnownTooSmallOutputTarget = rejected.some((entry) =>
+    entry.reasons.includes("output_tokens")
+  );
+  if (
+    requirements.requestedOutputTokens > 0 &&
+    hadKnownTooSmallOutputTarget &&
+    compatible.length > 1
+  ) {
+    const knownOutputCompatible = compatible.filter((target) => {
+      const reasons = targetReasons.get(target) || [];
+      return !reasons.includes("output_tokens");
+    });
+    if (knownOutputCompatible.length > 0 && knownOutputCompatible.length < compatible.length) {
+      const knownSet = new Set(knownOutputCompatible);
+      return [...knownOutputCompatible, ...compatible.filter((target) => !knownSet.has(target))];
     }
   }
 

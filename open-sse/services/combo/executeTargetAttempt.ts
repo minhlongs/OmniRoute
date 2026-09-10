@@ -537,7 +537,7 @@ export async function executeTargetAttempt(opts: {
         deps.effectiveSessionId &&
         !(deps.body as Record<string, unknown>)?.[SKIP_UNIVERSAL_HANDOFF_FLAG]
       ) {
-        recordSessionModelUsage(
+        if (i < 3) recordSessionModelUsage(
           deps.effectiveSessionId,
           deps.combo.name,
           modelStr,
@@ -553,7 +553,7 @@ export async function executeTargetAttempt(opts: {
         !(deps.body as Record<string, unknown>)?.[SKIP_UNIVERSAL_HANDOFF_FLAG]
       ) {
         const prevModel = getLastSessionModel(deps.relayOptions.sessionId, deps.combo.name);
-        recordSessionModelUsage(
+        if (i < 3) recordSessionModelUsage(
           deps.relayOptions.sessionId,
           deps.combo.name,
           modelStr,
@@ -586,7 +586,7 @@ export async function executeTargetAttempt(opts: {
           });
         }
 
-        recordSessionModelUsage(
+        if (i < 3) recordSessionModelUsage(
           deps.relayOptions.sessionId,
           deps.combo.name,
           modelStr,
