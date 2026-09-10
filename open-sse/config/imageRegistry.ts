@@ -357,7 +357,7 @@ export const IMAGE_PROVIDERS: Record<string, ImageProviderConfig> = {
 
   antigravity: {
     id: "antigravity",
-    baseUrl: "https://daily-cloudcode-pa.googleapis.com/v1internal:generateContent",
+    baseUrl: "https://cloudcode-pa.googleapis.com/v1internal:generateContent",
     authType: "oauth",
     authHeader: "bearer",
     format: "gemini-image", // Special format: uses Gemini generateContent API
