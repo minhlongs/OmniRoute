@@ -38,6 +38,7 @@ import { buildNonStreamingJsonResponse } from "./chatCore/nonStreamingJsonRespon
 import { enforceOutputTokenBudget } from "./chatCore/outputTokenBudget.ts";
 import { maybeConvertJsonBodyToSse } from "./chatCore/jsonBodyToSse.ts";
 import { assembleStreamingResponseHeaders } from "./chatCore/streamingResponseHeaders.ts";
+import { withSseKeepalive } from "../services/streamKeepalive.ts";
 import { storeStreamingSemanticCacheResponse } from "./chatCore/streamingSemanticCacheStore.ts";
 import { assembleStreamingPipeline } from "./chatCore/streamingPipeline.ts";
 import { sanitizeChatRequestBody } from "./chatCore/sanitization.ts";
@@ -6008,7 +6009,7 @@ export async function handleChatCore({
 
   return {
     success: true,
-    response: new Response(finalStream, {
+    response: new Response(withSseKeepalive(finalStream, 2500), {
       headers: responseHeaders,
     }),
   };
