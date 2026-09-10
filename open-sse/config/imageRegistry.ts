@@ -67,6 +67,12 @@ interface ImageCatalogModelEntry {
 }
 
 const IMAGE_MODEL_ALIASES: Record<string, ImageModelAliasEntry> = {
+  "rtk-omni-image": {
+    provider: "antigravity",
+    model: "gemini-3.1-flash-image",
+    name: "RTK Omni Image (Gemini 3.1 Flash Image)",
+    listInCatalog: true,
+  },
   "gemini-3.1-flash-image": {
     provider: "antigravity",
     model: "gemini-3.1-flash-image",
