@@ -1,5 +1,6 @@
 import "./setupPolyfill.ts";
 import { Agent, ProxyAgent, type Dispatcher } from "undici";
+import { socksDispatcher } from "fetch-socks";
 import { getUpstreamTimeoutConfig } from "@/shared/utils/runtimeTimeouts";
 import { stripIpv6Brackets, detectIpLiteralFamily, parseProxyFamily } from "./proxyFamily.ts";
 import { createSocksDispatcherWithFamily } from "./socksConnectorWithFamily.ts";
@@ -70,8 +71,10 @@ function getDispatcherOptions() {
     // requires `port`; at runtime undici merges these into net.connect (the origin
     // already carries host:port), so the partial pin is valid — cast to suppress
     // the spurious missing-`port` error, mirroring the `proxyTls` cast below.
+    // Disable Happy Eyeballs autoSelectFamily by default to avoid ETIMEDOUT on networks
+    // where IPv6 is configured (e.g. ULA / SLAAC) but lacks global internet routing.
     connect: {
-      autoSelectFamily: true,
+      autoSelectFamily: process.env.OMNIROUTE_AUTO_SELECT_FAMILY === "true",
       autoSelectFamilyAttemptTimeout: 1000,
     } as ProxyAgent.Options["proxyTls"],
   };
@@ -248,8 +251,9 @@ function normalizePort(port: string | number | null | undefined, protocol: strin
  * listen on these ports, so we must always include the port explicitly.
  */
 function buildProxyUrlString(parsed: URL, port: string): string {
-  const auth =
-    parsed.username || parsed.password ? `${parsed.username}:${parsed.password}@` : "";
+  const auth = parsed.username
+    ? `${parsed.username}${parsed.password ? `:${parsed.password}` : ""}@`
+    : "";
   return `${parsed.protocol}//${auth}${parsed.hostname}:${port}`;
 }
 
@@ -388,10 +392,9 @@ export function proxyConfigToUrl(
   const port = normalizePort(config.port, protocol);
 
   // Build the URL string manually to preserve the port through normalization.
-  const auth =
-    config.username || config.password
-      ? `${encodeURIComponent(config.username || "")}:${encodeURIComponent(config.password || "")}@`
-      : "";
+  const auth = config.username
+    ? `${encodeURIComponent(config.username)}:${config.password ? encodeURIComponent(config.password) : ""}@`
+    : "";
 
   const proxyUrlStr = `${type}://${auth}${config.host}:${port}`;
 
@@ -460,11 +463,16 @@ function buildProxyDispatcher(
     };
     if (parsed.username) socksOptions.userId = decodeURIComponent(parsed.username);
     if (parsed.password) socksOptions.password = decodeURIComponent(parsed.password);
-    return createSocksDispatcherWithFamily(
-      socksOptions as unknown as Parameters<typeof createSocksDispatcherWithFamily>[0],
-      family,
-      options
-    );
+    return family === null
+      ? (socksDispatcher(
+          socksOptions as Parameters<typeof socksDispatcher>[0],
+          options
+        ) as Dispatcher)
+      : createSocksDispatcherWithFamily(
+          socksOptions as unknown as Parameters<typeof createSocksDispatcherWithFamily>[0],
+          family,
+          options
+        );
   }
 
   // ProxyAgent omits `connect`; the client->proxy socket is built from `proxyTls`.

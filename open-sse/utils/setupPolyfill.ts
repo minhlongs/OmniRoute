@@ -1,18 +1,6 @@
 // Polyfill worker_threads.markAsUncloneable for Node.js < 21 compatibility (specifically Node 20.20.2)
 import worker_threads from "node:worker_threads";
-import { AsyncLocalStorage } from "node:async_hooks";
 import { WebSocket } from "ws";
-
-// Next 16 reads AsyncLocalStorage from globalThis in its server runtime. Node
-// provides that global, while Bun exposes the implementation through
-// node:async_hooks only.
-if (typeof globalThis.AsyncLocalStorage === "undefined") {
-  Object.defineProperty(globalThis, "AsyncLocalStorage", {
-    configurable: true,
-    value: AsyncLocalStorage,
-    writable: true,
-  });
-}
 
 if (worker_threads && !worker_threads.markAsUncloneable) {
   (worker_threads as any).markAsUncloneable = function (obj: any) {
@@ -42,4 +30,17 @@ if (typeof Promise.withResolvers === "undefined") {
 // Polyfill WebSocket for Node.js < 22 compatibility (specifically Node 20.20.2)
 if (typeof globalThis.WebSocket === "undefined") {
   (globalThis as any).WebSocket = WebSocket;
+}
+
+// Ensure Node.js networking prioritizes IPv4 and avoids broken Happy Eyeballs
+// ETIMEDOUT hangs when local interfaces have IPv6 link-local/ULA without global routing.
+import net from "node:net";
+import dns from "node:dns";
+
+if (typeof (net as any).setDefaultAutoSelectFamily === "function") {
+  (net as any).setDefaultAutoSelectFamily(false);
+}
+
+if (typeof (dns as any).setDefaultResultOrder === "function") {
+  (dns as any).setDefaultResultOrder("ipv4first");
 }
