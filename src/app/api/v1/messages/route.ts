@@ -9,6 +9,8 @@ import {
 } from "@omniroute/open-sse/utils/earlyStreamKeepalive";
 import { resolveKeepaliveThreshold } from "@omniroute/open-sse/utils/keepaliveThreshold";
 import { resolveStreamFlag } from "@omniroute/open-sse/utils/aiSdkCompat";
+import { errorResponse } from "@omniroute/open-sse/utils/error.ts";
+import { isSemaphoreCapacityError } from "@omniroute/open-sse/handlers/chatCore/streamErrorResult.ts";
 
 let initialized = false;
 
@@ -41,7 +43,7 @@ export async function OPTIONS() {
  * `preParsedBody` is threaded from withInjectionGuard (#4041) so the body is
  * parsed at most once per request.
  */
-async function postHandler(request: any, context: any, preParsedBody: any = null) {
+async function postHandlerInner(request: any, context: any, preParsedBody: any = null) {
   // Reject non-JSON Content-Type with 415 before touching the body — mirrors OpenAI's
   // reference API and matches /v1/chat/completions (#6414).
   const ctRejection = requireJsonContentType(request);
@@ -77,6 +79,20 @@ async function postHandler(request: any, context: any, preParsedBody: any = null
     });
   }
   return await handleChat(request, null, body);
+}
+
+async function postHandler(request: any, context: any, preParsedBody: any = null) {
+  try {
+    return await postHandlerInner(request, context, preParsedBody);
+  } catch (error) {
+    if (isSemaphoreCapacityError(error)) {
+      return errorResponse(429, error.message, {
+        type: "rate_limit_error",
+        code: error.code,
+      });
+    }
+    throw error;
+  }
 }
 
 // `logger: null` — the guardrail registry re-evaluates this request inside

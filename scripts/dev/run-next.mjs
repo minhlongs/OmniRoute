@@ -25,6 +25,22 @@ import { ensureNativeSqlite } from "./ensure-native-sqlite.mjs";
 import { isTurbopackCacheCorruption, purgeAllTurbopackCaches } from "./turbopackCacheHeal.mjs";
 import { randomUUID } from "node:crypto";
 import { getMainServerTimeoutConfig } from "./main-server-timeouts.mjs";
+
+process.on("unhandledRejection", (reason) => {
+  const detail =
+    reason instanceof Error ? `${reason.message}\n${reason.stack ?? ""}` : String(reason);
+  console.error("[unhandledRejection]", detail);
+});
+
+process.on("uncaughtException", (error) => {
+  const code = error && typeof error === "object" ? error.code : undefined;
+  if (code === "SEMAPHORE_TIMEOUT" || code === "SEMAPHORE_QUEUE_FULL") {
+    console.error("[uncaughtException][semaphore]", error);
+    return;
+  }
+  console.error("[uncaughtException]", error);
+  process.exit(1);
+});
 import { SocksProxyAgent } from "socks-proxy-agent";
 import { request as __pmvHttpsRequest } from "node:https";
 import { request as __pmvHttpRequest } from "node:http";

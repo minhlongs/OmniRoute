@@ -278,6 +278,13 @@ export async function POST(request) {
     );
   } catch (error) {
     admission.lease?.release();
+    const code = (error as { code?: unknown } | null)?.code;
+    if (code === "SEMAPHORE_TIMEOUT" || code === "SEMAPHORE_QUEUE_FULL") {
+      return errorResponse(429, error instanceof Error ? error.message : "Semaphore timeout", {
+        type: "rate_limit_error",
+        code: String(code),
+      });
+    }
     throw error;
   }
 }
