@@ -166,6 +166,27 @@ export async function applyCatalogPostFilters(
 
   await yieldTurn();
 
+  // Honor an API key's explicit blockedModels on ids that were synthesized AFTER the
+  // per-key allowlist pass (effort tiers, no-think aliases, mirrors). Synthetic ids
+  // intentionally inherit their base model's ALLOW permission, but an explicit deny
+  // must still win — otherwise a restricted key discovers variants it cannot call.
+  const blockedCatalogKey = extractApiKey(request);
+  if (blockedCatalogKey) {
+    const { getApiKeyMetadata } = await import("@/lib/db/apiKeys");
+    const { modelPatternMatches } = await import("@/lib/db/apiKeys/modelPermissions");
+    const keyMeta = await getApiKeyMetadata(blockedCatalogKey);
+    const blockedPatterns = keyMeta?.blockedModels ?? [];
+    if (keyMeta && keyMeta.id !== "env-key" && blockedPatterns.length > 0) {
+      finalModels = finalModels.filter((m) => {
+        const ids = [m.id, m.root].filter(
+          (v): v is string => typeof v === "string" && v.length > 0
+        );
+        const candidates = ids.flatMap((id) => [id, id.split("/").slice(1).join("/")]);
+        return !blockedPatterns.some((pattern) => modelPatternMatches(pattern, candidates));
+      });
+    }
+  }
+
   // #4424 follow-up — drop exact-duplicate ids that slip through the per-source push
   // guards (e.g. `codex/gpt-5.5`, `veo-free/seedance` listed twice). Keyed by listing
   // identity (id, type, subtype) so the intentional same-id audio transcription/speech
