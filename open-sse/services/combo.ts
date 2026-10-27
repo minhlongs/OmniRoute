@@ -1518,7 +1518,7 @@ export async function handleComboChat({
 
           // Fix #1681: Status 499 means client disconnected — stop combo loop immediately.
           // There is no point trying fallback models when nobody is listening.
-          if (result.status === 499) {
+          if (result.status === 499 && signal?.aborted) {
             log.info("COMBO", `Client disconnected (499) during ${modelStr} — stopping combo loop`);
             recordComboRequest(combo.name, modelStr, {
               success: false,
@@ -2722,7 +2722,7 @@ async function handleRoundRobinCombo({
           /* Clone failed */
         }
 
-        if (result.status === 499) {
+        if (result.status === 499 && signal?.aborted) {
           log.info(
             "COMBO-RR",
             `Client disconnected (499) during ${modelStr} — stopping combo loop`

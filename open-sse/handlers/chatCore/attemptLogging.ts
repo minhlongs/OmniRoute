@@ -177,6 +177,10 @@ export function persistAttemptLogs(args: PersistAttemptLogsArgs, ctx: PersistAtt
     modelPinned,
     sessionTag,
   } = ctx;
+
+  // Combo inner attempts must not double-log a client abort that the outer combo
+  // row already reports; upstream 504/499 pairs were inflating the 499 metric.
+  if (status === 499 && comboStepId) return;
   const initialConnectionId = toConnectionId(connectionId);
   const finalConnectionId = toConnectionId(credentials?.connectionId) || initialConnectionId;
   const accountRotationMeta = buildAccountRotationMeta(
