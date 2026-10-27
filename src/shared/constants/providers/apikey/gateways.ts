@@ -3,6 +3,38 @@
  * Pure data; merged by apikey/index.ts via spread (god-file decomposition; semantic split).
  */
 export const APIKEY_PROVIDERS_GATEWAYS = {
+  // Arena AI (https://arena.ai) — OpenAI-compatible public API gateway & meta-router.
+  // Supports coding-router-preview and multiplexed upstream models with Bearer auth.
+  arena: {
+    id: "arena",
+    alias: "arena",
+    name: "Arena AI",
+    icon: "router",
+    color: "#6366F1",
+    textIcon: "AR",
+    website: "https://arena.ai",
+    apiHint:
+      "Create an API key at https://arena.ai, then paste it here as a Bearer token. " +
+      "OpenAI-compatible endpoint at https://api.arena.ai/v1/chat/completions.",
+    passthroughModels: true,
+  },
+  // xKiro (https://docs.xkiro.com) — OpenAI + Anthropic compatible gateway.
+  // Free tier: Qwen 3.x/3.8-max, DeepSeek V4, MiniMax M-series, Mistral (36 free models).
+  // Model IDs keep the vendor/model prefix (xkiro rejects bare names).
+  xkiro: {
+    id: "xkiro",
+    alias: "xk",
+    name: "xKiro",
+    icon: "hub",
+    color: "#6366F1",
+    textIcon: "XK",
+    website: "https://xkiro.com",
+    hasFree: true,
+    freeNote: "Free tier: Qwen3.8 Max, DeepSeek V4, MiniMax M, Mistral (daily allowance)",
+    apiHint:
+      "Create an API key at https://xkiro.com/dashboard/api/keys, then paste it here as a Bearer token.",
+    passthroughModels: true,
+  },
   // Cheaper Inference (https://cheaperinference.com) — OSS-sponsor gateway.
   // Cost-ranked reseller of 42 upstream models (Anthropic/OpenAI/Google/Moonshot/
   // xAI/Z.AI/DeepSeek/MiniMax) behind one OpenAI-compatible surface, with a native
@@ -234,7 +266,8 @@ export const APIKEY_PROVIDERS_GATEWAYS = {
     textIcon: "DA",
     website: "https://inference.dahl.global",
     hasFree: true,
-    freeNote: "Free — MiniMax M2.7, Kimi K2.6. Click 'Add Account' to auto-generate a token, or add your own API key.",
+    freeNote:
+      "Free — MiniMax M2.7, Kimi K2.6. Click 'Add Account' to auto-generate a token, or add your own API key.",
     authHint: "Click 'Add Account' to auto-generate a token, or add a manual API key.",
     apiHint: "Auto-generate a token or paste your own API key.",
     apiKeyUrl: "https://inference.dahl.global/tokens",
@@ -581,6 +614,22 @@ export const APIKEY_PROVIDERS_GATEWAYS = {
     apiHint:
       "Get your Factory API key at https://app.factory.ai/settings/api-keys, then paste it as a Bearer token. OpenAI-compatible endpoint at https://api.factory.ai/v1.",
     passthroughModels: true,
+  },
+  zunef: {
+    id: "zunef",
+    alias: "zunef",
+    name: "Zunef",
+    icon: "hub",
+    color: "#6366F1",
+    textIcon: "ZN",
+    website: "https://claude.zunef.com",
+    hasFree: true,
+    freeNote:
+      "Unlimited quota (tracked at 166 lifetime requests), 93-day package (expires Jan 19, 2027), device management, session release",
+    authHint:
+      "Helper token (short-lived JWT) obtained via device ID flow. Device ID stored at ~/.claude/zunef-device-id. No raw API key support — only helper-token flow.",
+    apiHint:
+      "Anthropic-compatible endpoint at https://claude-api.zunef.com/v1/ai with auto-failover across 11 models (Sonnet 4.6–5.5, Fable 5–5.1, Opus 4.6–5.5, Haiku 4.5). Uses x-api-key header with helper token.",
   },
   bluesminds: {
     id: "bluesminds",

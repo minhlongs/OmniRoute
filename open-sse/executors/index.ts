@@ -64,7 +64,6 @@ import { KimiExecutor } from "./kimi.ts";
 import { MoonshotExecutor } from "./moonshot.ts";
 import { TheOldLlmExecutor } from "./theoldllm.ts";
 import { ChipotleExecutor } from "./chipotle.ts";
-import { LMArenaExecutor } from "./lmarena.ts";
 import { MimocodeExecutor } from "./mimocode.ts";
 import { GrokCliExecutor } from "./grok-cli.ts";
 import { CodeBuddyCnExecutor } from "./codebuddy-cn.ts";
@@ -190,8 +189,6 @@ const executors = {
   tllm: new TheOldLlmExecutor(), // Alias
   chipotle: new ChipotleExecutor(),
   pepper: new ChipotleExecutor(), // Alias
-  lmarena: new LMArenaExecutor(),
-  lma: new LMArenaExecutor(), // Alias
   mimocode: new MimocodeExecutor(),
   mcode: new MimocodeExecutor(), // Alias
   "grok-cli": new GrokCliExecutor(),
@@ -292,7 +289,6 @@ export { QwenWebExecutor } from "./qwen-web.ts";
 export { HailuoWebExecutor } from "./hailuo-web.ts";
 export { TheOldLlmExecutor } from "./theoldllm.ts";
 export { ChipotleExecutor } from "./chipotle.ts";
-export { LMArenaExecutor } from "./lmarena.ts";
 export { MimocodeExecutor } from "./mimocode.ts";
 export { GrokCliExecutor } from "./grok-cli.ts";
 export { CodeBuddyCnExecutor } from "./codebuddy-cn.ts";

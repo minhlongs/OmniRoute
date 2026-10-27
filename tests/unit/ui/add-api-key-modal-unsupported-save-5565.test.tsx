@@ -85,11 +85,11 @@ afterEach(() => {
 
 describe("AddApiKeyModal — 'validation not supported' is a non-blocking warning (#5565/#5567)", () => {
   it("does not show unsupported validator responses as red save errors after Check cookie", async () => {
-    const el = render({ provider: "lmarena", providerName: "LMArena" });
+    const el = render({ provider: "chatgpt-web", providerName: "ChatGPT Web" });
 
     const apiKeyInput = el.querySelector<HTMLInputElement>('input[type="password"]')!;
     expect(apiKeyInput).toBeTruthy();
-    setInputValue(apiKeyInput, "arena-auth-prod-v1.0=abc; arena-auth-prod-v1.1=def");
+    setInputValue(apiKeyInput, "__Secure-next-auth.session-token=abc");
 
     const checkBtn = Array.from(el.querySelectorAll("button")).find(
       (b) => b.textContent?.trim() === "Check cookie"

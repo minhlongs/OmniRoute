@@ -277,7 +277,11 @@ const KNOWN_PNGS = new Set([
 ]);
 
 const THEMED_SVGS: Record<string, { light: string; dark: string }> = {
-  // Arena (formerly LMArena) — wire id stays `lmarena`; alias `lma` also accepted.
+  // Arena AI — wire id `arena`; `lmarena` and `lma` also accepted for back-compat.
+  arena: {
+    light: "/providers/arena-light.svg",
+    dark: "/providers/arena-dark.svg",
+  },
   lmarena: {
     light: "/providers/arena-light.svg",
     dark: "/providers/arena-dark.svg",

@@ -5,7 +5,6 @@
  * Each provider has its own request format and endpoint.
  */
 
-import { LMARENA_DIRECT_IMAGE_MODELS } from "./providers/registry/lmarena/directModels.ts";
 import { SEGMIND_IMAGE_PROVIDER } from "./providers/registry/segmind/imageModels.ts";
 import { KIE_IMAGE_MODELS } from "./providers/registry/kie/imageModels.ts";
 import { FREEPIK_IMAGE_PROVIDER } from "./providers/registry/freepik/index.ts";
@@ -67,11 +66,47 @@ interface ImageCatalogModelEntry {
 }
 
 const IMAGE_MODEL_ALIASES: Record<string, ImageModelAliasEntry> = {
+  "rtk-omni-image": {
+    provider: "antigravity",
+    model: "gemini-3.1-flash-image",
+    name: "RTK Omni Image (Gemini 3.1 Flash Image)",
+    listInCatalog: true,
+  },
+  "gemini-3.1-flash-image": {
+    provider: "antigravity",
+    model: "gemini-3.1-flash-image",
+    name: "Gemini 3.1 Flash Image",
+    listInCatalog: true,
+  },
   "gemini-3.1-flash-image-preview": {
     provider: "antigravity",
     model: "gemini-3.1-flash-image",
     name: "Gemini 3.1 Flash Image",
     listInCatalog: false,
+  },
+  "gemini-3-pro-image": {
+    provider: "antigravity",
+    model: "gemini-3-pro-image",
+    name: "Gemini 3 Pro Image",
+    listInCatalog: true,
+  },
+  "gemini-3-pro-image-preview": {
+    provider: "antigravity",
+    model: "gemini-3-pro-image",
+    name: "Gemini 3 Pro Image",
+    listInCatalog: false,
+  },
+  "gemini-2.5-flash-image": {
+    provider: "antigravity",
+    model: "gemini-3.1-flash-image",
+    name: "Gemini 2.5 Flash Image",
+    listInCatalog: true,
+  },
+  "imagen-3": {
+    provider: "antigravity",
+    model: "imagen-3.0-generate-002",
+    name: "Imagen 3.0",
+    listInCatalog: true,
   },
   "flux-kontext": {
     provider: "black-forest-labs",
@@ -321,12 +356,18 @@ export const IMAGE_PROVIDERS: Record<string, ImageProviderConfig> = {
 
   antigravity: {
     id: "antigravity",
-    baseUrl: "https://daily-cloudcode-pa.googleapis.com/v1internal:generateContent",
+    baseUrl: "https://cloudcode-pa.googleapis.com/v1internal:generateContent",
     authType: "oauth",
     authHeader: "bearer",
     format: "gemini-image", // Special format: uses Gemini generateContent API
-    models: [{ id: "gemini-3.1-flash-image", name: "Gemini 3.1 Flash Image" }],
-    supportedSizes: ["1024x1024"],
+    models: [
+      { id: "gemini-3.1-flash-image", name: "Gemini 3.1 Flash Image" },
+      { id: "gemini-3-pro-image", name: "Gemini 3 Pro Image" },
+      { id: "gemini-3-pro-image-preview", name: "Gemini 3 Pro Image (Preview)" },
+      { id: "gemini-2.5-flash-image", name: "Gemini 2.5 Flash Image" },
+      { id: "imagen-3.0-generate-002", name: "Imagen 3.0 Generate" },
+    ],
+    supportedSizes: ["1024x1024", "1280x720", "720x1280", "1536x1024", "1024x1536"],
   },
 
   // Google AI Studio Imagen family — dedicated :predict endpoint, not generateContent.
@@ -660,20 +701,6 @@ export const IMAGE_PROVIDERS: Record<string, ImageProviderConfig> = {
       { id: "stabilityai/stable-diffusion-xl-base-1.0", name: "Stable Diffusion XL (HF)" },
     ],
     supportedSizes: ["1024x1024"],
-  },
-
-  // Arena (formerly LMArena) Direct-chat Image category (static scrape 2026-07-09).
-  // Not listed in the chat registry — image catalog only. Generation path still
-  // uses cookie session auth via the lmarena provider connection (stable wire id).
-  lmarena: {
-    id: "lmarena",
-    alias: "lma",
-    baseUrl: "https://arena.ai/nextjs-api/stream/create-evaluation",
-    authType: "apikey",
-    authHeader: "cookie",
-    format: "openai",
-    models: LMARENA_DIRECT_IMAGE_MODELS,
-    supportedSizes: ["1024x1024", "1024x1792", "1792x1024"],
   },
 
   // Adobe Firefly (unofficial) — IMS access_token (clio-playground-web) or browser

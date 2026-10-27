@@ -540,13 +540,6 @@ export async function GET(
       if (localCatalog) return localCatalog;
     }
 
-    if (provider === "lmarena") {
-      // Direct-chat allowlist is the intended source — no arena.ai HTML scrape
-      // (avoids CF bot burn and thrashy initialModels rows).
-      const localCatalog = buildLocalCatalogResponse(undefined, true);
-      if (localCatalog) return localCatalog;
-    }
-
     // PromptQL playground: live catalog via GraphQL FetchLlmConfigs (Bearer JWT).
     if (provider === "promptql" || provider === "pql") {
       const cachedResponse = maybeReturnCachedDiscovery();

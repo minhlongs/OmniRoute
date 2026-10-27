@@ -42,27 +42,6 @@ test("web session credential metadata identifies cookie, token, and no-auth prov
     acceptsFullCookieHeader: false,
     storageKeys: ["token", "userToken"],
   });
-  // Arena (lmarena): assert contract/intent only — do not freeze UX copy.
-  // #3810 chunk name, #4271 split SSR cookies, full Cookie header paste.
-  {
-    const req = webSessionCredentials.getWebSessionCredentialRequirement("lmarena");
-    assert.ok(req && req.kind === "cookie");
-    assert.equal(req.acceptsFullCookieHeader, true);
-    assert.equal(req.hintKey, "lmarenaWebCookieHint");
-    assert.ok(req.storageKeys.includes("cookie"));
-    assert.ok(req.storageKeys.includes("arena-auth-prod-v1.0"));
-    assert.ok(req.storageKeys.includes("arena-auth-prod-v1.1"));
-    // legacy key retained for already-saved credentials
-    assert.ok(req.storageKeys.includes("session"));
-    assert.ok(/full cookie header/i.test(req.credentialName));
-    assert.ok(/arena-auth-prod-v1/i.test(req.placeholder));
-    // hintFallback is operator copy — may change with CF/reCAPTCHA notes; must still
-    // steer users to a full header and away from the empty single base cookie.
-    assert.ok(typeof req.hintFallback === "string" && req.hintFallback.length > 0);
-    assert.ok(/full cookie header/i.test(req.hintFallback));
-    assert.ok(/arena-auth-prod-v1/i.test(req.hintFallback));
-    assert.ok(/empty/i.test(req.hintFallback));
-  }
   assert.deepEqual(webSessionCredentials.getWebSessionCredentialRequirement("huggingchat"), {
     kind: "cookie",
     credentialName: "full Cookie header (hf-chat + token)",

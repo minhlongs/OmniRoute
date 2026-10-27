@@ -22,7 +22,7 @@ import * as log from "@/sse/utils/logger";
 
 const CONSECUTIVE_RATE_LIMIT_STOP_THRESHOLD = 3;
 /** Web-session providers (esp. Arena/CF) ban burst probes — pause between models. */
-const SLOW_PROBE_PROVIDERS = new Set(["lmarena", "lma"]);
+const SLOW_PROBE_PROVIDERS = new Set<string>();
 /** Fixed inter-model delay for SLOW_PROBE_PROVIDERS (no env — avoids doc-sync drift). */
 const SLOW_PROBE_DELAY_MS = 3500;
 const CONSECUTIVE_BOT_STOP_THRESHOLD = 2;

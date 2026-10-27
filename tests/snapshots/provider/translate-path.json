@@ -405,6 +405,29 @@
       "stream": "https://api.airforce/v1/chat/completions"
     }
   },
+  "arena": {
+    "format": "openai",
+    "headers": {
+      "apiKey": {
+        "Accept": "text/event-stream",
+        "Authorization": "Bearer <TOK>",
+        "Content-Type": "application/json"
+      },
+      "nonStream": {
+        "Authorization": "Bearer <TOK>",
+        "Content-Type": "application/json"
+      },
+      "oauth": {
+        "Accept": "text/event-stream",
+        "Authorization": "Bearer <TOK>",
+        "Content-Type": "application/json"
+      }
+    },
+    "url": {
+      "nonStream": "https://api.arena.ai/v1/chat/completions",
+      "stream": "https://api.arena.ai/v1/chat/completions"
+    }
+  },
   "auggie": {
     "format": "openai",
     "headers": {
@@ -3100,29 +3123,6 @@
       "stream": "https://api.llm7.io/v1/chat/completions"
     }
   },
-  "lmarena": {
-    "format": "openai",
-    "headers": {
-      "apiKey": {
-        "Accept": "text/event-stream",
-        "Authorization": "Bearer <TOK>",
-        "Content-Type": "application/json"
-      },
-      "nonStream": {
-        "Authorization": "Bearer <TOK>",
-        "Content-Type": "application/json"
-      },
-      "oauth": {
-        "Accept": "text/event-stream",
-        "Authorization": "Bearer <TOK>",
-        "Content-Type": "application/json"
-      }
-    },
-    "url": {
-      "nonStream": "https://arena.ai/nextjs-api/stream/create-evaluation",
-      "stream": "https://arena.ai/nextjs-api/stream/create-evaluation"
-    }
-  },
   "longcat": {
     "format": "openai",
     "headers": {
@@ -3820,6 +3820,52 @@
     "url": {
       "nonStream": "https://opencode.ai/zen/v1",
       "stream": "https://opencode.ai/zen/v1"
+    }
+  },
+  "openference": {
+    "format": "openai",
+    "headers": {
+      "apiKey": {
+        "Accept": "text/event-stream",
+        "Authorization": "Bearer <TOK>",
+        "Content-Type": "application/json"
+      },
+      "nonStream": {
+        "Authorization": "Bearer <TOK>",
+        "Content-Type": "application/json"
+      },
+      "oauth": {
+        "Accept": "text/event-stream",
+        "Authorization": "Bearer <TOK>",
+        "Content-Type": "application/json"
+      }
+    },
+    "url": {
+      "nonStream": "https://api.openference.com/v1/chat/completions",
+      "stream": "https://api.openference.com/v1/chat/completions"
+    }
+  },
+  "openference-api": {
+    "format": "openai",
+    "headers": {
+      "apiKey": {
+        "Accept": "text/event-stream",
+        "Authorization": "Bearer <TOK>",
+        "Content-Type": "application/json"
+      },
+      "nonStream": {
+        "Authorization": "Bearer <TOK>",
+        "Content-Type": "application/json"
+      },
+      "oauth": {
+        "Accept": "text/event-stream",
+        "Authorization": "Bearer <TOK>",
+        "Content-Type": "application/json"
+      }
+    },
+    "url": {
+      "nonStream": "https://api.openference.com/v1/chat/completions",
+      "stream": "https://api.openference.com/v1/chat/completions"
     }
   },
   "openrouter": {

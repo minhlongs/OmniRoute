@@ -105,7 +105,7 @@ export function isSecurityBlockError(error: unknown): boolean {
 // zenmux-free, zai-web) have not been individually verified to actually redirect on this probe
 // rather than 404/405 — do not add them here without a proven repro per provider (see
 // #7542 plan-file, "Risks").
-const WEB_COOKIE_PROVIDERS_WITH_UNRELIABLE_MODELS_PROBE = new Set(["lmarena"]);
+const WEB_COOKIE_PROVIDERS_WITH_UNRELIABLE_MODELS_PROBE = new Set<string>();
 
 // #7857 — web-cookie providers whose registry `baseUrl` is a conversation/completion
 // endpoint, not a real API root (e.g. huggingchat's baseUrl is

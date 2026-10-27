@@ -313,15 +313,15 @@ test("getStaticModelsForProvider returns local image catalogs for image-only pro
 });
 
 test("getStaticModelsForProvider does not dump IMAGE_PROVIDERS into chat specialty", () => {
-  for (const provider of ["lmarena", "openai", "xai"]) {
+  for (const provider of ["openai", "xai"]) {
     const models = getStaticModelsForProvider(provider) || [];
     assert.ok(
       !models.some((m) => m.supportedEndpoints?.includes("images")),
       `${provider} chat specialty must not include image-only models`
     );
   }
-  const lmarena = getStaticModelsForProvider("lmarena") || [];
-  assert.ok(!lmarena.some((m) => String(m.id).includes("flux")));
+  const openai = getStaticModelsForProvider("openai") || [];
+  assert.ok(!openai.some((m) => String(m.id).includes("dall-e")));
 });
 
 test("getStaticModelsForProvider returns models for other static providers", () => {

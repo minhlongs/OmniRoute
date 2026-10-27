@@ -276,30 +276,6 @@ export const WEB_SESSION_CREDENTIAL_REQUIREMENTS = {
     acceptsFullCookieHeader: true,
     storageKeys: ["cookie", "token"],
   },
-  lmarena: {
-    kind: "cookie",
-    // arena.ai's auth cookie is `arena-auth-prod-v1` (the legacy hint said `session`,
-    // which never matched the real cookie name and confused users). #3810
-    //
-    // #4271: LMArena migrated to Supabase SSR chunked cookies — the single
-    // `arena-auth-prod-v1` cookie is now empty and the session is split across
-    // `arena-auth-prod-v1.0`, `arena-auth-prod-v1.1`, … Users must paste the FULL
-    // Cookie header so the executor can reconstruct the single cookie from chunks.
-    credentialName: "full Cookie header (arena-auth-prod-v1.0 + arena-auth-prod-v1.1)",
-    placeholder:
-      "arena-auth-prod-v1.0=...; arena-auth-prod-v1.1=...; other=value (full Cookie header from arena.ai)",
-    acceptsFullCookieHeader: true,
-    storageKeys: [
-      "cookie",
-      "arena-auth-prod-v1",
-      "arena-auth-prod-v1.0",
-      "arena-auth-prod-v1.1",
-      "session",
-    ],
-    hintKey: "lmarenaWebCookieHint",
-    hintFallback:
-      "Open arena.ai, sign in, then copy the full Cookie header from a Network request. Include arena-auth-prod-v1.0 and arena-auth-prod-v1.1 (and further chunks if present), preferably with cf_clearance. Do not paste only the empty arena-auth-prod-v1 cookie. Optional: providerSpecificData.recaptchaV3Token if create-evaluation still returns 403.",
-  },
   promptql: {
     kind: "token",
     credentialName: "Bearer JWT (optional: projectId, session Cookie)",

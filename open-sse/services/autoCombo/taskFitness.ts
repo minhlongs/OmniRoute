@@ -23,6 +23,7 @@ import {
 
 const FITNESS_TABLE: Record<string, Record<string, number>> = {
   coding: {
+    "coding-router-preview": 0.96,
     "claude-sonnet": 0.95,
     "claude-opus": 0.92,
     "claude-haiku": 0.78,

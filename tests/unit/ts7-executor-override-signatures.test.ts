@@ -24,12 +24,10 @@ import assert from "node:assert/strict";
 
 import { BaseExecutor } from "../../open-sse/executors/base.ts";
 import { HailuoWebExecutor } from "../../open-sse/executors/hailuo-web.ts";
-import { LMArenaExecutor } from "../../open-sse/executors/lmarena.ts";
 import { QwenWebExecutor } from "../../open-sse/executors/qwen-web.ts";
 
 const CASES = [
   { name: "hailuo-web", make: () => new HailuoWebExecutor(), helper: "buildStreamHeaders" },
-  { name: "lmarena", make: () => new LMArenaExecutor(), helper: "buildRequestHeaders" },
   { name: "qwen-web", make: () => new QwenWebExecutor(), helper: "buildApiHeaders" },
 ];
 
@@ -76,15 +74,3 @@ for (const { name, make, helper } of CASES) {
     assert.equal(result, null, `${name} does not support the Anthropic count_tokens endpoint`);
   });
 }
-
-test("LMArenaExecutor does not narrow visibility of inherited members", () => {
-  // TS2415: a subclass may widen a member's visibility but never narrow it. `buildUrl` and
-  // `transformRequest` were `protected` here while public on BaseExecutor — masked behind
-  // the buildHeaders TS2416 until that cleared. Runtime has no visibility, so this asserts
-  // the members are reachable, which is what the type change encodes.
-  const executor = new LMArenaExecutor() as unknown as Record<string, unknown>;
-
-  for (const member of ["buildUrl", "transformRequest"]) {
-    assert.equal(typeof executor[member], "function", `${member} must stay callable`);
-  }
-});

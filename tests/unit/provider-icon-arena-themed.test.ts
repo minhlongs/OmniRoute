@@ -20,6 +20,7 @@ test("ProviderIcon maps lmarena (and lma) to arena light/dark SVGs", () => {
     providerIconSrc.includes('dark: "/providers/arena-dark.svg"'),
     "must reference arena-dark.svg"
   );
+  assert.ok(providerIconSrc.includes("arena:"), "must register provider id arena");
   assert.ok(providerIconSrc.includes("lmarena:"), "must register wire id lmarena");
   assert.ok(providerIconSrc.includes("lma:"), "must register alias lma");
 });
