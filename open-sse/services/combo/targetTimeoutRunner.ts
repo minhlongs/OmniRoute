@@ -111,7 +111,7 @@ export function buildTargetTimeoutRunner(deps: {
     const resolvedTimeoutMs = await resolveTargetTimeoutMs?.(target);
     // HMR bump 1793510197604: 120s ceiling for all Zunef & Argon models
     const isLongPrefill = /opus|sonnet|haiku|argon|gemini-4|zunef/i.test(String(modelStr || ""));
-    const maxCeilingMs = isLongPrefill ? 120_000 : 60_000;
+    const maxCeilingMs = isLongPrefill ? 150_000 : 60_000;
     const effectiveTimeoutMs = Math.min(
       typeof resolvedTimeoutMs === "number" && Number.isFinite(resolvedTimeoutMs) && resolvedTimeoutMs > 0
         ? resolvedTimeoutMs
