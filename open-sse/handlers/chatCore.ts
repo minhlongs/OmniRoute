@@ -5563,7 +5563,7 @@ export async function handleChatCore({
   const isZunef = Boolean(provider && (provider.startsWith("anthropic-compatible") || provider.includes("zunef"))) || /zunef/i.test(String(model || ""));
   const isOpusModel = /opus/i.test(String(model || ""));
   const isSonnetOrHeavy = /sonnet|fable|argon|gpt-5/i.test(String(model || ""));
-  const targetReadinessCapMs = isZunef ? 120_000 : (isOpusModel ? 90_000 : (isSonnetOrHeavy ? 60_000 : 35_000));
+  const targetReadinessCapMs = isZunef ? 230_000 : (isOpusModel ? 90_000 : (isSonnetOrHeavy ? 60_000 : 35_000));
   const effectiveBaseTimeoutMs = isZunef ? 60_000 : (isOpusModel ? 40_000 : (isSonnetOrHeavy ? 25_000 : 15_000));
   const effectiveReadinessMaxTimeoutMs = targetReadinessCapMs;
 

@@ -112,7 +112,12 @@ export function buildTargetTimeoutRunner(deps: {
     // HMR bump 1793510197604: 120s ceiling for all Zunef & Argon models
     const isLongPrefill = /opus|sonnet|haiku|argon|gemini-4|zunef/i.test(String(modelStr || ""));
     const maxCeilingMs = isLongPrefill ? 150_000 : 60_000;
-    const effectiveTimeoutMs = Math.min(
+    // Zunef upstream emits only keep-alive pings while queued/prefilling; observed successful
+    // streams take 88-200s. A 120s cap killed ~85% of in-flight Zunef requests, so give Zunef
+    // targets a dedicated 240s budget (2 Zunef legs = 8min, still under the 10min loop safety).
+    const isZunefModel = /zunef|anthropic-compatible/i.test(String(modelStr || "")) ||
+      /zunef|anthropic-compatible/i.test(String((target as { provider?: string } | undefined)?.provider || ""));
+    const effectiveTimeoutMs = isZunefModel ? 240_000 : Math.min(
       typeof resolvedTimeoutMs === "number" && Number.isFinite(resolvedTimeoutMs) && resolvedTimeoutMs > 0
         ? resolvedTimeoutMs
         : (comboTargetTimeoutMs > 0 ? comboTargetTimeoutMs : maxCeilingMs),
