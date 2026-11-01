@@ -146,9 +146,10 @@ export function resolveStreamReadinessTimeout(
   const codexHighReasoning = codexGpt5x && isHighReasoningEffort(input.model, input.body);
   const extendedThinking = isExtendedThinkingModel(input.model, input.body);
 
+  const isZunef = isClaudeFormatReasoningProvider(input.provider) || /zunef/i.test(String(input.model || ""));
   const isOpusModel = /opus/i.test(String(input.model || ""));
   const isSonnetOrHeavy = /sonnet|fable|argon|gpt-5/i.test(String(input.model || ""));
-  const defaultMaxTimeout = isOpusModel ? 90_000 : (isSonnetOrHeavy ? 60_000 : 35_000);
+  const defaultMaxTimeout = isZunef ? 120_000 : (isOpusModel ? 90_000 : (isSonnetOrHeavy ? 60_000 : 35_000));
   const maxTimeoutMs = input.maxTimeoutMs != null ? Math.max(baseTimeoutMs, input.maxTimeoutMs) : defaultMaxTimeout;
   const reasons: string[] = [];
   let timeoutMs = baseTimeoutMs;
@@ -205,8 +206,8 @@ export function resolveStreamReadinessTimeout(
     reasons.push("extended_thinking");
   }
 
-  if (isClaudeFormatReasoningProvider(input.provider) && !codexHighReasoning && !extendedThinking) {
-    timeoutMs += 2_000;
+  if (isClaudeFormatReasoningProvider(input.provider)) {
+    timeoutMs += 30_000;
     reasons.push("claude_format_heavy_reasoning");
   }
 

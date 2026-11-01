@@ -1,3 +1,4 @@
+// Turbopack HMR bump: 1793510261883
 import {
   extractRequestToolIdentityMap,
   resolveResponseToolNameMap,
@@ -17,10 +18,12 @@ import { createTranslationFailureResult } from "./chatCore/translationFailure.ts
 import { estimateFinalInputTokens } from "./chatCore/contextEstimation.ts";
 import {
   extractSystemRoleMessages,
+  hoistLeadingTextSystemMessages,
   relocateDirectiveOnlyMessages,
 } from "./chatCore/claudeSystemRole.ts";
 export {
   extractSystemRoleMessages,
+  hoistLeadingTextSystemMessages,
   relocateDirectiveOnlyMessages,
 } from "./chatCore/claudeSystemRole.ts";
 import { checkIdempotencyCache } from "./chatCore/idempotency.ts";
@@ -52,32 +55,7 @@ import {
   outcomeFromStatus,
 } from "../services/routing/index.ts";
 
-/**
- * Best-effort finish_reason extraction from a (possibly translated) response
- * body for routing-event telemetry. Returns null when the shape is unknown.
- */
-function routingFinishReason(body: unknown): string | null {
-  if (!body || typeof body !== "object") return null;
-  const record = body as Record<string, unknown>;
-  const choices = record.choices;
-  if (Array.isArray(choices)) {
-    const first = choices[0];
-    if (first && typeof first === "object") {
-      const fr = (first as Record<string, unknown>).finish_reason;
-      if (typeof fr === "string") return fr;
-    }
-  }
-  const output = record.output;
-  if (Array.isArray(output)) {
-    for (const item of output) {
-      if (item && typeof item === "object") {
-        const fr = (item as Record<string, unknown>).finish_reason;
-        if (typeof fr === "string") return fr;
-      }
-    }
-  }
-  return null;
-}
+import { routingFinishReason } from "./chatCore/routingFinishReason.ts";
 import {
   getHeaderValueCaseInsensitive,
   isNoMemoryRequested,
@@ -163,7 +141,11 @@ import {
 } from "../utils/stream.ts";
 import { ensureStreamReadiness } from "../utils/streamReadiness.ts";
 import { resolveSuppressThinkClose, THINKING_MARKER_HEADER } from "../utils/thinkCloseMarker.ts";
-import { resolveStreamReadinessTimeout } from "../utils/streamReadinessPolicy.ts";
+import {
+  resolveStreamReadinessTimeout,
+  isClaudeFormatReasoningProvider,
+  isExtendedThinkingModel,
+} from "../utils/streamReadinessPolicy.ts";
 import { resolveAgentGoalPolicy } from "../utils/agentGoalPolicy.ts";
 import { createStreamController } from "../utils/streamHandler.ts";
 import * as streamFailure from "../utils/streamFailureFinalization.ts";
@@ -380,8 +362,10 @@ import {
   updateFromHeaders,
   updateFromResponseBody,
   initializeRateLimits,
+  resolveRequestQueueMaxWaitMs,
 } from "../services/rateLimitManager.ts";
 import * as localLimiterErrors from "../services/rateLimitManager/errors.ts";
+import { rethrowAdmissionError, remainingQueueBudgetMs } from "./chatCore/queueBudget.ts";
 import {
   acquireMany as acquireConcurrencyGates,
   markBlocked as markAccountSemaphoreBlocked,
@@ -389,6 +373,7 @@ import {
 import {
   lockModel,
   lockModelIfPerModelQuota,
+  hasPerModelQuota,
   recordCoreOwnedAntigravityQuotaState,
   shouldDeferAntigravityQuotaStateToCaller,
 } from "../services/accountFallback.ts";
@@ -500,6 +485,7 @@ export async function handleChatCore({
   sessionAffinityKey = null,
   comboStepId = null,
   comboExecutionKey = null,
+  initialTokensCompressed = null,
   cachedSettings = null,
   skipUpstreamRetry = false,
   createPiiTransform = null,
@@ -610,7 +596,7 @@ export async function handleChatCore({
       errorCode: code,
     };
   };
-  let tokensCompressed: number | null = null;
+  let tokensCompressed: number | null = initialTokensCompressed ?? null;
   body = injectSystemPrompt(body);
   // ── Per-endpoint custom system prompt (port of upstream #2063) ──
   // Reads from cachedSettings if available (passed in from combo/chat layer)
@@ -1846,7 +1832,7 @@ export async function handleChatCore({
           if (result.compressed) {
             body = result.body as typeof body;
             estimatedTokens = result.stats.compressedTokens;
-            tokensCompressed = Math.max(
+            tokensCompressed = (tokensCompressed ?? 0) + Math.max(
               0,
               result.stats.originalTokens - result.stats.compressedTokens
             );
@@ -2092,7 +2078,7 @@ export async function handleChatCore({
             })
           : compressionResult.body;
         const stats = compressionResult.stats;
-        tokensCompressed = Math.max(0, (stats?.original ?? 0) - (stats?.final ?? 0));
+        tokensCompressed = (tokensCompressed ?? 0) + Math.max(0, (stats?.original ?? 0) - (stats?.final ?? 0));
         const layersInfo =
           stats && "layers" in stats && Array.isArray(stats.layers)
             ? ` (layers: ${stats.layers.map((l: { name: string }) => l.name).join(", ")})`
@@ -2400,6 +2386,10 @@ export async function handleChatCore({
           // messages[], but a directive-only message (content: [] +
           // output_config) at messages[0] is rejected by Anthropic. Move it past
           // the first real turn; Anthropic accepts the form at any other position.
+          // A text-bearing system message at messages[0] (e.g. the Output Styles
+          // injection) is rejected there too: hoist the leading run into the
+          // top-level `system` parameter first.
+          hoistLeadingTextSystemMessages(translatedBody);
           relocateDirectiveOnlyMessages(translatedBody);
         }
         if (Array.isArray(translatedBody.messages)) {
@@ -2568,7 +2558,7 @@ export async function handleChatCore({
           ...(postResult.body as typeof translatedBody),
           ...Object.fromEntries(transientFields),
         };
-        tokensCompressed += Math.max(
+        tokensCompressed = (tokensCompressed ?? 0) + Math.max(
           0,
           (postResult.stats?.originalTokens ?? 0) - (postResult.stats?.compressedTokens ?? 0)
         );
@@ -2701,6 +2691,17 @@ export async function handleChatCore({
     // defaults) to `{type:"adaptive"}` — effort stays on `output_config.effort`. Keyed on
     // the resolved upstream model, so it covers every routing mode. See claudeAdaptiveThinking.ts.
     translatedBody = normalizeClaudeAdaptiveThinking(translatedBody, finalModelToUpstream);
+    // Cap thinking budget for simple / routine queries to prevent 40s+ reasoning delays
+    if (translatedBody && typeof translatedBody === "object" && (translatedBody as Record<string, unknown>).thinking) {
+      const isSimpleQuery =
+        (Array.isArray((translatedBody as Record<string, unknown>).messages) && ((translatedBody as Record<string, unknown>).messages as unknown[]).length <= 2) ||
+        (typeof (translatedBody as Record<string, unknown>).max_tokens === "number" && Number((translatedBody as Record<string, unknown>).max_tokens) <= 256);
+      const thObj = (translatedBody as Record<string, unknown>).thinking as Record<string, unknown>;
+      if (isSimpleQuery && thObj.type === "enabled" && typeof thObj.budget_tokens === "number" && thObj.budget_tokens > 2048) {
+        log?.info?.("THINKING", `[RTK-CAP] Capped thinking budget from ${thObj.budget_tokens} to 2048 for simple/routine turn`);
+        thObj.budget_tokens = 2048;
+      }
+    }
     // Opus 5 allows disabled thinking only through high effort on Anthropic's direct
     // Messages API. The helper scopes this constraint to `anthropic` and `claude`;
     // GitHub Copilot and Claude Web use separate upstream contracts.
@@ -3117,6 +3118,12 @@ export async function handleChatCore({
                 stage: "waiting_account_slot",
               });
             }
+            const maxWaitMs = resolveRequestQueueMaxWaitMs(
+              provider,
+              undefined,
+              attemptConnectionId ?? undefined
+            );
+            const gateStartedAt = Date.now();
             const releaseAccountSemaphore = await acquireConcurrencyGates(
               [
                 {
@@ -3133,12 +3140,13 @@ export async function handleChatCore({
                 },
               ],
               {
-                timeoutMs: resilienceSettings.requestQueue.maxWaitMs,
+                timeoutMs: maxWaitMs,
                 maxQueueSize: resilienceSettings.requestQueue.maxQueueDepth,
                 signal: streamController.signal,
               }
-            );
-            trace("post_semaphore");
+            ).catch(rethrowAdmissionError);
+            const remainingAfterGate = remainingQueueBudgetMs(maxWaitMs, gateStartedAt);
+            trace("post_semaphore", { maxWaitMs, remainingAfterGate });
             updatePendingScope(pendingScope, {
               stage: "waiting_rate_limit",
             });
@@ -3187,7 +3195,13 @@ export async function handleChatCore({
                       ),
                   });
                 },
-                streamController.signal
+                streamController.signal,
+                remainingAfterGate,
+                correlationId ?? undefined,
+                {
+                  executor: executor as unknown as { getTimeoutMs?: () => unknown },
+                  providerSpecificData: execCreds?.providerSpecificData,
+                }
               );
               const res = normalizeExecutorResult(rawExecutorResult);
               trace("post_executor", { status: res?.response?.status });
@@ -4229,6 +4243,18 @@ export async function handleChatCore({
               if (probeIsolated) {
                 console.warn(
                   `[provider] Node ${errorConnectionId} probe ${errorType} (${statusCode}) — connection stays active`
+                );
+              } else if (hasPerModelQuota(provider, model)) {
+                // Compatible / passthrough gateways: a 402 without a model id
+                // still must not terminalize the whole connection. Record the
+                // error for operators; sibling models stay selectable.
+                await updateProviderConnection(errorConnectionId, {
+                  lastErrorType: errorType,
+                  lastError: persistentMessage,
+                  errorCode: statusCode,
+                });
+                console.warn(
+                  `[provider] Node ${errorConnectionId} per-model quota exhausted (${statusCode}) — connection stays active`
                 );
               } else {
                 console.warn(
@@ -5534,14 +5560,19 @@ export async function handleChatCore({
   // upstream body and synthesize an equivalent OpenAI SSE stream so the
   // streaming pipeline (and the client) get a valid stream.
   providerResponse = await maybeConvertJsonBodyToSse(providerResponse, { log, provider, model });
+  const isZunef = Boolean(provider && (provider.startsWith("anthropic-compatible") || provider.includes("zunef"))) || /zunef/i.test(String(model || ""));
+  const isOpusModel = /opus/i.test(String(model || ""));
+  const isSonnetOrHeavy = /sonnet|fable|argon|gpt-5/i.test(String(model || ""));
+  const targetReadinessCapMs = isZunef ? 120_000 : (isOpusModel ? 90_000 : (isSonnetOrHeavy ? 60_000 : 35_000));
+  const effectiveBaseTimeoutMs = isZunef ? 60_000 : (isOpusModel ? 40_000 : (isSonnetOrHeavy ? 25_000 : 15_000));
+  const effectiveReadinessMaxTimeoutMs = targetReadinessCapMs;
+
   const streamReadinessPolicy = resolveStreamReadinessTimeout({
-    baseTimeoutMs: STREAM_READINESS_TIMEOUT_MS,
+    baseTimeoutMs: effectiveBaseTimeoutMs,
     provider,
     model,
     body: (finalBody || translatedBody) as Record<string, unknown> | null | undefined,
-    maxTimeoutMs: agentGoalPolicy.detected
-      ? Math.max(STREAM_READINESS_MAX_TIMEOUT_MS, agentGoalPolicy.readinessMaxTimeoutMs)
-      : STREAM_READINESS_MAX_TIMEOUT_MS,
+    maxTimeoutMs: effectiveReadinessMaxTimeoutMs,
   });
   if (streamReadinessPolicy.timeoutMs !== streamReadinessPolicy.baseTimeoutMs) {
     log?.debug?.(
@@ -5991,6 +6022,11 @@ export async function handleChatCore({
     clientResponseFormat,
     echoModel,
     responseHeaders,
+    // Same adaptive budget the pre-handoff readiness gate above just used —
+    // reasoning models that legitimately take a while to say anything keep
+    // that same patience for their first REAL content, not just their first
+    // lifecycle frame. See pipeWithDisconnect's own doc comment.
+    contentStallTimeoutMs: streamReadinessPolicy.timeoutMs,
   });
 
   // ── Gamification event (fire-and-forget) ──

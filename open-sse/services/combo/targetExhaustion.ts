@@ -414,13 +414,14 @@ function markConnectionLevelExhaustion(
   }
   const connId = target.connectionId ?? undefined;
   const isZunef = Boolean(provider && (provider.startsWith("anthropic-compatible") || provider.includes("zunef")));
-  const isOpus = /opus/i.test(String(target.model || rawModel || ""));
+  const targetModelName = target.modelStr || target.model || rawModel || "unknown";
+  const isOpus = /opus/i.test(String(targetModelName));
 
   if (connId) {
     if (isZunef && isOpus) {
       log.info(
         tag,
-        `Zunef Opus target ${target.model} failed (${result.status}) — keeping connection & provider open for Zunef Sonnet fallback`
+        `Zunef Opus target ${targetModelName} failed (${result.status}) — keeping connection & provider open for Zunef Sonnet fallback`
       );
       return;
     }
@@ -432,7 +433,7 @@ function markConnectionLevelExhaustion(
       sets.exhaustedProviders.add("zunef:sonnet");
       log.info(
         tag,
-        `Zunef target ${target.model} error (${result.status}) — marking Zunef exhausted`
+        `Zunef target ${targetModelName} error (${result.status}) — marking Zunef exhausted`
       );
     } else {
       log.info(
@@ -451,7 +452,7 @@ function markConnectionLevelExhaustion(
     if (isZunef && isOpus) {
       log.info(
         tag,
-        `Zunef Opus target ${target.model} failed (${result.status}) without connectionId — keeping provider open for Zunef Sonnet fallback`
+        `Zunef Opus target ${targetModelName} failed (${result.status}) without connectionId — keeping provider open for Zunef Sonnet fallback`
       );
       return;
     }

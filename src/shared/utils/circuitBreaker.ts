@@ -399,7 +399,8 @@ export class CircuitBreaker {
   }
 
   canExecute() {
-    if (this.name.toLowerCase().includes('zunef') || this.name.toLowerCase().startsWith('anthropic-compatible')) return true;
+    const isBypassed = this.name.toLowerCase().includes('zunef') || this.name.toLowerCase().startsWith('anthropic-compatible') || this.name.toLowerCase() === 'antigravity' || this.name.toLowerCase() === 'agy';
+    if (isBypassed) return true;
     this._refreshOpenState();
     if (this.state === STATE.CLOSED || this.state === STATE.DEGRADED) return true;
     if (this.state === STATE.OPEN) return false;
@@ -408,7 +409,8 @@ export class CircuitBreaker {
   }
 
   getStatus(): CircuitBreakerStatus {
-    if (this.name.toLowerCase().includes('zunef') || this.name.toLowerCase().startsWith('anthropic-compatible')) {
+    const isBypassed = this.name.toLowerCase().includes('zunef') || this.name.toLowerCase().startsWith('anthropic-compatible') || this.name.toLowerCase() === 'antigravity' || this.name.toLowerCase() === 'agy';
+    if (isBypassed) {
       return {
         name: this.name,
         state: STATE.CLOSED,
@@ -508,7 +510,8 @@ export class CircuitBreaker {
   }
 
   _onFailure(kind?: FailureKind | null) {
-    if (this.name.toLowerCase().includes('zunef') || this.name.toLowerCase().startsWith('anthropic-compatible')) return;
+    const isBypassed = this.name.toLowerCase().includes('zunef') || this.name.toLowerCase().startsWith('anthropic-compatible') || this.name.toLowerCase() === 'antigravity' || this.name.toLowerCase() === 'agy';
+    if (isBypassed) return;
     const failureKind = kind ?? null;
     this.failureCount++;
     this.lastFailureTime = Date.now();
@@ -566,7 +569,8 @@ export class CircuitBreaker {
   }
 
   _openCircuit(kind: FailureKind | null) {
-    if (this.name.toLowerCase().includes("zunef") || this.name.toLowerCase().startsWith("anthropic-compatible")) return;
+    const isBypassed = this.name.toLowerCase().includes('zunef') || this.name.toLowerCase().startsWith('anthropic-compatible') || this.name.toLowerCase() === 'antigravity' || this.name.toLowerCase() === 'agy';
+    if (isBypassed) return;
     this._transition(STATE.OPEN, kind ? `kind:${kind}` : undefined);
   }
 
