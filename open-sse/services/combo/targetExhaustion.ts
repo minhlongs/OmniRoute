@@ -418,14 +418,24 @@ function markConnectionLevelExhaustion(
   const isOpus = /opus/i.test(String(targetModelName));
 
   if (connId) {
+    // Antigravity quotas are per model family (Claude vs Gemini): a failing Claude 5.5 leg
+    // must not poison the same account's Argon legs (or vice-versa) for this request.
+    if (provider === "antigravity" || provider === "agy") {
+      log.info(
+        tag,
+        `Antigravity ${targetModelName} on ${connId} failed (${result.status}) — keeping connection open for other model families`
+      );
+      return;
+    }
     if (isZunef && isOpus) {
+      // Measured: after a Zunef Opus timeout, Zunef Sonnet (separate upstream queue) often
+      // answers in seconds — keep the connection open so Sonnet is tried before Antigravity.
       log.info(
         tag,
         `Zunef Opus target ${targetModelName} failed (${result.status}) — keeping connection & provider open for Zunef Sonnet fallback`
       );
       return;
     }
-
     sets.exhaustedConnections.add(`${provider}:${connId}`);
     if (isZunef) {
       sets.exhaustedProviders.add(provider);
@@ -433,7 +443,7 @@ function markConnectionLevelExhaustion(
       sets.exhaustedProviders.add("zunef:sonnet");
       log.info(
         tag,
-        `Zunef target ${targetModelName} error (${result.status}) — marking Zunef exhausted`
+        `Zunef target ${targetModelName} error (${result.status}) — Zunef exhausted, falling to Antigravity Claude 5.5 backup`
       );
     } else {
       log.info(
@@ -446,13 +456,6 @@ function markConnectionLevelExhaustion(
       log.info(
         tag,
         `Provider ${provider} error (${result.status}) on model ${rawModel} without connectionId — sparing provider from whole-provider exhaustion to allow combo fallback (#1731)`
-      );
-      return;
-    }
-    if (isZunef && isOpus) {
-      log.info(
-        tag,
-        `Zunef Opus target ${targetModelName} failed (${result.status}) without connectionId — keeping provider open for Zunef Sonnet fallback`
       );
       return;
     }

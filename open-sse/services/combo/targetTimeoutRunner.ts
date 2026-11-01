@@ -114,10 +114,10 @@ export function buildTargetTimeoutRunner(deps: {
     const maxCeilingMs = isLongPrefill ? 150_000 : 60_000;
     // Zunef upstream emits only keep-alive pings while queued/prefilling; observed successful
     // streams take 88-200s. A 120s cap killed ~85% of in-flight Zunef requests, so give Zunef
-    // targets a dedicated 240s budget (2 Zunef legs = 8min, still under the 10min loop safety).
+    // targets a dedicated 150s budget; Antigravity Claude 5.5 is the fast same-family backup.
     const isZunefModel = /zunef|anthropic-compatible/i.test(String(modelStr || "")) ||
       /zunef|anthropic-compatible/i.test(String((target as { provider?: string } | undefined)?.provider || ""));
-    const effectiveTimeoutMs = isZunefModel ? 240_000 : Math.min(
+    const effectiveTimeoutMs = isZunefModel ? 150_000 : Math.min(
       typeof resolvedTimeoutMs === "number" && Number.isFinite(resolvedTimeoutMs) && resolvedTimeoutMs > 0
         ? resolvedTimeoutMs
         : (comboTargetTimeoutMs > 0 ? comboTargetTimeoutMs : maxCeilingMs),

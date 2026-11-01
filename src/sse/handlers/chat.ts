@@ -1062,6 +1062,7 @@ async function handleChatImplementation(
         resolvedModel,
         {
           sessionKey: sessionAffinityKey,
+          skipOAuthSelectionSideEffects: true,
           ...(target?.allowRateLimitedConnection ? { allowRateLimitedConnections: true } : {}),
           ...(target?.connectionId ? { forcedConnectionId: target.connectionId } : {}),
           ...(bypassProviderQuotaPolicy ? { bypassQuotaPolicy: true } : {}),
@@ -1132,6 +1133,7 @@ async function handleChatImplementation(
           providerId?: string | null;
           effectiveComboStrategy?: string | null;
           modelAbortSignal?: AbortSignal | null;
+          initialTokensCompressed?: number | null;
         }
       ) =>
         handleSingleModelChat(
@@ -1150,7 +1152,8 @@ async function handleChatImplementation(
             allowedConnectionIds: target?.allowedConnectionIds ?? null,
             comboStepId: target?.stepId || null,
             comboExecutionKey: target?.executionKey || target?.stepId || null,
-            skipUpstreamRetry: target?.failoverBeforeRetry ?? false,
+            initialTokensCompressed: target?.initialTokensCompressed ?? null,
+            skipUpstreamRetry: (m.startsWith("antigravity/") || m.startsWith("agy/")) ? false : (target?.failoverBeforeRetry ?? false),
             allowRateLimitedConnection: target?.allowRateLimitedConnection === true,
             preselectedCredentials: (() => {
               const key = getComboCredentialCacheKey(m, target);
@@ -1368,6 +1371,7 @@ async function handleSingleModelChat(
     allowedConnectionIds?: string[] | null;
     comboStepId?: string | null;
     comboExecutionKey?: string | null;
+    initialTokensCompressed?: number | null;
     skipUpstreamRetry?: boolean;
     allowRateLimitedConnection?: boolean;
     preselectedCredentials?: any;
@@ -1453,7 +1457,7 @@ async function handleSingleModelChat(
             allowedConnectionIds: null,
             comboStepId: null,
             comboExecutionKey: null,
-            skipUpstreamRetry: resolvedTarget?.failoverBeforeRetry === true,
+            skipUpstreamRetry: (modelStr.startsWith("antigravity/") || modelStr.startsWith("agy/")) ? false : (resolvedTarget?.failoverBeforeRetry === true),
             allowRateLimitedConnection: resolvedTarget?.allowRateLimitedConnection === true,
             providerId: resolvedTarget?.providerId ?? (resolvedTarget as any)?.provider ?? null,
             correlationId: runtimeOptions?.correlationId ?? null,
@@ -1936,6 +1940,7 @@ async function handleSingleModelChat(
             comboStepId: runtimeOptions.comboStepId ?? null,
             comboExecutionKey:
               runtimeOptions.comboExecutionKey ?? runtimeOptions.comboStepId ?? null,
+            initialTokensCompressed: runtimeOptions.initialTokensCompressed ?? null,
             extendedContext,
             modelApiFormat: apiFormat,
             modelTargetFormat: targetFormat,
@@ -2046,9 +2051,18 @@ async function handleSingleModelChat(
         // 502. Do NOT retry STREAM_READINESS_TIMEOUT (a slow-but-alive upstream;
         // retrying would only double latency) and do NOT mark the account unavailable
         // for the early close.
+        // Zunef upstream gateway gave up after 85s waiting for Anthropic headers: re-sending the
+        // same model just waits another ~85s in the same queue. Fall through so the combo moves
+        // on (Zunef Sonnet -> Antigravity Claude 5.5) instead.
+        const isZunefUpstreamHeaderTimeout =
+          /anthropic-compatible|zunef/i.test(String(provider || "")) &&
+          /85000ms|waiting for response headers/i.test(
+            `${String(result.error || "")} ${JSON.stringify((result as { errorDetails?: unknown }).errorDetails ?? "")}`
+          );
         if (
           shouldRetryStreamEarlyEof(result.errorCode, streamEarlyEofRetries) &&
-          !hasForcedConnection
+          !hasForcedConnection &&
+          !isZunefUpstreamHeaderTimeout
         ) {
           streamEarlyEofRetries += 1;
           log.warn(
@@ -2447,3 +2461,7 @@ async function handleSingleModelChat(
     }
   }
 }
+
+// HMR_BUMP_PRECISION_GUARD_1793449681
+
+// HMR_BUMP_ARCH_UPGRADE: 2026-11-01T09:39:43.681496

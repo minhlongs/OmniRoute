@@ -4,7 +4,7 @@
  *
  * @internal — not part of the public combo.ts barrel.
  */
-import { formatRetryAfter, getModelLockoutInfo } from "../accountFallback.ts";
+import { formatRetryAfter, getModelLockoutInfo, clearAllModelLockouts } from "../accountFallback.ts";
 import {
   errorResponse,
   errorResponseWithComboDiagnostics,
@@ -247,7 +247,24 @@ export async function dispatchWithCooldownRetry(opts: {
         runningTasks.add(task);
         task.finally(() => runningTasks.delete(task));
 
+        // Zunef hedge: Zunef often sits on keep-alive pings for 60-150s. If a Zunef leg has not
+        // produced its first content after ZUNEF_HEDGE_DELAY_MS, race the next leg (Zunef Sonnet,
+        // then Antigravity Claude 5.5) in parallel; first to answer wins, losers are aborted.
+        const curTarget = state.orderedTargets[i] as { provider?: string; modelStr?: string } | undefined;
+        const isZunefLeg = /zunef|anthropic-compatible/i.test(
+          `${String(curTarget?.provider || "")} ${String(curTarget?.modelStr || "")}`
+        );
+        const ZUNEF_HEDGE_DELAY_MS = 60_000;
         if (
+          isZunefLeg &&
+          !hasProtectedPriorityTarget &&
+          i + 1 < state.orderedTargets.length
+        ) {
+          const timeoutPromise = new Promise<void>((r) => {
+            setTimeout(r, ZUNEF_HEDGE_DELAY_MS);
+          });
+          await Promise.race([task, globalPromise, timeoutPromise, loopSafetyPromise]);
+        } else if (
           zeroLatencyOptimizationsEnabled &&
           deps.config.hedging &&
           !hasProtectedPriorityTarget &&
@@ -402,6 +419,14 @@ export async function dispatchWithCooldownRetry(opts: {
       finishComboTrace(deps.traceInvocationId, { status: 503 });
       if (!state.lastStatus) {
         if (state.recordedAttempts === 0) {
+          if (!(state as unknown as Record<string, unknown>).__failOpenRetried && state.orderedTargets.length > 0) {
+            (state as unknown as Record<string, unknown>).__failOpenRetried = true;
+            deps.log.warn("COMBO", `[FAIL-OPEN-503-GUARD] All ${state.orderedTargets.length} targets in combo "${deps.combo.name}" were skipped by pre-dispatch filters; clearing in-memory model lockouts and dispatching live!`);
+            clearAllModelLockouts();
+            state.exhaustedProviders.clear();
+            state.exhaustedConnections.clear();
+            return dispatchWithCooldownRetry({ state, deps, extra });
+          }
           notifyWebhookEvent("request.failed", {
             combo: deps.combo.name,
             reason: "ALL_TARGETS_SKIPPED",

@@ -1403,6 +1403,24 @@ export function scoreModelForTask(
     return 500;
   }
 
+  // ── 1b. ANTIGRAVITY CLAUDE 5.5 = #3 BACKUP TIER BEHIND ZUNEF ─────────────
+  // Zunef Opus/Sonnet 5.5 stay #1/#2 (1500/1450). When Zunef is slow/429/timeout the combo
+  // falls to the same Claude 5.5 family served by Antigravity accounts (priority order
+  // billwill+longtho -> cashback -> ntnha via connection priority) BEFORE any Argon (<=1350).
+  {
+    const agyClaude = /^(agy|antigravity)\/claude-(opus|sonnet)-5-5-(high|medium|low)$/.exec(modelLower);
+    if (agyClaude) {
+      const owner = agyClaude[1] === "agy" ? 5 : 0; // owner pool (agy) slightly ahead of slot-farm
+      const fam = agyClaude[2];
+      const eff = agyClaude[3];
+      const isRoutineLoop = reasons.some((r) => r.includes("tier3") || r.includes("tool-loop-workhorse"));
+      const table: Record<string, number> = isRoutineLoop
+        ? { "sonnet-medium": 1435, "opus-medium": 1425, "sonnet-low": 1415, "sonnet-high": 1405, "opus-high": 1395, "opus-low": 1385 }
+        : { "opus-high": 1435, "sonnet-high": 1425, "opus-medium": 1415, "sonnet-medium": 1405, "opus-low": 1385, "sonnet-low": 1380 };
+      return (table[`${fam}-${eff}`] ?? 1370) + owner;
+    }
+  }
+
   // ── 2. NON-HAIKU (CODING / ADVISE / ARCHITECTURE / ROUTINE) ─────────────────
   // CRITICAL USER REQUIREMENT: Eliminate Gemini 3.8 Flash from coding! ("k cho 3.8 code nữa")
   if (modelLower.includes("flash") || modelLower.includes("3.8-flash") || modelLower.includes("3.6-flash")) {
