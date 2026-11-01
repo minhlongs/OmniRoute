@@ -33,7 +33,15 @@ export type FetchStartTimeoutPolicyResult = {
 // keepalives in flight) is ~120s. Keep the cap safely under that so OmniRoute's
 // own headers-phase watchdog always fires before the client gives up on its own.
 export const CODEX_CLIENT_ABORT_MS = 120_000;
-export const DEFAULT_FETCH_START_TIMEOUT_CAP_MS = 110_000;
+export const DEFAULT_FETCH_START_TIMEOUT_CAP_MS = 45_000;
+
+function resolveConfiguredFetchStartCapMs(): number {
+  const raw = process["env"]["OMNIROUTE_FETCH_START_TIMEOUT_CAP_MS"];
+  if (raw == null || raw.trim() === "") return DEFAULT_FETCH_START_TIMEOUT_CAP_MS;
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed) || parsed <= 0) return DEFAULT_FETCH_START_TIMEOUT_CAP_MS;
+  return Math.floor(parsed);
+}
 
 export function resolveFetchStartTimeout(
   input: FetchStartTimeoutPolicyInput
@@ -43,7 +51,7 @@ export function resolveFetchStartTimeout(
     return { timeoutMs: baseTimeoutMs, baseTimeoutMs, capped: false };
   }
 
-  const capMs = Math.max(0, Math.floor(input.capMs ?? DEFAULT_FETCH_START_TIMEOUT_CAP_MS));
+  const capMs = Math.max(0, Math.floor(input.capMs ?? resolveConfiguredFetchStartCapMs()));
   if (capMs <= 0 || baseTimeoutMs <= capMs) {
     return { timeoutMs: baseTimeoutMs, baseTimeoutMs, capped: false };
   }

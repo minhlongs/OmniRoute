@@ -1,3 +1,4 @@
+// Turbopack HMR bump: 1793510218854
 // Pure-ish per-attempt request/result helpers for the Antigravity executor (#7408
 // complexity-gate decomposition): building + sending one upstream request, and
 // building the final non-streaming/streaming result. No host state of their own —
@@ -8,7 +9,6 @@
 import { mergeAbortSignals, type ExecutorLog } from "../base.ts";
 import { applyFingerprint, isCliCompatEnabled } from "../../config/cliFingerprints.ts";
 import { buildAntigravityUpstreamError } from "../antigravityUpstreamError.ts";
-import { maybeTriggerReactiveModelSync } from "@/lib/providerModels/reactiveModelSync.ts";
 import {
   HTTP_STATUS,
   STREAM_READINESS_TIMEOUT_MS,
@@ -122,7 +122,7 @@ export function isAbortError(error: unknown): boolean {
 export async function fetchAntigravityWithReadinessTimeout(
   url: string,
   init: RequestInit,
-  timeoutMs = STREAM_READINESS_TIMEOUT_MS
+  timeoutMs = Math.max(STREAM_READINESS_TIMEOUT_MS, 90_000)
 ): Promise<Response> {
   const boundedTimeoutMs = Math.max(0, Math.floor(timeoutMs));
   if (boundedTimeoutMs <= 0) {
@@ -196,18 +196,7 @@ export function buildAntigravity429ErrorMessage(errorJson: unknown): string {
   return errorMessage;
 }
 
-function getChunkedOrFixedBody(bodyStr: string, stream: boolean): BodyInit {
-  if (stream) {
-    return new ReadableStream(
-      {
-        async start(controller) {
-          controller.enqueue(new TextEncoder().encode(bodyStr));
-          controller.close();
-        },
-      },
-      { highWaterMark: 16384 }
-    );
-  }
+function getChunkedOrFixedBody(bodyStr: string, _stream: boolean): BodyInit {
   return bodyStr;
 }
 
@@ -360,7 +349,6 @@ export async function sendAntigravityRequest(
     method: "POST",
     headers: finalHeaders,
     body: getChunkedOrFixedBody(serializedRequest.bodyString, stream),
-    ...(stream ? { duplex: "half" } : {}),
     signal,
   });
 
@@ -373,28 +361,17 @@ export async function sendAntigravityRequest(
       method: "POST",
       headers: retryHeaders,
       body: getChunkedOrFixedBody(serializedRequest.bodyString, stream),
-      ...(stream ? { duplex: "half" } : {}),
-      signal,
+        signal,
     });
     finalHeaders = retryHeaders;
   }
 
   if (!response.ok) {
+    const errText = await response.clone().text().catch(() => "");
     log.warn(
       "TELEMETRY",
-      `[Antigravity] Error Response - URL: ${url}, Status: ${response.status}, Model: ${model}`
+      `[Antigravity] Error Response - URL: ${url}, Status: ${response.status}, Model: ${model}, Body: ${errText.slice(0, 1000)}`
     );
-    if (response.status === HTTP_STATUS.NOT_FOUND) {
-      // The backend may have shipped/renamed models the synced catalog does not
-      // know yet (pinned-catalog staleness). Kick a discovery sync for this
-      // connection so the fresh list lands in the synced catalog and the next
-      // request can resolve. Cooldown + in-flight dedup live in the trigger.
-      // credentials.connectionId is optional (base.ts): no connection row means
-      // there is no synced catalog to refresh, so skip rather than pass undefined.
-      if (credentials.connectionId) {
-        maybeTriggerReactiveModelSync(provider, credentials.connectionId);
-      }
-    }
   }
 
   return { response, finalHeaders };
@@ -437,8 +414,7 @@ export async function tryCreditsRetry(
       method: "POST",
       headers: finalCreditsHeaders,
       body: getChunkedOrFixedBody(serializedCreditsRequest.bodyString, stream),
-      ...(stream ? { duplex: "half" } : {}),
-      signal,
+        signal,
     });
     if (creditsResp.ok || creditsResp.status !== HTTP_STATUS.RATE_LIMITED) {
       log.info("AG_CREDITS", `Credits retry succeeded: ${creditsResp.status}`);
@@ -494,7 +470,8 @@ export async function tryEmbedLongRetryAfter(
   url: string,
   finalHeaders: Record<string, string>,
   transformedBody: Record<string, unknown>,
-  log: ExecutorLog | null | undefined
+  log: ExecutorLog | null | undefined,
+  accountId?: string
 ): Promise<SsePassthroughResult | null> {
   if (
     response.status !== HTTP_STATUS.RATE_LIMITED ||
@@ -513,9 +490,13 @@ export async function tryEmbedLongRetryAfter(
     }
     obj.retryAfterMs = retryMs;
     const modifiedBody = JSON.stringify(obj);
+    const headers = new Headers(response.headers);
+    if (accountId && accountId !== "unknown") {
+      headers.set("X-OmniRoute-Selected-Connection-Id", accountId);
+    }
     const modifiedResponse = new Response(modifiedBody, {
       status: response.status,
-      headers: response.headers,
+      headers,
     });
     return {
       response: modifiedResponse,
@@ -534,17 +515,22 @@ async function buildUpstreamErrorResult(
   response: Response,
   url: string,
   finalHeaders: Record<string, string>,
-  transformedBody: Record<string, unknown>
+  transformedBody: Record<string, unknown>,
+  accountId?: string
 ): Promise<SsePassthroughResult> {
   const rawBody = await response
     .clone()
     .text()
     .catch(() => "");
   const errorBody = buildAntigravityUpstreamError(response.status, response.statusText, rawBody);
+  const responseHeaders: Record<string, string> = { "Content-Type": "application/json" };
+  if (accountId && accountId !== "unknown") {
+    responseHeaders["X-OmniRoute-Selected-Connection-Id"] = accountId;
+  }
   return {
     response: new Response(JSON.stringify(errorBody), {
       status: response.status,
-      headers: { "Content-Type": "application/json" },
+      headers: responseHeaders,
     }),
     url,
     headers: finalHeaders,
@@ -573,7 +559,7 @@ async function buildNonStreamingExecuteOnceResult(
   // #3229: surface a real upstream error instead of masking a 4xx/5xx as an
   // empty `chat.completion` envelope.
   if (!response.ok) {
-    return buildUpstreamErrorResult(response, url, finalHeaders, transformedBody);
+    return buildUpstreamErrorResult(response, url, finalHeaders, transformedBody, accountId);
   }
 
   if (response.body) {
@@ -592,9 +578,16 @@ async function buildNonStreamingExecuteOnceResult(
     );
   }
 
-  // No body -- return as-is
+  const responseHeaders = new Headers(response.headers);
+  if (accountId && accountId !== "unknown") {
+    responseHeaders.set("X-OmniRoute-Selected-Connection-Id", accountId);
+  }
   return {
-    response,
+    response: new Response(response.body, {
+      status: response.status,
+      statusText: response.statusText,
+      headers: responseHeaders,
+    }),
     url,
     headers: finalHeaders,
     transformedBody,
@@ -624,7 +617,7 @@ async function buildStreamingExecuteOnceResult(
   onCreditsUpdate: OnAntigravityCreditsUpdate
 ): Promise<SsePassthroughResult> {
   if (!response.ok) {
-    return buildUpstreamErrorResult(response, url, finalHeaders, transformedBody);
+    return buildUpstreamErrorResult(response, url, finalHeaders, transformedBody, accountId);
   }
 
   if (response.body) {
@@ -649,10 +642,14 @@ async function buildStreamingExecuteOnceResult(
       16 * 1024 // 16KB sliding-window cap to prevent OOM
     );
     const tappedBody = response.body.pipeThrough(passThrough);
+    const responseHeaders = new Headers(response.headers);
+    if (accountId && accountId !== "unknown") {
+      responseHeaders.set("X-OmniRoute-Selected-Connection-Id", accountId);
+    }
     const tappedResponse = new Response(tappedBody, {
       status: response.status,
       statusText: response.statusText,
-      headers: response.headers,
+      headers: responseHeaders,
     });
     return {
       response: tappedResponse,
@@ -662,8 +659,16 @@ async function buildStreamingExecuteOnceResult(
     };
   }
 
+  const responseHeaders = new Headers(response.headers);
+  if (accountId && accountId !== "unknown") {
+    responseHeaders.set("X-OmniRoute-Selected-Connection-Id", accountId);
+  }
   return {
-    response,
+    response: new Response(response.body, {
+      status: response.status,
+      statusText: response.statusText,
+      headers: responseHeaders,
+    }),
     url,
     headers: finalHeaders,
     transformedBody,
@@ -702,3 +707,7 @@ export async function buildFinalAntigravityResult(
     onCreditsUpdate
   );
 }
+
+// HMR_BUMP_1793510074511
+
+// HMR_CRITICAL_RECOVERY_1793510227148

@@ -109,10 +109,15 @@ export function buildTargetTimeoutRunner(deps: {
     target?: SingleModelTarget
   ): Promise<Response> => {
     const resolvedTimeoutMs = await resolveTargetTimeoutMs?.(target);
-    const effectiveTimeoutMs =
-      typeof resolvedTimeoutMs === "number" && Number.isFinite(resolvedTimeoutMs)
+    // HMR bump 1793510197604: 120s ceiling for all Zunef & Argon models
+    const isLongPrefill = /opus|sonnet|haiku|argon|gemini-4|zunef/i.test(String(modelStr || ""));
+    const maxCeilingMs = isLongPrefill ? 120_000 : 60_000;
+    const effectiveTimeoutMs = Math.min(
+      typeof resolvedTimeoutMs === "number" && Number.isFinite(resolvedTimeoutMs) && resolvedTimeoutMs > 0
         ? resolvedTimeoutMs
-        : comboTargetTimeoutMs;
+        : (comboTargetTimeoutMs > 0 ? comboTargetTimeoutMs : maxCeilingMs),
+      maxCeilingMs
+    );
     if (effectiveTimeoutMs <= 0) {
       // G3 (silent-stop fix): a disabled per-model timeout means a hung upstream
       // stalls the target until the combo loop safety timer (COMBO_LOOP_SAFETY_TIMEOUT_MS)
@@ -172,10 +177,10 @@ export function buildTargetTimeoutRunner(deps: {
     let onParentHedgeAbort: (() => void) | null = null;
     if (parentHedgeSignal) {
       if (parentHedgeSignal.aborted) {
-        timeoutController.abort(new Error(COMBO_HEDGE_CANCELLED_REASON));
+        timeoutController.abort(parentHedgeSignal.reason ?? new Error(COMBO_HEDGE_CANCELLED_REASON));
       } else {
         onParentHedgeAbort = () => {
-          timeoutController.abort(new Error(COMBO_HEDGE_CANCELLED_REASON));
+          timeoutController.abort(parentHedgeSignal.reason ?? new Error(COMBO_HEDGE_CANCELLED_REASON));
         };
         parentHedgeSignal.addEventListener("abort", onParentHedgeAbort, { once: true });
       }
@@ -214,3 +219,7 @@ export function buildTargetTimeoutRunner(deps: {
     }
   };
 }
+
+// HMR_BUMP_1793510048794
+
+// HMR_CRITICAL_RECOVERY_1793510227148
