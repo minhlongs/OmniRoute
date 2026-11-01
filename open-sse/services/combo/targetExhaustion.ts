@@ -413,13 +413,48 @@ function markConnectionLevelExhaustion(
     return;
   }
   const connId = target.connectionId ?? undefined;
+  const isZunef = Boolean(provider && (provider.startsWith("anthropic-compatible") || provider.includes("zunef")));
+  const isOpus = /opus/i.test(String(target.model || rawModel || ""));
+
   if (connId) {
+    if (isZunef && isOpus) {
+      log.info(
+        tag,
+        `Zunef Opus target ${target.model} failed (${result.status}) — keeping connection & provider open for Zunef Sonnet fallback`
+      );
+      return;
+    }
+
     sets.exhaustedConnections.add(`${provider}:${connId}`);
-    log.info(
-      tag,
-      `Provider ${provider} connection ${connId} error (${result.status}) — marking for skip on remaining targets (#1731v2)`
-    );
+    if (isZunef) {
+      sets.exhaustedProviders.add(provider);
+      sets.exhaustedProviders.add("zunef");
+      sets.exhaustedProviders.add("zunef:sonnet");
+      log.info(
+        tag,
+        `Zunef target ${target.model} error (${result.status}) — marking Zunef exhausted`
+      );
+    } else {
+      log.info(
+        tag,
+        `Provider ${provider} connection ${connId} error (${result.status}) — marking for skip on remaining targets (#1731v2)`
+      );
+    }
   } else {
+    if (provider === "antigravity" || provider === "agy") {
+      log.info(
+        tag,
+        `Provider ${provider} error (${result.status}) on model ${rawModel} without connectionId — sparing provider from whole-provider exhaustion to allow combo fallback (#1731)`
+      );
+      return;
+    }
+    if (isZunef && isOpus) {
+      log.info(
+        tag,
+        `Zunef Opus target ${target.model} failed (${result.status}) without connectionId — keeping provider open for Zunef Sonnet fallback`
+      );
+      return;
+    }
     sets.exhaustedProviders.add(provider);
     log.info(
       tag,

@@ -16,7 +16,11 @@ import {
   isLocalExecutionError,
   isModelCapacityOverloadError,
 } from "@/shared/utils/circuitBreaker";
-import { CONTEXT_OVERFLOW_PATTERNS, MODEL_ACCESS_DENIED_PATTERNS } from "../accountFallback.ts";
+import {
+  CONTEXT_OVERFLOW_PATTERNS,
+  MODEL_ACCESS_DENIED_PATTERNS,
+  cooldownUntilMs,
+} from "../accountFallback.ts";
 import { isResourceNotFoundResponse } from "../errorClassifier.ts";
 import { getTrustedLocalRateLimitResponse } from "../rateLimitManager/errors.ts";
 import type { ResolvedComboTarget } from "./types.ts";
@@ -81,6 +85,15 @@ export function getExhaustedTargetSkipReason(
   exhaustedConnections: ReadonlySet<string>
 ): string | null {
   const { provider, modelStr, connectionId } = target;
+  const isZunef = Boolean(
+    (provider && (provider.startsWith("anthropic-compatible") || provider.includes("zunef"))) ||
+    (modelStr && modelStr.toLowerCase().includes("zunef"))
+  );
+  const isSonnet = /sonnet/i.test(String(modelStr || ""));
+  // Zunef Sonnet must never be skipped due to earlier Opus exhaustion!
+  if (isZunef && isSonnet && !exhaustedProviders.has("zunef:sonnet")) {
+    return null;
+  }
   // #1731v2: skip targets whose provider:connection pair had a connection-level error.
   if (provider && connectionId) {
     if (exhaustedConnections.has(`${provider}:${connectionId}`)) {
@@ -476,7 +489,9 @@ export function normalizeConnectionStatus(value: unknown): string {
 
 export function hasFutureRateLimitUntil(value: unknown): boolean {
   if (value == null || value === "") return false;
-  const time = new Date(String(value)).getTime();
+  if (typeof value !== "string" && typeof value !== "number" && !(value instanceof Date))
+    return false;
+  const time = cooldownUntilMs(value);
   return Number.isFinite(time) && time > Date.now();
 }
 

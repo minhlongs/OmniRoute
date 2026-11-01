@@ -1413,14 +1413,14 @@ export function scoreModelForTask(
   // Explicit /ak-advise / [$ak-advise] consulting: Gemini 4 Argon High is #1 Primary above Zunef!
   const isAdvise = reasons.includes("ak-advise-argon-high");
   if (isAdvise) {
+    if (modelLower === "zunef/claude-opus-5-5") return 1500;
+    if (modelLower === "zunef/claude-sonnet-5-5") return 1450;
     if (modelLower === "agy/gemini-4-argon-high") return 1350;
     if (modelLower === "antigravity/gemini-4-argon-high" || modelLower === "gemini-4-argon-high") return 1340;
-    if (modelLower === "zunef/claude-opus-5-5") return 950;
     if (modelLower === "agy/gemini-4-argon-medium") return 900;
     if (modelLower === "antigravity/gemini-4-argon-medium" || modelLower === "gemini-4-argon-medium") return 890;
     if (modelLower === "agy/gemini-4-argon-low") return 800;
     if (modelLower === "antigravity/gemini-4-argon-low" || modelLower === "gemini-4-argon-low") return 790;
-    if (modelLower === "zunef/claude-sonnet-5-5") return 750;
     return 700;
   }
 
@@ -1438,10 +1438,10 @@ export function scoreModelForTask(
     );
 
   if (isTier1Architect) {
-    if (modelLower === "zunef/claude-opus-5-5") return 1380;
+    if (modelLower === "zunef/claude-opus-5-5") return 1500;
+    if (modelLower === "zunef/claude-sonnet-5-5") return 1450;
     if (modelLower === "agy/gemini-4-argon-high") return 1350;
     if (modelLower === "antigravity/gemini-4-argon-high" || modelLower === "gemini-4-argon-high") return 1340;
-    if (modelLower === "zunef/claude-sonnet-5-5") return 1200;
     if (modelLower === "agy/gemini-4-argon-medium") return 1150;
     if (modelLower === "antigravity/gemini-4-argon-medium" || modelLower === "gemini-4-argon-medium") return 1140;
     if (modelLower === "agy/gemini-4-argon-low") return 900;
@@ -1454,12 +1454,12 @@ export function scoreModelForTask(
   // Argon High is penalized with 850 (-200 vs normal) so it is NEVER wasted on routine tool loops!
   const isTier3RoutineToolLoop = reasons.some((r) => r.includes("tier3") || r.includes("tool-loop-workhorse"));
   if (isTier3RoutineToolLoop) {
-    if (modelLower === "zunef/claude-opus-5-5") return 1380;
+    if (modelLower === "zunef/claude-opus-5-5") return 1500;
+    if (modelLower === "zunef/claude-sonnet-5-5") return 1450;
     if (modelLower === "agy/gemini-4-argon-low") return 1290;
     if (modelLower === "antigravity/gemini-4-argon-low" || modelLower === "gemini-4-argon-low") return 1280;
     if (modelLower === "agy/gemini-4-argon-medium") return 1180;
     if (modelLower === "antigravity/gemini-4-argon-medium" || modelLower === "gemini-4-argon-medium") return 1170;
-    if (modelLower === "zunef/claude-sonnet-5-5") return 1150;
     if (modelLower === "agy/gemini-4-argon-high") return 850; // Penalized!
     if (modelLower === "antigravity/gemini-4-argon-high" || modelLower === "gemini-4-argon-high") return 840;
     return 800;
@@ -1467,10 +1467,10 @@ export function scoreModelForTask(
 
   // ── 5. TIER 2: HEAVY EXECUTOR / MULTI-FILE CODING (35-45% of turns) ────────
   // /ak-vibe, /ak-cook, fullstack-developer, debugger, /ak-fix, tool error retry -> Gemini 4 Argon Medium.
-  if (modelLower === "zunef/claude-opus-5-5") return 1380;
+  if (modelLower === "zunef/claude-opus-5-5") return 1500;
+  if (modelLower === "zunef/claude-sonnet-5-5") return 1450;
   if (modelLower === "agy/gemini-4-argon-medium") return 1280;
   if (modelLower === "antigravity/gemini-4-argon-medium" || modelLower === "gemini-4-argon-medium") return 1270;
-  if (modelLower === "zunef/claude-sonnet-5-5") return 1200;
   if (modelLower === "agy/gemini-4-argon-low") return 1150;
   if (modelLower === "antigravity/gemini-4-argon-low" || modelLower === "gemini-4-argon-low") return 1140;
   if (modelLower === "agy/gemini-4-argon-high") return 1050; // Backup

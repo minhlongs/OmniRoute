@@ -10,6 +10,7 @@ import {
   getRuntimeProviderProfile,
   isAccountSemaphoreFull,
   isModelLocked,
+  getModelLockoutInfo,
 } from "../accountFallback.ts";
 import { isProviderInCooldown } from "../providerCooldownTracker.ts";
 import { checkCredentialGate, logCredentialSkip } from "../credentialGate.ts";
@@ -72,9 +73,48 @@ export async function evaluateExecuteTargetGates(opts: {
     if (i > 0) state.fallbackCount++;
   };
 
+  // 1. Strictly ban slow legacy 4.6 models on Zunef per user directive: 'lấy các model 5.5 của zunef thôi; 4.6 chậm lắm'
+  const modelStrLower = String(modelStr || '').toLowerCase();
+  const providerLower = String(provider || '').toLowerCase();
+  const isZunefTarget =
+    modelStrLower.includes('zunef') ||
+    providerLower.includes('zunef') ||
+    providerLower.startsWith('anthropic-compatible');
+
+  if (isZunefTarget && /4[\.-]6/.test(modelStrLower)) {
+    deps.log.warn('COMBO', '[ZUNEF-4.6-BAN] Skipping legacy 4.6 model on Zunef: ' + modelStr);
+    bumpFallback();
+    return { kind: 'skip', result: null };
+  }
+
+  // 2. Instant failover skip for Zunef:
+  // If Zunef timed out, stalled, rate limited, or was exhausted in an earlier target of this request,
+  // allow Sonnet 5.5 to try as fallback; only skip if Sonnet 5.5 has also failed!
+  const isSonnetTarget = /sonnet/i.test(modelStrLower);
+  if (
+    isZunefTarget &&
+    (state.exhaustedProviders.has('zunef') ||
+      (provider && state.exhaustedProviders.has(provider)) ||
+      [...state.exhaustedProviders].some((p) => String(p).toLowerCase().includes('zunef') || String(p).startsWith('anthropic-compatible')))
+  ) {
+    if (isSonnetTarget && !state.exhaustedProviders.has('zunef:sonnet')) {
+      deps.log.info('COMBO', '[ZUNEF-FALLBACK] Allowing ' + modelStr + ' as Sonnet fallback despite Opus failure');
+    } else {
+      deps.log.info('COMBO', '[ZUNEF-INSTANT-FAILOVER] Skipping ' + modelStr + ' — Zunef provider already exhausted in this request');
+      recordComboDecision(deps.traceInvocationId, {
+        step: target.executionKey,
+        target: modelStr,
+        decision: 'skipped_before_dispatch',
+        reason: 'request_exhaustion',
+      });
+      bumpFallback();
+      return { kind: 'skip', result: null };
+    }
+  }
+
   const cb = getCircuitBreaker(provider);
   const cbStatus = cb.getStatus();
-  if (cbStatus.state === "OPEN") {
+  if (!isZunefTarget && cbStatus.state === "OPEN") {
     state.skippedForCircuitOpen = true;
     if (
       cbStatus.retryAfterMs > 0 &&
@@ -98,6 +138,7 @@ export async function evaluateExecuteTargetGates(opts: {
   }
 
   if (
+    !isZunefTarget &&
     deps.resilienceSettings.providerCooldown.enabled &&
     Boolean(provider && provider !== "unknown") &&
     (isProviderInCooldown(provider, target.connectionId ?? undefined, deps.resilienceSettings) ||
@@ -139,7 +180,18 @@ export async function evaluateExecuteTargetGates(opts: {
       allowRateLimitedConnection
     );
     if (persistedSkip) {
-      // Lift-as-is: combo.ts skips without observeFailure / stopProtectedPriorityTarget.
+      try {
+        const conn = await readConnectionForCooldownGate(target.connectionId, false);
+        if (conn && conn.rateLimitedUntil) {
+          const resetMs = new Date(String(conn.rateLimitedUntil)).getTime() - Date.now();
+          if (resetMs > 0) {
+            state.skippedForCircuitOpen = true;
+            if (state.earliestCircuitOpenRetryMs === 0 || resetMs < state.earliestCircuitOpenRetryMs) {
+              state.earliestCircuitOpenRetryMs = resetMs;
+            }
+          }
+        }
+      } catch (_) {}
       deps.log.info("COMBO", persistedSkip);
       deps.clearStaleLKGP(deps.combo.name, target.executionKey, deps.combo.id, deps.log, "COMBO");
       bumpFallback();
@@ -167,7 +219,17 @@ export async function evaluateExecuteTargetGates(opts: {
     };
   }
 
-  if (provider && rawModel && isModelLocked(provider, target.connectionId || "", rawModel)) {
+  if (!isZunefTarget && provider && rawModel && target.connectionId && isModelLocked(provider, target.connectionId, rawModel)) {
+    const lockoutInfo = getModelLockoutInfo(provider, target.connectionId || "", rawModel);
+    if (lockoutInfo && lockoutInfo.remainingMs > 0) {
+      state.skippedForCircuitOpen = true;
+      if (
+        state.earliestCircuitOpenRetryMs === 0 ||
+        lockoutInfo.remainingMs < state.earliestCircuitOpenRetryMs
+      ) {
+        state.earliestCircuitOpenRetryMs = lockoutInfo.remainingMs;
+      }
+    }
     deps.log.info("COMBO", `Skipping ${modelStr} — model locked by resilience (cooldown active)`);
     recordComboDecision(deps.traceInvocationId, {
       step: target.executionKey,
@@ -240,7 +302,8 @@ export async function evaluateExecuteTargetGates(opts: {
     }
   }
 
-  if (deps.isModelAvailable) {
+  const isAntiTarget = providerLower === "antigravity" || providerLower === "agy" || modelStrLower.startsWith("antigravity/") || modelStrLower.startsWith("agy/");
+  if (deps.isModelAvailable && !isZunefTarget && !isAntiTarget) {
     const available = await deps.isModelAvailable(modelStr, targetForAttempt);
     if (!available) {
       deps.log.debug?.(
@@ -327,3 +390,5 @@ export async function evaluateExecuteTargetGates(opts: {
     protectedPriorityTarget,
   };
 }
+
+// HMR_CRITICAL_RECOVERY_1793510227148
