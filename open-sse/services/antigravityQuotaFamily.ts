@@ -1,3 +1,4 @@
+import { resolveAntigravityModelId } from "../config/antigravityModelAliases.ts";
 const ANTIGRAVITY_PROVIDER_ID = "antigravity";
 
 export type AntigravityQuotaFamily = "gemini" | "claude" | "other";
@@ -126,9 +127,10 @@ export function selectAntigravityQuotaWindowNames(
         ? ["claude_gpt_weekly"]
         : [];
 
+  const resolvedBareModel = resolveAntigravityModelId(bareModel);
   const exactWindows = quotaNames.filter((windowName) => {
     const bare = windowName.replace(/^(antigravity|agy)\//, "");
-    return bare === bareModel;
+    return bare === bareModel || bare === resolvedBareModel;
   });
   const aggregateWindows = familyAggregates.filter((key) => quotaNames.includes(key));
   const scoped = [...exactWindows, ...aggregateWindows];
