@@ -1915,8 +1915,11 @@ export async function getProviderCredentials(
           (candidate) => candidate.id === leasePolicy.activeLease?.connectionId
         )
       : undefined;
+    const isAntigravityPool = provider === "antigravity" || provider === "agy";
+    const isClaudeModel = Boolean(requestedModel && /claude/i.test(requestedModel));
+
     const affinityPlan =
-      options.lease && !connection
+      options.lease && !connection && !(isAntigravityPool && isClaudeModel)
         ? planSessionAffinityConnection(
             provider,
             options.sessionKey,
@@ -1926,14 +1929,16 @@ export async function getProviderCredentials(
         : null;
     const affinityConnection = connection
       ? connection
-      : options.lease
-        ? affinityPlan?.connection
-        : await selectSessionAffinityConnection(
-            provider,
-            options.sessionKey,
-            orderedConnections,
-            sessionAffinityTtlMs
-          );
+      : (isAntigravityPool && isClaudeModel)
+        ? null
+        : options.lease
+          ? affinityPlan?.connection
+          : await selectSessionAffinityConnection(
+              provider,
+              options.sessionKey,
+              orderedConnections,
+              sessionAffinityTtlMs
+            );
     if (affinityConnection) {
       connection = affinityConnection;
       if (options.lease) commitSelectionSideEffects = affinityPlan?.commit;
@@ -1947,6 +1952,39 @@ export async function getProviderCredentials(
 
     if (connection) {
       // Session affinity selected a connection before global sticky routing.
+    } else if (isAntigravityPool) {
+      if (isClaudeModel) {
+        // Claude 5.5: Treat all active eligible slot-farm connections as equal priority
+        // and distribute requests evenly via providerRoundRobinCursor.
+        const cursorKey = "rr:" + provider + ":claude";
+        const currentCursor = providerRoundRobinCursor.get(cursorKey) ?? 0;
+        const pickedIndex = currentCursor % orderedConnections.length;
+        connection = orderedConnections[pickedIndex];
+        providerRoundRobinCursor.set(cursorKey, pickedIndex + 1);
+        log.info(
+          "AUTH",
+          `${provider} claude round-robin: picked ${connection.id?.slice(0, 8)} (${(connection as any).name || (connection as any).email}) [${pickedIndex + 1}/${orderedConnections.length}]`
+        );
+      } else {
+        // Non-Claude (Gemini 4 Argon, etc.): Respect connection priority order (1 -> 2 -> 3).
+        // Billwill and Longtho (priority 1) are selected first;
+        // cashback (priority 2) only if priority 1 is exhausted/cooldown;
+        // ntnha (priority 3) only if priority 1 & 2 are exhausted/cooldown.
+        const minPriority = Math.min(...orderedConnections.map((c) => c.priority ?? 999));
+        const tierCandidates = orderedConnections.filter((c) => (c.priority ?? 999) === minPriority);
+        const cursorKey = "rr:" + provider + ":" + (requestedModel || "non-claude");
+        const currentCursor = providerRoundRobinCursor.get(cursorKey) ?? 0;
+        const pickedIndex = currentCursor % tierCandidates.length;
+        connection = tierCandidates[pickedIndex];
+        providerRoundRobinCursor.set(cursorKey, pickedIndex + 1);
+        log.info(
+          "AUTH",
+          `${provider} priority-tier round-robin (priority=${minPriority}): picked ${connection.id?.slice(0, 8)} (${(connection as any).name || (connection as any).email}) [${pickedIndex + 1}/${tierCandidates.length}]`
+        );
+      }
+      const commit = planLastUsedCommit(connection, connectionsRaw, 1, options.skipOAuthSelectionSideEffects === true);
+      if (options.lease) commitSelectionSideEffects = commit;
+      else await commit();
     } else if (strategy === "round-robin") {
       const stickyLimit = toNumber(
         providerOverride.stickyRoundRobinLimit ??
@@ -1957,9 +1995,8 @@ export async function getProviderCredentials(
       // If excluding account(s) (fallback scenario), skip sticky logic and go straight to LRU.
       // This prevents same-model retries from getting stuck on a failed account.
       const isFallbackScenario = excludeConnectionId !== null || excludedConnectionIds.size > 0;
-      const isAntigravityPool = provider === "antigravity" || provider === "agy";
 
-      if (stickyLimit <= 1 || isFallbackScenario || isAntigravityPool) {
+      if (stickyLimit <= 1 || isFallbackScenario) {
         // Balanced spread across healthy accounts via in-memory atomic cursor
         const cursorKey = "rr:" + provider + ":" + (requestedModel || "all");
         const currentCursor = providerRoundRobinCursor.get(cursorKey) ?? 0;
@@ -2122,6 +2159,7 @@ export async function getProviderCredentials(
     }
 
     if (
+      !isAntigravityPool &&
       options.reserveOAuthSession === true &&
       connection?.authType === "oauth" &&
       !affinityConnection // keep sticky session pin: switching accounts busts upstream prefix cache

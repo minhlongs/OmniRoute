@@ -35,21 +35,13 @@ def main():
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
 
-    # 1. Update provider_connections
-    for cid in ALL_SLOT_FARM:
-        cursor.execute("""
-            UPDATE provider_connections
-            SET priority = 1,
-                is_active = 1,
-                rate_limited_until = NULL,
-                updated_at = datetime('now')
-            WHERE id = ?
-        """, (cid,))
-        print(f"Set connection {cid} priority=1, active=1, rate_limited_until=NULL")
-
-    for cid in MINHLONG_CONNS:
-        cursor.execute("UPDATE provider_connections SET is_active = 0, updated_at = datetime('now') WHERE id = ?", (cid,))
-        print(f"Ensured Pro connection {cid} is_active=0")
+    # 1. Restore provider_connections priorities (billwill+longtho=1, cashback=2, ntnha=3, minhlong=99 inactive)
+    cursor.execute("UPDATE provider_connections SET priority = 1, is_active = 1, updated_at = datetime('now') WHERE provider IN ('agy', 'antigravity') AND (email LIKE '%billwill.mentor%' OR name LIKE '%billwill%')")
+    cursor.execute("UPDATE provider_connections SET priority = 1, is_active = 1, updated_at = datetime('now') WHERE provider IN ('agy', 'antigravity') AND (email LIKE '%longtho638%' OR name LIKE '%longtho%')")
+    cursor.execute("UPDATE provider_connections SET priority = 2, is_active = 1, updated_at = datetime('now') WHERE provider IN ('agy', 'antigravity') AND (email LIKE '%cashback.mentoring%' OR name LIKE '%cashback%')")
+    cursor.execute("UPDATE provider_connections SET priority = 3, is_active = 1, updated_at = datetime('now') WHERE provider IN ('agy', 'antigravity') AND (email LIKE '%ntnha.thcsvothisau.tpsd%' OR name LIKE '%ntnha%')")
+    cursor.execute("UPDATE provider_connections SET priority = 99, is_active = 0, updated_at = datetime('now') WHERE provider IN ('agy', 'antigravity') AND (email LIKE '%minhlong.rice%' OR name LIKE '%minhlong%')")
+    print("Restored account priorities: billwill=1, longtho=1, cashback=2, ntnha=3, minhlong=99 inactive")
 
     # 2. Update key_value providerStrategies
     cursor.execute("SELECT value FROM key_value WHERE key = 'providerStrategies'")
