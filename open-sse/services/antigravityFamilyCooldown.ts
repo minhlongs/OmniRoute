@@ -37,8 +37,10 @@ function lockAntigravityFamilyModel(
   reason: string,
   cooldownMs: number
 ): void {
-  lockModel("agy", connectionId, model, reason, cooldownMs);
-  lockModel("antigravity", connectionId, model, reason, cooldownMs);
+  // Cap Antigravity family lock to at most 180s (3 minutes) to avoid paralysis
+  const cappedCooldownMs = Math.min(cooldownMs, 180_000);
+  lockModel("agy", connectionId, model, reason, cappedCooldownMs);
+  lockModel("antigravity", connectionId, model, reason, cappedCooldownMs);
 }
 
 export async function persistAntigravityFamilyCooldown(params: {
@@ -47,8 +49,6 @@ export async function persistAntigravityFamilyCooldown(params: {
   rateLimitedUntil: string;
 }): Promise<JsonRecord | null> {
   if (!params.model.trim()) return null;
-  // Opus models in Antigravity have independent quotas; never lock the shared Claude family.
-  if (params.model.toLowerCase().includes("opus")) return null;
   const family = getAntigravityQuotaFamily(params.model);
   if (family === "other") return null;
 
@@ -65,13 +65,16 @@ export async function persistAntigravityFamilyCooldown(params: {
   const existingMs = parseUntilMs(untils[family]);
   const nextMs = parseUntilMs(params.rateLimitedUntil);
   if (!Number.isFinite(nextMs)) return psd;
-  if (Number.isFinite(existingMs) && existingMs > Date.now() && existingMs >= nextMs) {
+  // Cap Antigravity persisted lock to at most 180s from now
+  const cappedNextMs = Math.min(nextMs, Date.now() + 180_000);
+  const effectiveUntil = new Date(cappedNextMs).toISOString();
+  if (Number.isFinite(existingMs) && existingMs > Date.now() && existingMs >= cappedNextMs) {
     return psd;
   }
 
   const nextPsd: JsonRecord = {
     ...psd,
-    [FAMILY_PSD_KEY]: { ...untils, [family]: params.rateLimitedUntil },
+    [FAMILY_PSD_KEY]: { ...untils, [family]: effectiveUntil },
   };
   await updateProviderConnection(params.connectionId, { providerSpecificData: nextPsd });
   return nextPsd;
@@ -87,7 +90,6 @@ export function persistAntigravityFamilyCooldownIfQuota(params: {
 }): void {
   if (!isAntigravityQuotaProvider(params.provider)) return;
   if (!params.model?.trim() || params.cooldownMs <= 0) return;
-  if (params.model.toLowerCase().includes("opus")) return;
   if (params.reason != null && params.reason !== "quota_exhausted") return;
   void persistAntigravityFamilyCooldown({
     connectionId: params.connectionId,
@@ -128,7 +130,7 @@ export function rehydrateAntigravityFamilyLocks(
     const untilMs = parseUntilMs(untils[family]);
     if (!Number.isFinite(untilMs) || untilMs <= now) continue;
     const model = dummyModelForFamily(family);
-    const remainingMs = untilMs - now;
+    const remainingMs = Math.min(untilMs - now, 180_000);
     lockAntigravityFamilyModel(connectionId, model, "quota_exhausted", remainingMs);
   }
 }
@@ -154,18 +156,37 @@ export function markAntigravityModelQuotaExhausted(
   model?: string | null
 ): boolean {
   if (!model) return false;
-  // Opus models in Antigravity have independent per-model quotas; lock only that exact model.
-  if (model.toLowerCase().includes("opus")) {
-    lockExactModel("agy", connectionId, model, "quota_exhausted", retryAfterMs);
-    lockExactModel("antigravity", connectionId, model, "quota_exhausted", retryAfterMs);
+  const isClaude = /claude|opus|sonnet/i.test(model);
+  const cappedCooldown = Math.min(Math.max(retryAfterMs, 10_000), 180_000);
+
+  if (isClaude) {
+    // Lock Claude family so all Claude 5.5 legs skip this connection without latency
+    lockAntigravityFamilyModel(connectionId, "claude-family-lock", "quota_exhausted", cappedCooldown);
+    // Also lock exact model and aliases
+    lockExactModel("agy", connectionId, model, "quota_exhausted", cappedCooldown);
+    lockExactModel("antigravity", connectionId, model, "quota_exhausted", cappedCooldown);
+    lockExactModel("agy", connectionId, "claude-opus-5-5-high", "quota_exhausted", cappedCooldown);
+    lockExactModel("antigravity", connectionId, "claude-opus-5-5-high", "quota_exhausted", cappedCooldown);
+    lockExactModel("agy", connectionId, "claude-sonnet-5-5-high", "quota_exhausted", cappedCooldown);
+    lockExactModel("antigravity", connectionId, "claude-sonnet-5-5-high", "quota_exhausted", cappedCooldown);
+
+    persistAntigravityFamilyCooldownIfQuota({
+      provider: "agy",
+      connectionId,
+      model: "claude-family-lock",
+      cooldownMs: cappedCooldown,
+      reason: "quota_exhausted",
+    });
     return true;
   }
-  lockAntigravityFamilyModel(connectionId, model, "quota_exhausted", retryAfterMs);
+
+  // Non-Claude (Gemini):
+  lockAntigravityFamilyModel(connectionId, model, "quota_exhausted", cappedCooldown);
   persistAntigravityFamilyCooldownIfQuota({
     provider: "agy",
     connectionId,
     model,
-    cooldownMs: retryAfterMs,
+    cooldownMs: cappedCooldown,
     reason: "quota_exhausted",
   });
   return true;

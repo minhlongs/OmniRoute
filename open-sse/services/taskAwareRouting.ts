@@ -1403,21 +1403,21 @@ export function scoreModelForTask(
     return 500;
   }
 
-  // ── 1b. ANTIGRAVITY CLAUDE 5.5 = #3 BACKUP TIER BEHIND ZUNEF ─────────────
-  // Zunef Opus/Sonnet 5.5 stay #1/#2 (1500/1450). When Zunef is slow/429/timeout the combo
-  // falls to the same Claude 5.5 family served by Antigravity accounts (priority order
-  // billwill+longtho -> cashback -> ntnha via connection priority) BEFORE any Argon (<=1350).
+  // ── 1b. ANTIGRAVITY CLAUDE 5.5 = #1 PRIMARY WORKHORSE AHEAD OF ZUNEF ─────────────
+  // Antigravity Claude 5.5 (agy and antigravity) is #1 Primary (>1500), ahead of Zunef (1500/1450).
+  // Burns quota across slot-farm accounts in parallel as fast as possible.
+  // When exhausted, falls back to Zunef Opus 5.5 (1500) -> Zunef Sonnet 5.5 (1450) -> Argon (<=1350).
   {
-    const agyClaude = /^(agy|antigravity)\/claude-(opus|sonnet)-5-5-(high|medium|low)$/.exec(modelLower);
+    const agyClaude = /^(agy|antigravity)\/claude-(opus|sonnet)-5-5(?:-(high|medium|low))?$/.exec(modelLower);
     if (agyClaude) {
-      const owner = agyClaude[1] === "agy" ? 5 : 0; // owner pool (agy) slightly ahead of slot-farm
+      const owner = agyClaude[1] === "agy" ? 5 : 0; // agy slightly ahead of antigravity
       const fam = agyClaude[2];
-      const eff = agyClaude[3];
+      const eff = agyClaude[3] || "high";
       const isRoutineLoop = reasons.some((r) => r.includes("tier3") || r.includes("tool-loop-workhorse"));
       const table: Record<string, number> = isRoutineLoop
-        ? { "sonnet-medium": 1435, "opus-medium": 1425, "sonnet-low": 1415, "sonnet-high": 1405, "opus-high": 1395, "opus-low": 1385 }
-        : { "opus-high": 1435, "sonnet-high": 1425, "opus-medium": 1415, "sonnet-medium": 1405, "opus-low": 1385, "sonnet-low": 1380 };
-      return (table[`${fam}-${eff}`] ?? 1370) + owner;
+        ? { "sonnet-medium": 1680, "opus-medium": 1660, "sonnet-low": 1640, "sonnet-high": 1620, "opus-high": 1600, "opus-low": 1580 }
+        : { "opus-high": 1680, "sonnet-high": 1660, "opus-medium": 1640, "sonnet-medium": 1620, "opus-low": 1580, "sonnet-low": 1560 };
+      return (table[fam + '-' + eff] ?? 1550) + owner;
     }
   }
 
@@ -1519,6 +1519,9 @@ export function reorderByTaskWeight(
   const reordered = scored
     .sort((a, b) => {
       if (b.score !== a.score) return b.score - a.score;
+      const aIsAgClaude = /^(agy|antigravity)\/claude-(opus|sonnet)-5-5/i.test(a.t.modelStr);
+      const bIsAgClaude = /^(agy|antigravity)\/claude-(opus|sonnet)-5-5/i.test(b.t.modelStr);
+      if (aIsAgClaude !== bIsAgClaude) return aIsAgClaude ? -1 : 1;
       const aIsZunef = a.t.modelStr.toLowerCase().startsWith("zunef/");
       const bIsZunef = b.t.modelStr.toLowerCase().startsWith("zunef/");
       if (aIsZunef !== bIsZunef) return aIsZunef ? -1 : 1;

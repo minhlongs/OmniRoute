@@ -1153,7 +1153,7 @@ async function handleChatImplementation(
             comboStepId: target?.stepId || null,
             comboExecutionKey: target?.executionKey || target?.stepId || null,
             initialTokensCompressed: target?.initialTokensCompressed ?? null,
-            skipUpstreamRetry: (m.startsWith("antigravity/") || m.startsWith("agy/")) ? false : (target?.failoverBeforeRetry ?? false),
+            skipUpstreamRetry: target?.failoverBeforeRetry ?? false,
             allowRateLimitedConnection: target?.allowRateLimitedConnection === true,
             preselectedCredentials: (() => {
               const key = getComboCredentialCacheKey(m, target);
@@ -1457,7 +1457,7 @@ async function handleSingleModelChat(
             allowedConnectionIds: null,
             comboStepId: null,
             comboExecutionKey: null,
-            skipUpstreamRetry: (modelStr.startsWith("antigravity/") || modelStr.startsWith("agy/")) ? false : (resolvedTarget?.failoverBeforeRetry === true),
+            skipUpstreamRetry: resolvedTarget?.failoverBeforeRetry === true,
             allowRateLimitedConnection: resolvedTarget?.allowRateLimitedConnection === true,
             providerId: resolvedTarget?.providerId ?? (resolvedTarget as any)?.provider ?? null,
             correlationId: runtimeOptions?.correlationId ?? null,
@@ -2034,7 +2034,7 @@ async function handleSingleModelChat(
       }
 
       const isAntigravityStreamReadinessFailure =
-        provider === "antigravity" &&
+        (provider === "antigravity" || provider === "agy") &&
         (result.errorCode === "STREAM_READINESS_TIMEOUT" ||
           result.errorCode === "STREAM_EARLY_EOF" ||
           result.errorType === "stream_timeout" ||

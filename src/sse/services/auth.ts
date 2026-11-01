@@ -1,3 +1,4 @@
+const providerRoundRobinCursor = new Map<string, number>();
 import { randomUUID } from "crypto";
 import { nodeTypeFromId } from "@/lib/db/providerNodeSelect";
 import { extractGoogApiKeyHeader } from "./googApiKeyAuth.ts";
@@ -193,6 +194,7 @@ export interface CredentialSelectionOptions {
   sessionKey?: string | null;
   sessionAffinityTtlMs?: number | null;
   reserveOAuthSession?: boolean;
+  skipOAuthSelectionSideEffects?: boolean;
   lease?: CredentialLeaseSelectionContext;
   materializeCredentials?: boolean;
   deferLeaseClaim?: boolean;
@@ -1007,8 +1009,12 @@ type DeferredLeaseSelection = {
 function planLastUsedCommit(
   connection: ProviderConnectionView,
   connections: ProviderConnectionView[],
-  count: number
+  count: number,
+  skipOAuthSelectionSideEffects = false
 ) {
+  if (skipOAuthSelectionSideEffects && connection.authType === "oauth") {
+    return () => {};
+  }
   const now = new Date().toISOString();
   return async () => {
     await touchConnectionLastUsed(connection.id, count);
@@ -1512,6 +1518,20 @@ export async function getProviderCredentials(
       return true;
     });
 
+    if (availableConnections.length === 0 && (provider === "antigravity" || provider === "agy")) {
+      const isClaude = requestedModel && /claude/i.test(requestedModel);
+      if (!isClaude) {
+        const failOpenCandidates = connections.filter((c) => {
+          if (excludedConnectionIds.has(c.id)) return false;
+          const st = connectionFilterStatus.get(c.id);
+          return st === "modelLocked" || st === "rateLimited";
+        });
+        if (failOpenCandidates.length > 0) {
+          log.warn("AUTH", `${provider} | [FAIL-OPEN-ANTIGRAVITY] retaining ${failOpenCandidates.length} cooldown/locked account(s) for live fallback`);
+          availableConnections = failOpenCandidates;
+        }
+      }
+    }
     if (provider === "antigravity" || provider === "agy") {
       const projectAwareConnections =
         preferAntigravityConnectionsWithStoredProject(availableConnections);
@@ -1742,6 +1762,13 @@ export async function getProviderCredentials(
       );
     }
 
+    if (policyEligibleConnections.length === 0 && peakHourEligibleConnections.length > 0 && (provider === "antigravity" || provider === "agy")) {
+      const isClaude = requestedModel && /claude/i.test(requestedModel);
+      if (!isClaude) {
+        log.warn("AUTH", `${provider} | [FAIL-OPEN-ANTIGRAVITY] bypassing cached quota policy filter (${blockedByPolicy.length} connections)`);
+        policyEligibleConnections = peakHourEligibleConnections;
+      }
+    }
     if (policyEligibleConnections.length === 0 && availableConnections.length > 0) {
       const transportUnavailable = connections.filter(
         (connection) =>
@@ -1812,6 +1839,13 @@ export async function getProviderCredentials(
       );
     }
 
+    if (withQuota.length === 0 && exhaustedQuota.length > 0 && (provider === "antigravity" || provider === "agy")) {
+      const isClaude = requestedModel && /claude/i.test(requestedModel);
+      if (!isClaude) {
+        log.warn("AUTH", `${provider} | [FAIL-OPEN-ANTIGRAVITY] bypassing cached quota exhaustion (${exhaustedQuota.length} connections)`);
+        withQuota.push(...exhaustedQuota);
+      }
+    }
     if (withQuota.length === 0 && exhaustedQuota.length > 0) {
       // All remaining eligible accounts are exhausted
       const earliestResetAt = getEarliestFutureDate(
@@ -1923,8 +1957,23 @@ export async function getProviderCredentials(
       // If excluding account(s) (fallback scenario), skip sticky logic and go straight to LRU.
       // This prevents same-model retries from getting stuck on a failed account.
       const isFallbackScenario = excludeConnectionId !== null || excludedConnectionIds.size > 0;
+      const isAntigravityPool = provider === "antigravity" || provider === "agy";
 
-      if (!isFallbackScenario) {
+      if (stickyLimit <= 1 || isFallbackScenario || isAntigravityPool) {
+        // Balanced spread across healthy accounts via in-memory atomic cursor
+        const cursorKey = "rr:" + provider + ":" + (requestedModel || "all");
+        const currentCursor = providerRoundRobinCursor.get(cursorKey) ?? 0;
+        const pickedIndex = currentCursor % orderedConnections.length;
+        connection = orderedConnections[pickedIndex];
+        providerRoundRobinCursor.set(cursorKey, pickedIndex + 1);
+        log.info(
+          "AUTH",
+          provider + " round-robin: picked " + connection.id?.slice(0, 8) + " (" + ((connection as any).name || (connection as any).email) + ") [" + (pickedIndex + 1) + "/" + orderedConnections.length + "]"
+        );
+        const commit = planLastUsedCommit(connection, connectionsRaw, 1, options.skipOAuthSelectionSideEffects === true);
+        if (options.lease) commitSelectionSideEffects = commit;
+        else await commit();
+      } else if (!isFallbackScenario) {
         // Sort by lastUsed (most recent first) to find current candidate
         const byRecency = [...orderedConnections].sort((a: any, b: any) => {
           if (!a.lastUsedAt && !b.lastUsedAt) return (a.priority || 999) - (b.priority || 999);
@@ -1945,7 +1994,7 @@ export async function getProviderCredentials(
           );
           // Update lastUsedAt and increment count (await to ensure persistence)
           const nextCount = (connection.consecutiveUseCount || 0) + 1;
-          const commit = planLastUsedCommit(connection, connectionsRaw, nextCount);
+          const commit = planLastUsedCommit(connection, connectionsRaw, nextCount, options.skipOAuthSelectionSideEffects === true);
           if (options.lease) commitSelectionSideEffects = commit;
           else await commit();
         } else {
@@ -1970,7 +2019,7 @@ export async function getProviderCredentials(
           );
 
           // Update lastUsedAt and reset count to 1 (await to ensure persistence)
-          const commit = planLastUsedCommit(connection, connectionsRaw, 1);
+          const commit = planLastUsedCommit(connection, connectionsRaw, 1, options.skipOAuthSelectionSideEffects === true);
           if (options.lease) commitSelectionSideEffects = commit;
           else await commit();
         }
@@ -1995,7 +2044,7 @@ export async function getProviderCredentials(
         );
 
         // Update lastUsedAt and reset count to 1 (await to ensure persistence)
-        const commit = planLastUsedCommit(connection, connectionsRaw, 1);
+        const commit = planLastUsedCommit(connection, connectionsRaw, 1, options.skipOAuthSelectionSideEffects === true);
         if (options.lease) commitSelectionSideEffects = commit;
         else await commit();
       }
@@ -2045,7 +2094,7 @@ export async function getProviderCredentials(
       // call, forever — the opposite of the documented behaviour, and silent.
       // round-robin is the only other strategy that reads lastUsedAt and it has
       // always committed here; least-used now does the same.
-      const commit = planLastUsedCommit(connection, connectionsRaw, 1);
+      const commit = planLastUsedCommit(connection, connectionsRaw, 1, options.skipOAuthSelectionSideEffects === true);
       if (options.lease) commitSelectionSideEffects = commit;
       else await commit();
     } else if (strategy === "cost-optimized") {
@@ -2072,7 +2121,11 @@ export async function getProviderCredentials(
       connection = orderedConnections[0];
     }
 
-    if (options.reserveOAuthSession === true && connection?.authType === "oauth") {
+    if (
+      options.reserveOAuthSession === true &&
+      connection?.authType === "oauth" &&
+      !affinityConnection // keep sticky session pin: switching accounts busts upstream prefix cache
+    ) {
       const selectedPriority = connection.priority || 999;
       const selectedAvailability = getOAuthSessionAvailability(connection.id, options.sessionKey);
       const moreAvailablePeer = [...orderedConnections]
