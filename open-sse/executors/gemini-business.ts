@@ -30,6 +30,12 @@
 import { createHash, randomUUID } from "node:crypto";
 import { BaseExecutor, mergeAbortSignals, type ExecuteInput } from "./base.ts";
 import { makeExecutorErrorResult as makeErrorResult } from "../utils/error.ts";
+import { buildGeminiToolResponse } from "./gemini-web.ts";
+import {
+  checkGeminiWebLabRequestGuards,
+  composeGeminiFlatPrompt,
+} from "./gemini-web-lab/guards.ts";
+import { WrbFrameAccumulator } from "./gemini-web-lab/wrbParser.ts";
 
 const GEMINI_BUSINESS_FETCH_TIMEOUT_MS = 60_000;
 
@@ -75,7 +81,13 @@ export class GeminiBusinessExecutor extends BaseExecutor {
 
   async execute(input: ExecuteInput) {
     const { model, body, stream: wantStream, credentials, signal } = input;
-    const requestBody = body as Record<string, unknown>;
+    const requestBody = (body && typeof body === "object" ? body : {}) as Record<string, unknown>;
+    const requestedModel = (model as string) || DEFAULT_MODEL;
+
+    const guardResp = checkGeminiWebLabRequestGuards(requestedModel, requestBody, false);
+    if (guardResp) {
+      return { response: guardResp, url: DEFAULT_ENTRY_URL, headers: {}, transformedBody: body };
+    }
 
     // Extract cookies from credentials — check apiKey/cookie first, then
     // try each __Secure-1PSID* key in providerSpecificData individually.
@@ -98,10 +110,13 @@ export class GeminiBusinessExecutor extends BaseExecutor {
       DEFAULT_ENTRY_URL;
     const { baseOrigin, pathPrefix } = parseEntryUrl(entryUrl);
 
-    // Extract prompt from OpenAI-format messages
-    const messages = (requestBody.messages as Array<{ role: string; content: string }>) || [];
-    const lastUserMsg = messages.filter((m) => m.role === "user").pop();
-    const prompt = extractTextContent(lastUserMsg?.content);
+    // Extract multi-turn + tool-aware prompt from OpenAI-format messages (#8371, #7286)
+    const rawMessages = (requestBody.messages as Array<{ role: string; content: unknown }>) || [];
+    const normalizedMessages = rawMessages.map((m) => ({
+      role: m.role,
+      content: extractTextContent(m.content),
+    }));
+    const { prompt, hasTools } = composeGeminiFlatPrompt(requestBody, normalizedMessages);
     if (!prompt) {
       return makeErrorResult(
         400,
@@ -111,8 +126,7 @@ export class GeminiBusinessExecutor extends BaseExecutor {
       );
     }
 
-    // Resolve model and its MODE_CATEGORY
-    const requestedModel = (model as string) || DEFAULT_MODEL;
+    // Resolve model MODE_CATEGORY
     const modelCategory = MODEL_CATEGORY_MAP[requestedModel] ?? DEFAULT_MODEL_CATEGORY;
 
     // Build the StreamGenerate form payload (f.req=<JSON inner array>)
@@ -196,6 +210,23 @@ export class GeminiBusinessExecutor extends BaseExecutor {
       );
     }
 
+    if (hasTools) {
+      const toolResp = await buildGeminiToolResponse(
+        text,
+        requestBody.tools,
+        Boolean(wantStream),
+        requestedModel,
+        `chatcmpl-gbiz-${Date.now()}`,
+        Math.floor(Date.now() / 1000)
+      );
+      return {
+        response: toolResp,
+        url: streamUrl,
+        headers: {},
+        transformedBody: body,
+      };
+    }
+
     if (wantStream) {
       return {
         response: buildStreamingResponse(text, requestedModel),
@@ -258,32 +289,14 @@ function buildInnerArray(prompt: string, modelCategory: number): unknown[] {
  *   [["wrb.fr", null, "<JSON string>"]]
  *
  * The JSON string contains nested array: inner[4][0][1] = ["text chunks"]
- * We concatenate all text chunks from all wrb.fr lines.
+ * Cumulative snapshots (#7163) are deduplicated via WrbFrameAccumulator,
+ * while disjoint chunks remain concatenated.
  */
 export function parseStreamResponse(raw: string): string {
-  const lines = raw.split("\n");
-  const textChunks: string[] = [];
-
-  for (const rawLine of lines) {
-    const line = rawLine.trim();
-    if (!line || line === ")]}'" || /^\d+$/.test(line)) continue;
-    if (!line.includes("wrb.fr")) continue;
-    try {
-      const arr = JSON.parse(line);
-      if (!Array.isArray(arr) || !arr[0] || arr[0][0] !== "wrb.fr") continue;
-      const payload = arr[0]?.[2];
-      if (typeof payload !== "string") continue;
-      const inner = JSON.parse(payload);
-      const responseArray = inner?.[4]?.[0]?.[1];
-      if (!Array.isArray(responseArray)) continue;
-      const chunkText = responseArray.filter((c: unknown) => typeof c === "string").join("");
-      if (chunkText) textChunks.push(chunkText);
-    } catch {
-      // Skip unparseable lines (binary chunks, etc.)
-    }
-  }
-
-  return textChunks.join("");
+  const acc = new WrbFrameAccumulator();
+  acc.pushChunk(raw);
+  acc.flush();
+  return acc.getFullText();
 }
 
 function buildJsonResponse(text: string, model: string): Response {
