@@ -121,7 +121,7 @@ def make_step(step_id, model, provider_id, label, allowed_conns, timeout_ms):
 def patch_combo_config(cfg):
     if not isinstance(cfg, dict):
         cfg = {}
-    cfg["targetTimeoutMs"] = 45000
+    cfg["targetTimeoutMs"] = 120000
     cfg["failoverBeforeRetry"] = True
     cfg["failoverBeforeRetryExplicit"] = True
     cfg["compatFilterFailOpen"] = True
@@ -141,20 +141,20 @@ for c in opus_combos:
     if row:
         cd = json.loads(row[0])
         models = [
-            make_step(f"{c}-agy-opus-5-5-high", "agy/claude-opus-5-5-high", "agy", "Antigravity Claude Opus 5.5 High (#1 Primary)", ALL_AG_CONNS, 45000),
-            make_step(f"{c}-antigravity-opus-5-5-high", "antigravity/claude-opus-5-5-high", "antigravity", "Antigravity Claude Opus 5.5 High Direct", ALL_AG_CONNS, 45000),
-            make_step(f"{c}-agy-sonnet-5-5-high", "agy/claude-sonnet-5-5-high", "agy", "Antigravity Claude Sonnet 5.5 High", ALL_AG_CONNS, 45000),
-            make_step(f"{c}-antigravity-sonnet-5-5-high", "antigravity/claude-sonnet-5-5-high", "antigravity", "Antigravity Claude Sonnet 5.5 High Direct", ALL_AG_CONNS, 45000),
-            make_step(f"{c}-agy-opus-5-5-medium", "agy/claude-opus-5-5-medium", "agy", "Antigravity Claude Opus 5.5 Medium", ALL_AG_CONNS, 45000),
-            make_step(f"{c}-agy-sonnet-5-5-medium", "agy/claude-sonnet-5-5-medium", "agy", "Antigravity Claude Sonnet 5.5 Medium", ALL_AG_CONNS, 45000),
+            make_step(f"{c}-agy-opus-5-5-high", "agy/claude-opus-5-5-high", "agy", "Antigravity Claude Opus 5.5 High (#1 Primary)", ALL_AG_CONNS, 120000),
+            make_step(f"{c}-antigravity-opus-5-5-high", "antigravity/claude-opus-5-5-high", "antigravity", "Antigravity Claude Opus 5.5 High Direct", ALL_AG_CONNS, 120000),
+            make_step(f"{c}-agy-sonnet-5-5-high", "agy/claude-sonnet-5-5-high", "agy", "Antigravity Claude Sonnet 5.5 High", ALL_AG_CONNS, 120000),
+            make_step(f"{c}-antigravity-sonnet-5-5-high", "antigravity/claude-sonnet-5-5-high", "antigravity", "Antigravity Claude Sonnet 5.5 High Direct", ALL_AG_CONNS, 120000),
+            make_step(f"{c}-agy-opus-5-5-medium", "agy/claude-opus-5-5-medium", "agy", "Antigravity Claude Opus 5.5 Medium", ALL_AG_CONNS, 120000),
+            make_step(f"{c}-agy-sonnet-5-5-medium", "agy/claude-sonnet-5-5-medium", "agy", "Antigravity Claude Sonnet 5.5 Medium", ALL_AG_CONNS, 120000),
             make_step(f"{c}-zunef-opus-5-5", "zunef/claude-opus-5-5", ZUNEF_PROV_ID, "Zunef Claude Opus 5.5 (Heavy Fallback #1)", [ZUNEF_CONN_ID], 60000),
             make_step(f"{c}-zunef-sonnet-5-5", "zunef/claude-sonnet-5-5", ZUNEF_PROV_ID, "Zunef Claude Sonnet 5.5 (Fast Fallback #2)", [ZUNEF_CONN_ID], 45000),
-            make_step(f"{c}-agy-argon-high", "agy/gemini-4-argon-high", "agy", "Owner Argon High Fallback", ALL_AG_CONNS, 45000),
-            make_step(f"{c}-antigravity-argon-high", "antigravity/gemini-4-argon-high", "antigravity", "Slot-Farm Argon High Direct", ALL_AG_CONNS, 45000),
-            make_step(f"{c}-agy-argon-medium", "agy/gemini-4-argon-medium", "agy", "Owner Argon Medium Fallback", ALL_AG_CONNS, 45000),
-            make_step(f"{c}-antigravity-argon-medium", "antigravity/gemini-4-argon-medium", "antigravity", "Slot-Farm Argon Medium Direct", ALL_AG_CONNS, 45000),
-            make_step(f"{c}-agy-argon-low", "agy/gemini-4-argon-low", "agy", "Owner Argon Low Fallback", ALL_AG_CONNS, 35000),
-            make_step(f"{c}-antigravity-argon-low", "antigravity/gemini-4-argon-low", "antigravity", "Slot-Farm Argon Low Direct", ALL_AG_CONNS, 35000)
+            make_step(f"{c}-agy-argon-high", "agy/gemini-4-argon-high", "agy", "Owner Argon High Fallback", ALL_AG_CONNS, 120000),
+            make_step(f"{c}-antigravity-argon-high", "antigravity/gemini-4-argon-high", "antigravity", "Slot-Farm Argon High Direct", ALL_AG_CONNS, 120000),
+            make_step(f"{c}-agy-argon-medium", "agy/gemini-4-argon-medium", "agy", "Owner Argon Medium Fallback", ALL_AG_CONNS, 120000),
+            make_step(f"{c}-antigravity-argon-medium", "antigravity/gemini-4-argon-medium", "antigravity", "Slot-Farm Argon Medium Direct", ALL_AG_CONNS, 120000),
+            make_step(f"{c}-agy-argon-low", "agy/gemini-4-argon-low", "agy", "Owner Argon Low Fallback", ALL_AG_CONNS, 120000),
+            make_step(f"{c}-antigravity-argon-low", "antigravity/gemini-4-argon-low", "antigravity", "Slot-Farm Argon Low Direct", ALL_AG_CONNS, 120000)
         ]
         cd["models"] = models
         cd["strategy"] = "task-aware"
@@ -173,20 +173,20 @@ for c in sonnet_combos:
     if row:
         cd = json.loads(row[0])
         models = [
-            make_step(f"{c}-agy-sonnet-5-5-high", "agy/claude-sonnet-5-5-high", "agy", "Antigravity Claude Sonnet 5.5 High (#1 Primary)", ALL_AG_CONNS, 45000),
-            make_step(f"{c}-antigravity-sonnet-5-5-high", "antigravity/claude-sonnet-5-5-high", "antigravity", "Antigravity Claude Sonnet 5.5 High Direct", ALL_AG_CONNS, 45000),
-            make_step(f"{c}-agy-opus-5-5-high", "agy/claude-opus-5-5-high", "agy", "Antigravity Claude Opus 5.5 High", ALL_AG_CONNS, 45000),
-            make_step(f"{c}-antigravity-opus-5-5-high", "antigravity/claude-opus-5-5-high", "antigravity", "Antigravity Claude Opus 5.5 High Direct", ALL_AG_CONNS, 45000),
-            make_step(f"{c}-agy-sonnet-5-5-medium", "agy/claude-sonnet-5-5-medium", "agy", "Antigravity Claude Sonnet 5.5 Medium", ALL_AG_CONNS, 45000),
-            make_step(f"{c}-agy-opus-5-5-medium", "agy/claude-opus-5-5-medium", "agy", "Antigravity Claude Opus 5.5 Medium", ALL_AG_CONNS, 45000),
+            make_step(f"{c}-agy-sonnet-5-5-high", "agy/claude-sonnet-5-5-high", "agy", "Antigravity Claude Sonnet 5.5 High (#1 Primary)", ALL_AG_CONNS, 120000),
+            make_step(f"{c}-antigravity-sonnet-5-5-high", "antigravity/claude-sonnet-5-5-high", "antigravity", "Antigravity Claude Sonnet 5.5 High Direct", ALL_AG_CONNS, 120000),
+            make_step(f"{c}-agy-opus-5-5-high", "agy/claude-opus-5-5-high", "agy", "Antigravity Claude Opus 5.5 High", ALL_AG_CONNS, 120000),
+            make_step(f"{c}-antigravity-opus-5-5-high", "antigravity/claude-opus-5-5-high", "antigravity", "Antigravity Claude Opus 5.5 High Direct", ALL_AG_CONNS, 120000),
+            make_step(f"{c}-agy-sonnet-5-5-medium", "agy/claude-sonnet-5-5-medium", "agy", "Antigravity Claude Sonnet 5.5 Medium", ALL_AG_CONNS, 120000),
+            make_step(f"{c}-agy-opus-5-5-medium", "agy/claude-opus-5-5-medium", "agy", "Antigravity Claude Opus 5.5 Medium", ALL_AG_CONNS, 120000),
             make_step(f"{c}-zunef-sonnet-5-5", "zunef/claude-sonnet-5-5", ZUNEF_PROV_ID, "Zunef Claude Sonnet 5.5 (Fast Fallback #1)", [ZUNEF_CONN_ID], 45000),
             make_step(f"{c}-zunef-opus-5-5", "zunef/claude-opus-5-5", ZUNEF_PROV_ID, "Zunef Claude Opus 5.5 (Heavy Fallback #2)", [ZUNEF_CONN_ID], 60000),
-            make_step(f"{c}-agy-argon-medium", "agy/gemini-4-argon-medium", "agy", "Owner Argon Medium Fallback", ALL_AG_CONNS, 45000),
-            make_step(f"{c}-antigravity-argon-medium", "antigravity/gemini-4-argon-medium", "antigravity", "Slot-Farm Argon Medium Direct", ALL_AG_CONNS, 45000),
-            make_step(f"{c}-agy-argon-high", "agy/gemini-4-argon-high", "agy", "Owner Argon High Fallback", ALL_AG_CONNS, 45000),
-            make_step(f"{c}-antigravity-argon-high", "antigravity/gemini-4-argon-high", "antigravity", "Slot-Farm Argon High Direct", ALL_AG_CONNS, 45000),
-            make_step(f"{c}-agy-argon-low", "agy/gemini-4-argon-low", "agy", "Owner Argon Low Fallback", ALL_AG_CONNS, 35000),
-            make_step(f"{c}-antigravity-argon-low", "antigravity/gemini-4-argon-low", "antigravity", "Slot-Farm Argon Low Direct", ALL_AG_CONNS, 35000)
+            make_step(f"{c}-agy-argon-medium", "agy/gemini-4-argon-medium", "agy", "Owner Argon Medium Fallback", ALL_AG_CONNS, 120000),
+            make_step(f"{c}-antigravity-argon-medium", "antigravity/gemini-4-argon-medium", "antigravity", "Slot-Farm Argon Medium Direct", ALL_AG_CONNS, 120000),
+            make_step(f"{c}-agy-argon-high", "agy/gemini-4-argon-high", "agy", "Owner Argon High Fallback", ALL_AG_CONNS, 120000),
+            make_step(f"{c}-antigravity-argon-high", "antigravity/gemini-4-argon-high", "antigravity", "Slot-Farm Argon High Direct", ALL_AG_CONNS, 120000),
+            make_step(f"{c}-agy-argon-low", "agy/gemini-4-argon-low", "agy", "Owner Argon Low Fallback", ALL_AG_CONNS, 120000),
+            make_step(f"{c}-antigravity-argon-low", "antigravity/gemini-4-argon-low", "antigravity", "Slot-Farm Argon Low Direct", ALL_AG_CONNS, 120000)
         ]
         cd["models"] = models
         cd["strategy"] = "task-aware"
@@ -201,13 +201,13 @@ for c in fast_combos:
     if row:
         cd = json.loads(row[0])
         models = [
-            make_step(f"{c}-agy-sonnet-5-5-medium", "agy/claude-sonnet-5-5-medium", "agy", "Antigravity Claude Sonnet 5.5 Medium (#1 Primary)", ALL_AG_CONNS, 35000),
-            make_step(f"{c}-antigravity-sonnet-5-5-low", "antigravity/claude-sonnet-5-5-low", "antigravity", "Antigravity Claude Sonnet 5.5 Low Direct", ALL_AG_CONNS, 35000),
+            make_step(f"{c}-agy-sonnet-5-5-medium", "agy/claude-sonnet-5-5-medium", "agy", "Antigravity Claude Sonnet 5.5 Medium (#1 Primary)", ALL_AG_CONNS, 120000),
+            make_step(f"{c}-antigravity-sonnet-5-5-low", "antigravity/claude-sonnet-5-5-low", "antigravity", "Antigravity Claude Sonnet 5.5 Low Direct", ALL_AG_CONNS, 120000),
             make_step(f"{c}-zunef-haiku-4-5", "zunef/claude-haiku-4-5", ZUNEF_PROV_ID, "Zunef Claude Haiku 4.5 Fallback", [ZUNEF_CONN_ID], 35000),
             make_step(f"{c}-zunef-sonnet-5-5", "zunef/claude-sonnet-5-5", ZUNEF_PROV_ID, "Zunef Claude Sonnet 5.5 Fallback", [ZUNEF_CONN_ID], 45000),
-            make_step(f"{c}-agy-flash-38-high", "agy/gemini-3.8-flash-high", "agy", "Owner Gemini 3.8 Flash High", ALL_AG_CONNS, 35000),
-            make_step(f"{c}-antigravity-flash-38-tiered", "antigravity/gemini-3.8-flash-tiered", "antigravity", "Slot-Farm Flash Tiered", ALL_AG_CONNS, 35000),
-            make_step(f"{c}-agy-argon-low", "agy/gemini-4-argon-low", "agy", "Owner Argon Low Fallback", ALL_AG_CONNS, 35000)
+            make_step(f"{c}-agy-flash-38-high", "agy/gemini-3.8-flash-high", "agy", "Owner Gemini 3.8 Flash High", ALL_AG_CONNS, 120000),
+            make_step(f"{c}-antigravity-flash-38-tiered", "antigravity/gemini-3.8-flash-tiered", "antigravity", "Slot-Farm Flash Tiered", ALL_AG_CONNS, 120000),
+            make_step(f"{c}-agy-argon-low", "agy/gemini-4-argon-low", "agy", "Owner Argon Low Fallback", ALL_AG_CONNS, 120000)
         ]
         cd["models"] = models
         cd["strategy"] = "task-aware"

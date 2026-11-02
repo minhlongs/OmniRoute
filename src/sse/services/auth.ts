@@ -1958,12 +1958,15 @@ export async function getProviderCredentials(
         // and distribute requests evenly via providerRoundRobinCursor.
         const cursorKey = "rr:" + provider + ":claude";
         const currentCursor = providerRoundRobinCursor.get(cursorKey) ?? 0;
-        const pickedIndex = currentCursor % orderedConnections.length;
-        connection = orderedConnections[pickedIndex];
+        // Stable order (by id): orderedConnections is re-sorted per call by OAuth session
+        // availability, which made the cursor land on the same account repeatedly.
+        const rrConnections = [...orderedConnections].sort((a, b) => String(a.id).localeCompare(String(b.id)));
+        const pickedIndex = currentCursor % rrConnections.length;
+        connection = rrConnections[pickedIndex];
         providerRoundRobinCursor.set(cursorKey, pickedIndex + 1);
         log.info(
           "AUTH",
-          `${provider} claude round-robin: picked ${connection.id?.slice(0, 8)} (${(connection as any).name || (connection as any).email}) [${pickedIndex + 1}/${orderedConnections.length}]`
+          `${provider} claude round-robin: picked ${connection.id?.slice(0, 8)} (${(connection as any).name || (connection as any).email}) [${pickedIndex + 1}/${rrConnections.length}]`
         );
       } else {
         // Non-Claude (Gemini 4 Argon, etc.): Respect connection priority order (1 -> 2 -> 3).
@@ -1971,7 +1974,10 @@ export async function getProviderCredentials(
         // cashback (priority 2) only if priority 1 is exhausted/cooldown;
         // ntnha (priority 3) only if priority 1 & 2 are exhausted/cooldown.
         const minPriority = Math.min(...orderedConnections.map((c) => c.priority ?? 999));
-        const tierCandidates = orderedConnections.filter((c) => (c.priority ?? 999) === minPriority);
+        // Stable order (by id) so the cursor really alternates billwill <-> longtho in tier 1 (hmr2).
+        const tierCandidates = orderedConnections
+          .filter((c) => (c.priority ?? 999) === minPriority)
+          .sort((a, b) => String(a.id).localeCompare(String(b.id)));
         const cursorKey = "rr:" + provider + ":" + (requestedModel || "non-claude");
         const currentCursor = providerRoundRobinCursor.get(cursorKey) ?? 0;
         const pickedIndex = currentCursor % tierCandidates.length;
