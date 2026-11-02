@@ -1338,7 +1338,7 @@ export function modelPowerScore(modelStr: string): number {
     score += 45;
   }
   // Tier 2: Heavy Workhorse (Power 121) -> "Gươm sắc" (Carbon Sonnet & Argon Medium)
-  else if (/\b(sol|sonnet-5|sonnet-4|argon-medium|gemini-4-medium|deepseek-v4-pro|opus|glm-5|codex)\b/i.test(id)) {
+  else if (/\b(sol|sonnet-5|sonnet-4|argon-medium|gemini-4-medium|gemini-4-argon|deepseek-v4-pro|opus|glm-5|codex)\b/i.test(id)) {
     score += 32;
   }
   // Tier 3: Standard Workhorse (Power 104) -> "Dao thái thịt" (Gemini 3.8 Flash High/Tiered/Medium & Argon Low)
@@ -1440,6 +1440,8 @@ export function scoreModelForTask(
     if (modelLower === "antigravity/gemini-4-argon-high" || modelLower === "gemini-4-argon-high") return 1340;
     if (modelLower === "agy/gemini-4-argon-medium") return 900;
     if (modelLower === "antigravity/gemini-4-argon-medium" || modelLower === "gemini-4-argon-medium") return 890;
+    if (modelLower === "gemini-web/gemini-4-argon-high") return 1335;
+    if (modelLower === "gemini-web/gemini-4-argon") return 885;
     if (modelLower === "agy/gemini-4-argon-low") return 800;
     if (modelLower === "antigravity/gemini-4-argon-low" || modelLower === "gemini-4-argon-low") return 790;
     return 700;
@@ -1466,6 +1468,8 @@ export function scoreModelForTask(
     if (modelLower === "antigravity/gemini-4-argon-high" || modelLower === "gemini-4-argon-high") return 1340;
     if (modelLower === "agy/gemini-4-argon-medium") return 1150;
     if (modelLower === "antigravity/gemini-4-argon-medium" || modelLower === "gemini-4-argon-medium") return 1140;
+    if (modelLower === "gemini-web/gemini-4-argon-high") return 1335;
+    if (modelLower === "gemini-web/gemini-4-argon") return 1135;
     if (modelLower === "agy/gemini-4-argon-low") return 900;
     if (modelLower === "antigravity/gemini-4-argon-low" || modelLower === "gemini-4-argon-low") return 890;
     return 800;
@@ -1489,6 +1493,8 @@ export function scoreModelForTask(
     if (modelLower === "antigravity/gemini-4-argon-low" || modelLower === "gemini-4-argon-low") return 1280;
     if (modelLower === "agy/gemini-4-argon-medium") return 1180;
     if (modelLower === "antigravity/gemini-4-argon-medium" || modelLower === "gemini-4-argon-medium") return 1170;
+    if (modelLower === "gemini-web/gemini-4-argon") return 1285; // Unmetered workhorse for routine tool loops
+    if (modelLower === "gemini-web/gemini-4-argon-high") return 835;
     if (modelLower === "agy/gemini-4-argon-high") return 850; // Penalized!
     if (modelLower === "antigravity/gemini-4-argon-high" || modelLower === "gemini-4-argon-high") return 840;
     return 800;
@@ -1509,6 +1515,8 @@ export function scoreModelForTask(
   if (modelLower === "antigravity/gemini-4-argon-medium" || modelLower === "gemini-4-argon-medium") return 1270;
   if (modelLower === "agy/gemini-4-argon-low") return 1150;
   if (modelLower === "antigravity/gemini-4-argon-low" || modelLower === "gemini-4-argon-low") return 1140;
+  if (modelLower === "gemini-web/gemini-4-argon") return 1265;
+  if (modelLower === "gemini-web/gemini-4-argon-high") return 1035;
   if (modelLower === "agy/gemini-4-argon-high") return 1050; // Backup
   if (modelLower === "antigravity/gemini-4-argon-high" || modelLower === "gemini-4-argon-high") return 1040;
 
@@ -1517,6 +1525,7 @@ export function scoreModelForTask(
   if (modelLower.startsWith("zunef/")) score += 500;
   else if (modelLower.startsWith("agy/")) score += 14;
   else if (modelLower.startsWith("antigravity/")) score += 10;
+  else if (modelLower.startsWith("gemini-web/")) score += 12;
   return score;
 }
 

@@ -90,6 +90,10 @@ const lazyExecutors: Record<string, () => Promise<BaseExecutor>> = {
   "gemini-business": () =>
     import("./gemini-business.ts").then((m) => new m.GeminiBusinessExecutor()),
   gembiz: () => import("./gemini-business.ts").then((m) => new m.GeminiBusinessExecutor()), // Alias
+  "gemini-web-lab": () =>
+    import("./gemini-web-lab.ts").then((m) => new m.GeminiWebLabExecutor()),
+  gweblab: () =>
+    import("./gemini-web-lab.ts").then((m) => new m.GeminiWebLabExecutor()), // Alias
   "blackbox-web": () => import("./blackbox-web.ts").then((m) => new m.BlackboxWebExecutor()),
   "bb-web": () => import("./blackbox-web.ts").then((m) => new m.BlackboxWebExecutor()), // Alias
   "muse-spark-web": () => import("./muse-spark-web.ts").then((m) => new m.MuseSparkWebExecutor()),
@@ -189,7 +193,9 @@ const lazyExecutors: Record<string, () => Promise<BaseExecutor>> = {
 // aliases fail at module load, exactly as loudly as a duplicate object key
 // would have failed at lint time. Instances materialize on first use (#11220).
 for (const [alias, load] of Object.entries(lazyExecutors)) {
-  registerLazyExecutor(alias, load);
+  if (!hasRegisteredExecutor(alias)) {
+    registerLazyExecutor(alias, load);
+  }
 }
 
 // #6699 — providers that exist ONLY as Cloud Agent task-API entries
@@ -246,3 +252,5 @@ export { registerExecutor, registerLazyExecutor, listExecutorAliases } from "./r
 // scripts/check/check-known-symbols.ts reads this export from the module.
 export { BaseExecutor } from "./base.ts";
 export { DefaultExecutor } from "./default.ts";
+
+export { GeminiWebLabExecutor } from "./gemini-web-lab.ts";

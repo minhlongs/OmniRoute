@@ -57,6 +57,10 @@ const SAFE_PUBLIC_ERROR_IDENTIFIERS = new Set([
   "auth_error",
   "bad_gateway",
   "bad_request",
+  "gemini_web_lab_disabled",
+  "non_loopback_lab_endpoint",
+  "unsupported_model_for_provider",
+  "gemini_web_unsupported_control",
   "bedrock_stream_error",
   "billing_error",
   "blackbox_auth_required",
@@ -564,6 +568,7 @@ export function errorResponse(
       status: statusCode,
       headers: {
         "Content-Type": "application/json",
+        ...(statusCode === 429 ? { "Retry-After": "30" } : {}),
       },
     }
   );
