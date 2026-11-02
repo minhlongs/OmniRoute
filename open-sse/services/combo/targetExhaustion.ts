@@ -427,23 +427,35 @@ function markConnectionLevelExhaustion(
       );
       return;
     }
-    if (isZunef && isOpus) {
-      // Measured: after a Zunef Opus timeout, Zunef Sonnet (separate upstream queue) often
-      // answers in seconds — keep the connection open so Sonnet is tried before Antigravity.
-      log.info(
-        tag,
-        `Zunef Opus target ${targetModelName} failed (${result.status}) — keeping connection & provider open for Zunef Sonnet fallback`
-      );
-      return;
-    }
-    sets.exhaustedConnections.add(`${provider}:${connId}`);
     if (isZunef) {
+      const isSonnet = /sonnet/i.test(String(targetModelName));
+      const isFable = /fable/i.test(String(targetModelName));
+
+      if (isOpus) sets.exhaustedProviders.add("zunef:opus");
+      else if (isSonnet) sets.exhaustedProviders.add("zunef:sonnet");
+      else if (isFable) sets.exhaustedProviders.add("zunef:fable");
+
+      const failedLegs = (sets.exhaustedProviders.has("zunef:opus") ? 1 : 0) +
+        (sets.exhaustedProviders.has("zunef:sonnet") ? 1 : 0) +
+        (sets.exhaustedProviders.has("zunef:fable") ? 1 : 0);
+
+      if (failedLegs < 3) {
+        log.info(
+          tag,
+          `Zunef target ${targetModelName} failed (${result.status}) — keeping connection & provider open for remaining Zunef fallback (legs failed: ${failedLegs}/3)`
+        );
+        return;
+      }
+
+      sets.exhaustedConnections.add(`${provider}:${connId}`);
       sets.exhaustedProviders.add(provider);
       sets.exhaustedProviders.add("zunef");
       sets.exhaustedProviders.add("zunef:sonnet");
+      sets.exhaustedProviders.add("zunef:fable");
+      sets.exhaustedProviders.add("zunef:opus");
       log.info(
         tag,
-        `Zunef target ${targetModelName} error (${result.status}) — Zunef exhausted, falling to Antigravity Claude 5.5 backup`
+        `Zunef target ${targetModelName} error (${result.status}) — all Zunef legs exhausted, falling to Antigravity / Argon backup`
       );
     } else {
       log.info(

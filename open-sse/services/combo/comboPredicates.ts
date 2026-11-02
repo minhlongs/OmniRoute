@@ -90,8 +90,12 @@ export function getExhaustedTargetSkipReason(
     (modelStr && modelStr.toLowerCase().includes("zunef"))
   );
   const isSonnet = /sonnet/i.test(String(modelStr || ""));
-  // Zunef Sonnet must never be skipped due to earlier Opus exhaustion!
+  const isFable = /fable/i.test(String(modelStr || ""));
+  // Zunef Sonnet and Fable must never be skipped due to earlier Opus/Sonnet exhaustion!
   if (isZunef && isSonnet && !exhaustedProviders.has("zunef:sonnet")) {
+    return null;
+  }
+  if (isZunef && isFable && !exhaustedProviders.has("zunef:fable")) {
     return null;
   }
   // #1731v2: skip targets whose provider:connection pair had a connection-level error.

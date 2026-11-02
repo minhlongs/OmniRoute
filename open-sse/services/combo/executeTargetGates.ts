@@ -89,8 +89,9 @@ export async function evaluateExecuteTargetGates(opts: {
 
   // 2. Instant failover skip for Zunef:
   // If Zunef timed out, stalled, rate limited, or was exhausted in an earlier target of this request,
-  // allow Sonnet 5.5 to try as fallback; only skip if Sonnet 5.5 has also failed!
+  // allow Sonnet 5.5 and Fable 5.1 to try as fallback; only skip if both have failed or Zunef is fully dead!
   const isSonnetTarget = /sonnet/i.test(modelStrLower);
+  const isFableTarget = /fable/i.test(modelStrLower);
   if (
     isZunefTarget &&
     (state.exhaustedProviders.has('zunef') ||
@@ -98,7 +99,9 @@ export async function evaluateExecuteTargetGates(opts: {
       [...state.exhaustedProviders].some((p) => String(p).toLowerCase().includes('zunef') || String(p).startsWith('anthropic-compatible')))
   ) {
     if (isSonnetTarget && !state.exhaustedProviders.has('zunef:sonnet')) {
-      deps.log.info('COMBO', '[ZUNEF-FALLBACK] Allowing ' + modelStr + ' as Sonnet fallback despite Opus failure');
+      deps.log.info('COMBO', '[ZUNEF-FALLBACK] Allowing ' + modelStr + ' as Sonnet fallback');
+    } else if (isFableTarget && !state.exhaustedProviders.has('zunef:fable')) {
+      deps.log.info('COMBO', '[ZUNEF-FALLBACK] Allowing ' + modelStr + ' as Fable fallback');
     } else {
       deps.log.info('COMBO', '[ZUNEF-INSTANT-FAILOVER] Skipping ' + modelStr + ' — Zunef provider already exhausted in this request');
       recordComboDecision(deps.traceInvocationId, {

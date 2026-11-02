@@ -1359,6 +1359,8 @@ const HARD_CAP_CHECKS = new Set(["vision"]);
  * Score a single model for a given task + capability requirements.
  * Higher score = better fit. Negative score = capability hard-miss.
  */
+let zunefAuxCursor = 0;
+
 export function scoreModelForTask(
   modelStr: string,
   task: TaskClassification = classifyTask({}),
@@ -1433,6 +1435,7 @@ export function scoreModelForTask(
   if (isAdvise) {
     if (modelLower === "zunef/claude-opus-5-5") return 1500;
     if (modelLower === "zunef/claude-sonnet-5-5") return 1450;
+    if (modelLower === "zunef/claude-fable-5-1" || modelLower === "zunef/claude-fable-5") return 1440;
     if (modelLower === "agy/gemini-4-argon-high") return 1350;
     if (modelLower === "antigravity/gemini-4-argon-high" || modelLower === "gemini-4-argon-high") return 1340;
     if (modelLower === "agy/gemini-4-argon-medium") return 900;
@@ -1458,6 +1461,7 @@ export function scoreModelForTask(
   if (isTier1Architect) {
     if (modelLower === "zunef/claude-opus-5-5") return 1500;
     if (modelLower === "zunef/claude-sonnet-5-5") return 1450;
+    if (modelLower === "zunef/claude-fable-5-1" || modelLower === "zunef/claude-fable-5") return 1440;
     if (modelLower === "agy/gemini-4-argon-high") return 1350;
     if (modelLower === "antigravity/gemini-4-argon-high" || modelLower === "gemini-4-argon-high") return 1340;
     if (modelLower === "agy/gemini-4-argon-medium") return 1150;
@@ -1473,7 +1477,14 @@ export function scoreModelForTask(
   const isTier3RoutineToolLoop = reasons.some((r) => r.includes("tier3") || r.includes("tool-loop-workhorse"));
   if (isTier3RoutineToolLoop) {
     if (modelLower === "zunef/claude-opus-5-5") return 1500;
-    if (modelLower === "zunef/claude-sonnet-5-5") return 1450;
+    // Rotate auxiliary fast models Sonnet 5.5 and Fable 5.1 evenly
+    if (zunefAuxCursor % 2 === 0) {
+      if (modelLower === "zunef/claude-sonnet-5-5") return 1450;
+      if (modelLower === "zunef/claude-fable-5-1" || modelLower === "zunef/claude-fable-5") return 1445;
+    } else {
+      if (modelLower === "zunef/claude-fable-5-1" || modelLower === "zunef/claude-fable-5") return 1450;
+      if (modelLower === "zunef/claude-sonnet-5-5") return 1445;
+    }
     if (modelLower === "agy/gemini-4-argon-low") return 1290;
     if (modelLower === "antigravity/gemini-4-argon-low" || modelLower === "gemini-4-argon-low") return 1280;
     if (modelLower === "agy/gemini-4-argon-medium") return 1180;
@@ -1486,7 +1497,14 @@ export function scoreModelForTask(
   // ── 5. TIER 2: HEAVY EXECUTOR / MULTI-FILE CODING (35-45% of turns) ────────
   // /ak-vibe, /ak-cook, fullstack-developer, debugger, /ak-fix, tool error retry -> Gemini 4 Argon Medium.
   if (modelLower === "zunef/claude-opus-5-5") return 1500;
-  if (modelLower === "zunef/claude-sonnet-5-5") return 1450;
+  // Rotate auxiliary models Sonnet 5.5 and Fable 5.1 evenly
+  if (zunefAuxCursor % 2 === 0) {
+    if (modelLower === "zunef/claude-sonnet-5-5") return 1450;
+    if (modelLower === "zunef/claude-fable-5-1" || modelLower === "zunef/claude-fable-5") return 1445;
+  } else {
+    if (modelLower === "zunef/claude-fable-5-1" || modelLower === "zunef/claude-fable-5") return 1450;
+    if (modelLower === "zunef/claude-sonnet-5-5") return 1445;
+  }
   if (modelLower === "agy/gemini-4-argon-medium") return 1280;
   if (modelLower === "antigravity/gemini-4-argon-medium" || modelLower === "gemini-4-argon-medium") return 1270;
   if (modelLower === "agy/gemini-4-argon-low") return 1150;
@@ -1509,6 +1527,7 @@ export function reorderByTaskWeight(
 ): ResolvedComboTarget[] {
   if (!Array.isArray(targets) || targets.length <= 1) return targets;
 
+  zunefAuxCursor++;
   const scored = targets.map((t, i) => ({ t, i, score: scoreModelForTask(t.modelStr, task, required) }));
   try {
     const scoreSummary = scored.map((s) => s.t.modelStr + "=" + s.score).join(", ");
