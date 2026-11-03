@@ -939,7 +939,7 @@ export class GeminiWebExecutor extends BaseExecutor {
         typeof psd?.endpointUrl === "string" ||
         (model || "").endsWith("-http");
 
-      if (directResult.response.status === 200 || explicitDirect) {
+      if (directResult.response.status === 200 || (model || "").endsWith("-http")) {
         return directResult;
       }
 
