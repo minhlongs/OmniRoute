@@ -52,6 +52,7 @@ function getDispatcherOptions() {
   });
 
   return {
+    maxResponseHeaderSize: 65536,
     headersTimeout: timeouts.fetchHeadersTimeoutMs,
     bodyTimeout: timeouts.fetchBodyTimeoutMs,
     connectTimeout: timeouts.fetchConnectTimeoutMs,
