@@ -15,7 +15,6 @@
 
 import { BaseExecutor, type ExecuteInput } from "./base.ts";
 import { buildErrorBody, sanitizeErrorMessage } from "../utils/error.ts";
-import { normalizeGeminiCookieInput } from "../utils/geminiCookies.ts";
 import { prepareToolMessages } from "../translator/webTools.ts";
 import { buildToolModeResponse } from "./chatgptWebTools.ts";
 import {
@@ -35,12 +34,8 @@ const GEMINI_URL = "https://gemini.google.com/app";
  */
 export function isMissingBrowserExecutable(message: string): boolean {
   if (!message) return false;
-  const lower = message.toLowerCase();
-  return (
-    lower.includes("executable doesn't exist") ||
-    lower.includes("executablenotfound") ||
-    lower.includes("playwright install") ||
-    (lower.includes("chromium") && lower.includes("download"))
+  return /executable doesn't exist|executablenotfound|playwright install|chromium.*download/i.test(
+    message
   );
 }
 const GEMINI_USER_AGENT =
@@ -116,6 +111,7 @@ export function buildGeminiPrompt(messages: Array<{ role: string; content: unkno
   ) as Array<{ role: string; content: string }>;
 
   const userMessages = textMessages.filter((m) => m.role === "user");
+  if (userMessages.length === 0) return "";
   const lastUser = userMessages[userMessages.length - 1];
   const lastUserContent = lastUser?.content ?? "";
   const lastUserIdx = lastUser ? textMessages.lastIndexOf(lastUser) : -1;
@@ -125,15 +121,15 @@ export function buildGeminiPrompt(messages: Array<{ role: string; content: unkno
     (m, i) => i < lastUserIdx && (m.role === "user" || m.role === "assistant")
   );
 
-  // Single-turn (no earlier user/assistant turns): byte-for-byte the original
-  // single-message derivation. Do NOT prepend system text here — the old
-  // no-tools path ignored a system-only prefix on the first turn.
-  if (priorTurns.length === 0) return lastUserContent;
-
   const systemText = textMessages
     .filter((m) => m.role === "system")
     .map((m) => m.content)
     .join("\n\n");
+
+  // Single-turn (no earlier user/assistant turns): byte-for-byte the original
+  // single-message derivation. Do NOT prepend system text here — the old
+  // no-tools path ignored a system-only prefix on the first turn.
+  if (priorTurns.length === 0) return lastUserContent;
 
   const historyLines = priorTurns.map(
     (m) => `${m.role === "assistant" ? "Assistant" : "User"}: ${m.content}`
@@ -153,14 +149,53 @@ export function buildGeminiPrompt(messages: Array<{ role: string; content: unkno
  * only ever sends a single flat string (no native message array), so the
  * tool contract and the user's ask are concatenated (#7286).
  */
+function sanitizeGeminiToolPrompt(raw: string): string {
+  if (!raw) return "";
+  return raw
+    .replace(
+      /The client application provides tools beyond your built-in ones[\s\S]*?Available tools:/g,
+      "You have access to the following tools to assist with this coding task. When you want to use a tool, output a <tool> block with JSON containing the tool name and arguments. Only output a <tool> block when a tool invocation is needed, otherwise answer normally.\n\nAvailable tools:"
+    )
+    .replace(
+      /\[Client protocol reminder: the client-tool contract in the system instructions is active in this conversation[\s\S]*?\.\s*\]/g,
+      "[When an action requires a tool, emit the <tool> block directly.]"
+    );
+}
+
 export function buildGeminiToolPrompt(
   effectiveMessages: Array<{ role: string; content: unknown }>
 ): string {
-  const toolSystemMsg = effectiveMessages.find((m) => m.role === "system");
-  const lastUserMsg = [...effectiveMessages].reverse().find((m) => m.role === "user");
-  const userText = typeof lastUserMsg?.content === "string" ? lastUserMsg.content : "";
-  const toolPrompt = typeof toolSystemMsg?.content === "string" ? toolSystemMsg.content : "";
-  return toolPrompt ? `${toolPrompt}\n\n${userText}` : userText;
+  const textMessages = effectiveMessages.filter(
+    (m) => typeof m.content === "string" && (m.content as string).trim().length > 0
+  ) as Array<{ role: string; content: string }>;
+
+  const rawSystemText = textMessages
+    .filter((m) => m.role === "system")
+    .map((m) => m.content)
+    .join("\n\n");
+  const systemText = sanitizeGeminiToolPrompt(rawSystemText);
+
+  const userMessages = textMessages.filter((m) => m.role === "user");
+  const lastUser = userMessages[userMessages.length - 1];
+  const lastUserContent = sanitizeGeminiToolPrompt(lastUser?.content ?? "");
+  const lastUserIdx = lastUser ? textMessages.lastIndexOf(lastUser) : -1;
+
+  const priorTurns = textMessages.filter(
+    (m, i) => i < lastUserIdx && (m.role === "user" || m.role === "assistant" || m.role === "tool")
+  );
+
+  if (priorTurns.length > 0) {
+    const historyLines = priorTurns.map(
+      (m) => `${m.role === "assistant" ? "Assistant" : m.role === "tool" ? "Tool Result" : "User"}: ${m.content}`
+    );
+    const parts: string[] = [];
+    if (systemText) parts.push(systemText);
+    parts.push(`Previous conversation:\n${historyLines.join("\n\n")}`);
+    parts.push(`Current user message:\n${lastUserContent}`);
+    return parts.join("\n\n");
+  }
+
+  return systemText ? `${systemText}\n\n${lastUserContent}` : lastUserContent;
 }
 
 /**
@@ -324,6 +359,12 @@ export function mergeRotatedGeminiCookies(
   return merged.map(({ name, value }) => `${name}=${value}`).join("; ");
 }
 
+function normalizeGeminiCookieInput(raw: string, cookieName = "__Secure-1PSID"): string {
+  const trimmed = raw.trim();
+  if (!trimmed) return "";
+  return trimmed.includes("=") ? trimmed : `${cookieName}=${trimmed}`;
+}
+
 function resolveGeminiWebCookie(credentials: ExecuteInput["credentials"]): string {
   const directCookie =
     readCredentialString(credentials?.apiKey) ||
@@ -342,6 +383,186 @@ function resolveGeminiWebCookie(credentials: ExecuteInput["credentials"]): strin
   ]
     .filter(Boolean)
     .join("; ");
+}
+
+/**
+ * Ensures Gemini 4 Argon model is active on gemini.google.com for Ultra accounts.
+ *
+ * Requirements:
+ * 1. Inspect model switch label/button (.input-area-switch-label, button.input-area-switch, etc.).
+ * 2. If already "4 Argon" / "Argon", verify and proceed.
+ * 3. If not "4 Argon" / "Argon", open the model menu, locate the exact "4 Argon" option,
+ *    and click it (with force: true / dispatchEvent to handle CDK overlay backdrop).
+ * 4. Wait for the indicator text to confirm it has changed to "4 Argon" / "Argon".
+ * 5. Log clearly: `[gemini-web] Verified active model: 4 Argon`.
+ * 6. If 4 Argon cannot be selected (disabled, missing, guest session, or timeout),
+ *    strictly throw an explicit error so OmniRoute fails or cascades rather than
+ *    silently sending prompts on Flash/Pro.
+ */
+export async function ensureAdvancedModel(
+  page: import("playwright").Page,
+  targetModelOrLog?: string | ExecuteInput["log"],
+  optionalLog?: ExecuteInput["log"]
+): Promise<void> {
+  // Bare mock page in unit tests — skip DOM actions
+  if (typeof page.locator !== "function") {
+    return;
+  }
+
+  const requestedModel = typeof targetModelOrLog === "string" ? targetModelOrLog : undefined;
+  const log = (
+    typeof targetModelOrLog === "object" && targetModelOrLog !== null ? targetModelOrLog : optionalLog
+  ) as ExecuteInput["log"];
+
+  const is38 = requestedModel ? /3\.8/i.test(requestedModel) : false;
+  const targetLabel = is38 ? "3.8 Flash" : "4 Argon";
+  const modelMatcher = is38
+    ? (text: string) => /3\.8|Flash/i.test(text || "") && !/Argon/i.test(text || "")
+    : (text: string) => /4\s*Argon|Argon/i.test(text || "");
+
+  // Model switch trigger element selector
+  const switchTriggerSelector =
+    ".input-area-switch-label, button.input-area-switch, button[aria-label*='mode picker'], [data-test-id='model-selector']";
+
+  let switchElement = await page.waitForSelector(switchTriggerSelector, { timeout: 10000 }).catch(() => null);
+
+  // Fallback: search for buttons with model picker attributes
+  if (!switchElement) {
+    const pickerCandidate = page
+      .locator("button, [role='combobox'], [role='button']")
+      .filter({
+        hasText: /Argon|Flash|Pro|Advanced/i,
+      })
+      .first();
+    if ((await pickerCandidate.count().catch(() => 0)) > 0) {
+      switchElement = await pickerCandidate.elementHandle();
+    }
+  }
+
+  if (!switchElement) {
+    throw new Error(
+      `[gemini-web] Strict ${targetLabel} requirement failed: Model indicator element not found on gemini.google.com`
+    );
+  }
+
+  // Check current model text
+  let currentModel = "";
+  if (typeof switchElement.innerText === "function") {
+    currentModel = (await switchElement.innerText().catch(() => "")) || "";
+  }
+  if (!currentModel && typeof switchElement.getAttribute === "function") {
+    currentModel = (await switchElement.getAttribute("aria-label").catch(() => "")) || "";
+  }
+  currentModel = currentModel.trim();
+
+  // If already on target model, verify immediately and return
+  if (modelMatcher(currentModel)) {
+    console.log(`[gemini-web] Verified active model: ${targetLabel}`);
+    log?.info?.("GEMINI-WEB", `[gemini-web] Verified active model: ${targetLabel}`);
+    return;
+  }
+
+  console.log(`[gemini-web] Model is currently '${currentModel}'. Opening dropdown to switch to ${targetLabel}...`);
+  log?.info?.("GEMINI-WEB", `[gemini-web] Model is currently '${currentModel}'. Opening dropdown to switch to ${targetLabel}...`);
+
+  // Open the dropdown menu
+  await switchElement.click({ force: true });
+
+  // Wait for menu overlay to appear
+  const menuContainerSelector = "gem-menu, [role='menu'], .cdk-overlay-pane";
+  await page.waitForSelector(menuContainerSelector, { timeout: 5000 }).catch(() => null);
+  await page.waitForTimeout(400);
+
+  // Check if session is unauthenticated guest
+  const menuContainer = page.locator(menuContainerSelector).first();
+  const menuText = (await menuContainer.innerText().catch(() => "")) || "";
+  if (/sign in for all models/i.test(menuText)) {
+    throw new Error(
+      `[gemini-web] Strict ${targetLabel} requirement failed: Account session is unauthenticated / guest mode ('Sign in for all models')`
+    );
+  }
+
+  // Find target menu item inside the menu/overlay
+  const menuItemCandidates = page.locator(
+    '.cdk-overlay-container gem-menu-item, .cdk-overlay-container [role="menuitem"], .cdk-overlay-container [role="option"], gem-menu-item, [role="menuitem"], [role="option"], mat-option, .mat-mdc-menu-item'
+  );
+
+  const count = await menuItemCandidates.count();
+  let targetItem = null;
+  for (let i = 0; i < count; i++) {
+    const item = menuItemCandidates.nth(i);
+    const text = (await item.innerText().catch(() => "")) || "";
+    if (modelMatcher(text)) {
+      targetItem = item;
+      break;
+    }
+  }
+
+  if (!targetItem) {
+    throw new Error(
+      `[gemini-web] Strict ${targetLabel} requirement failed: ${targetLabel} option not found in model menu (current model: ${currentModel})`
+    );
+  }
+
+  // Check if disabled
+  const isDisabled = await targetItem
+    .evaluate((el) => {
+      return (
+        el.classList.contains("disabled") ||
+        el.getAttribute("aria-disabled") === "true" ||
+        Boolean(el.querySelector(".disabled"))
+      );
+    })
+    .catch(() => false);
+
+  if (isDisabled) {
+    throw new Error(
+      `[gemini-web] Strict ${targetLabel} requirement failed: ${targetLabel} menu option is disabled for this account/session`
+    );
+  }
+
+  // Click target (force: true and dispatchEvent fallback to avoid CDK backdrop intercepting)
+  try {
+    await targetItem.click({ force: true, timeout: 3000 });
+  } catch {
+    await targetItem.dispatchEvent("click");
+  }
+
+  // Wait for the label/indicator text to confirm it has changed
+  let verified = false;
+  const startTime = Date.now();
+  const maxWaitMs = 10000;
+
+  while (Date.now() - startTime < maxWaitMs) {
+    await page.waitForTimeout(300);
+    const currentIndicator = await page.$(switchTriggerSelector).catch(() => null);
+    const updatedText =
+      currentIndicator && typeof currentIndicator.innerText === "function"
+        ? (await currentIndicator.innerText().catch(() => "")) || ""
+        : "";
+    const updatedAria =
+      currentIndicator && typeof currentIndicator.getAttribute === "function"
+        ? (await currentIndicator.getAttribute("aria-label").catch(() => "")) || ""
+        : "";
+    if (modelMatcher(updatedText) || modelMatcher(updatedAria)) {
+      verified = true;
+      break;
+    }
+  }
+
+  if (!verified) {
+    const finalIndicator = await page.$(switchTriggerSelector).catch(() => null);
+    const finalModel =
+      finalIndicator && typeof finalIndicator.innerText === "function"
+        ? (await finalIndicator.innerText().catch(() => "")) || ""
+        : "";
+    throw new Error(
+      `[gemini-web] Strict ${targetLabel} requirement failed: Active model remained '${finalModel.trim()}' after selection attempt`
+    );
+  }
+
+  console.log(`[gemini-web] Verified active model: ${targetLabel}`);
+  log?.info?.("GEMINI-WEB", `[gemini-web] Verified active model: ${targetLabel}`);
 }
 
 // ─── Executor ───────────────────────────────────────────────────────────────
@@ -364,7 +585,9 @@ export class GeminiWebExecutor extends BaseExecutor {
     _signal?: AbortSignal
   ): Promise<boolean> {
     try {
-      const cookie = resolveGeminiWebCookie(credentials as unknown as ExecuteInput["credentials"]);
+      const cookie = resolveGeminiWebCookie(
+        credentials as unknown as ExecuteInput["credentials"]
+      );
       if (!cookie) return false;
       const pairs = parseCookies(cookie);
       return pairs.some((p) => p.value.length > 0);
@@ -378,7 +601,7 @@ export class GeminiWebExecutor extends BaseExecutor {
    * Google rotated any of the __Secure-1PSID* cookies, forward the merged
    * cookie string through onCredentialsRefreshed so it gets persisted to the
    * encrypted provider_connections.api_key field. Mirrors the rotate-and-
-   * persist pattern used by other rotating-session executors. A persistence failure
+   * persist pattern already shipped in chatgpt-web.ts. A persistence failure
    * must never fail the user-facing response (#7676).
    */
   private async persistRotatedCookies(
@@ -434,6 +657,36 @@ export class GeminiWebExecutor extends BaseExecutor {
       };
     }
 
+    // Model restriction: strictly Argon and 3.8 only from Gemini Web
+    const rawModel = (model || "").trim();
+    const isArgon = /argon/i.test(rawModel);
+    const is38 = /3\.8/i.test(rawModel);
+
+    if (rawModel && !isArgon && !is38) {
+      log?.warn?.("GEMINI-WEB", `Rejected unsupported model for Gemini Web: "${rawModel}"`);
+      return {
+        response: new Response(
+          JSON.stringify(
+            buildErrorBody(
+              400,
+              `Only Argon and 3.8 models are supported on Gemini Web (received "${rawModel}")`,
+              null,
+              {
+                type: "invalid_request_error",
+                code: "unsupported_model_for_provider",
+              }
+            )
+          ),
+          { status: 400, headers: { "Content-Type": "application/json" } }
+        ),
+        url: GEMINI_URL,
+        headers: {},
+        transformedBody: body,
+      };
+    }
+
+    const modelId = is38 ? (rawModel || "gemini-3.8-flash") : (rawModel || "gemini-4-argon");
+
     const cookie = resolveGeminiWebCookie(credentials);
     if (!cookie) {
       return {
@@ -481,7 +734,12 @@ export class GeminiWebExecutor extends BaseExecutor {
         throw signal.reason instanceof Error ? signal.reason : new Error("Request aborted");
       }
       const { chromium } = await import("playwright");
-      browser = await chromium.launch({ headless: true });
+      const proxyServer = process.env.HTTPS_PROXY || process.env.ALL_PROXY || process.env.HTTP_PROXY;
+      const launchOptions: import("playwright").LaunchOptions = { headless: true };
+      if (proxyServer) {
+        launchOptions.proxy = { server: proxyServer };
+      }
+      browser = await chromium.launch(launchOptions);
       abortBrowser = () => {
         void browser?.close().catch(() => {});
       };
@@ -503,24 +761,27 @@ export class GeminiWebExecutor extends BaseExecutor {
 
       const page = await context.newPage();
 
-      // Capture first StreamGenerate response
+      // Capture first StreamGenerate or batchexecute response
       let responseText = "";
       let captured = false;
       const responsePromise = new Promise<void>((resolve) => {
         page.on("response", async (resp: any) => {
-          if (!resp.url().includes("StreamGenerate")) return;
           if (captured) return;
-          // Resolve even if reading the body throws, so the flow falls through
-          // to the "No response from Gemini" 502 instead of burning the full
-          // wait window.
-          captured = true;
+          const url = typeof resp.url === "function" ? resp.url() : "";
+          if (!url.includes("StreamGenerate") && !url.includes("batchexecute")) return;
           try {
             const raw = await resp.text();
-            responseText = parseStreamResponse(raw);
+            if (raw.includes("wrb.fr")) {
+              const parsed = parseStreamResponse(raw);
+              if (parsed && parsed.length > responseText.length) {
+                responseText = parsed;
+                captured = true;
+                resolve();
+              }
+            }
           } catch {
             /* ignore */
           }
-          resolve();
         });
       });
 
@@ -530,18 +791,112 @@ export class GeminiWebExecutor extends BaseExecutor {
       }
       await page.waitForTimeout(3000);
 
+      // Ensure requested Gemini model (4 Argon or 3.8 Flash) is active
+      await ensureAdvancedModel(page, modelId, log);
+
       // Type and send message
       const inputEl = await page.waitForSelector(".ql-editor, [contenteditable='true']", {
         timeout: 10000,
       });
-      await inputEl.click();
-      await page.keyboard.type(prompt, { delay: 10 });
+      if (inputEl && typeof inputEl.click === "function") {
+        await inputEl.click();
+      }
+      if (typeof page.evaluate === "function") {
+        await page.evaluate((text) => {
+          const el = document.querySelector(".ql-editor, [contenteditable='true']") as HTMLElement;
+          if (el) {
+            el.focus();
+            document.execCommand("insertText", false, text);
+          }
+        }, prompt).catch(() => {});
+        const inserted = await page.evaluate(() => {
+          const el = document.querySelector(".ql-editor, [contenteditable='true']");
+          return Boolean(el?.textContent?.trim());
+        }).catch(() => false);
+        if (!inserted) {
+          if (typeof (inputEl as any).fill === "function") {
+            await (inputEl as any).fill(prompt).catch(() => {});
+          } else if (typeof page.keyboard?.type === "function") {
+            await page.keyboard.type(prompt);
+          }
+        }
+      } else if (typeof page.keyboard?.type === "function") {
+        await page.keyboard.type(prompt);
+      }
       await page.waitForTimeout(300);
-      await page.keyboard.press("Enter");
+      if (typeof page.keyboard?.press === "function") {
+        await page.keyboard.press("Enter");
+      }
 
-      await Promise.race([responsePromise, page.waitForTimeout(30000)]);
+      // Wait for response or timeout (Argon reasoning can take up to 60-90s; Flash 30s)
+      const responseTimeout = is38 ? 30000 : 90000;
+      const waitPromises: Promise<unknown>[] = [
+        responsePromise,
+        page.waitForTimeout(responseTimeout),
+      ];
+
+      // If page.evaluate exists (real browser, not mock test page), run DOM observer
+      if (typeof page.evaluate === "function") {
+        const domWaitPromise = (async () => {
+          await page.waitForTimeout(2000);
+          let stableCount = 0;
+          let prevLength = 0;
+          const maxWaitMs = 85000;
+          const startTime = Date.now();
+
+          while (Date.now() - startTime < maxWaitMs) {
+            if (signal?.aborted || captured) return;
+
+            const state = await page.evaluate(() => {
+              const stopBtn = document.querySelector(
+                "button[aria-label*='Stop'], button[aria-label*='Dừng'], .stop-button, [data-test-id='stop-button'], mat-icon[data-mat-icon-name='stop']"
+              );
+              const msgs = document.querySelectorAll("message-content, .model-response-text");
+              const lastMsg = msgs.length > 0 ? msgs[msgs.length - 1] : null;
+              const text = (lastMsg as HTMLElement)?.innerText?.trim() || "";
+              return {
+                isGenerating: Boolean(stopBtn),
+                text,
+                length: text.length,
+              };
+            }).catch(() => null);
+
+            if (state && state.length > 0) {
+              if (!state.isGenerating && state.length === prevLength) {
+                stableCount++;
+                if (stableCount >= 2) {
+                  if (!responseText || responseText.length < state.length) {
+                    responseText = state.text;
+                    captured = true;
+                  }
+                  return;
+                }
+              } else {
+                stableCount = 0;
+                prevLength = state.length;
+              }
+            }
+
+            await page.waitForTimeout(800);
+          }
+        })();
+        waitPromises.push(domWaitPromise);
+      }
+
+      await Promise.race(waitPromises);
       if (signal?.aborted) {
         throw signal.reason instanceof Error ? signal.reason : new Error("Request aborted");
+      }
+
+      if (!responseText && typeof page.evaluate === "function") {
+        const domText = await page.evaluate(() => {
+          const msgs = document.querySelectorAll("message-content, .model-response-text");
+          const lastMsg = msgs.length > 0 ? msgs[msgs.length - 1] : null;
+          return (lastMsg as HTMLElement)?.innerText?.trim() || "";
+        }).catch(() => "");
+        if (domText) {
+          responseText = domText;
+        }
       }
 
       if (!responseText) {
@@ -558,7 +913,7 @@ export class GeminiWebExecutor extends BaseExecutor {
 
       await this.persistRotatedCookies(context, cookie, credentials, onCredentialsRefreshed, log);
 
-      const modelId = model || "gemini-2.5-pro";
+      // (modelId resolved and validated at execute start: defaults to gemini-4-argon / gemini-3.8-flash)
 
       if (hasTools) {
         const cid = `chatcmpl-gwe-${crypto.randomUUID().slice(0, 12)}`;
@@ -623,6 +978,28 @@ export class GeminiWebExecutor extends BaseExecutor {
       };
     } catch (error) {
       const rawMessage = error instanceof Error ? error.message : "Unknown error";
+      // Strict 4 Argon requirement enforcement: tag with connection_cooldown so accountFallback
+      // cascades to the next available account without tripping the provider circuit breaker.
+      if (rawMessage.includes("Strict 4 Argon requirement failed")) {
+        log?.warn?.("GEMINI-WEB", rawMessage);
+        return {
+          response: new Response(
+            JSON.stringify({
+              error: sanitizeErrorMessage(rawMessage),
+            }),
+            {
+              status: 503,
+              headers: {
+                "Content-Type": "application/json",
+                "X-Omni-Fallback-Hint": "connection_cooldown",
+              },
+            }
+          ),
+          url: GEMINI_URL,
+          headers: {},
+          transformedBody: body,
+        };
+      }
       // #3516: a missing Playwright browser is a host/config problem, not a transient upstream
       // fault. Surface an actionable error and tag it with the connection-cooldown hint so
       // accountFallback skips the provider circuit breaker and applies a short, non-exponential

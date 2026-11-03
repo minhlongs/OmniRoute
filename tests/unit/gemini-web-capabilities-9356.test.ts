@@ -59,7 +59,7 @@ interface ErrorBodyLike {
  */
 async function run(body: Record<string, unknown>) {
   return new GeminiWebExecutor().execute({
-    model: "gemini-3.6-flash",
+    model: "gemini-4-argon",
     body: { messages: [{ role: "user", content: "hi" }], stream: false, ...body },
     stream: false,
     credentials: { apiKey: "__Secure-1PSID=test-cookie" },
@@ -180,7 +180,7 @@ test("#9356 the capability guard runs ahead of the credential check", async () =
   // A request that is BOTH uncredentialed and incompatible must report the
   // incompatibility: adding a cookie would not make it work.
   const result = await new GeminiWebExecutor().execute({
-    model: "gemini-3.6-flash",
+    model: "gemini-4-argon",
     body: { messages: [{ role: "user", content: "hi" }], reasoning_effort: "high" },
     stream: false,
     credentials: {},
@@ -198,7 +198,7 @@ test("#9356 a supported request still falls through the guard untouched", async 
   // be blocked — reaching the (missing) credential check proves the guard let
   // it pass, without needing a browser to prove it.
   const result = await new GeminiWebExecutor().execute({
-    model: "gemini-3.6-flash",
+    model: "gemini-4-argon",
     body: {
       messages: [{ role: "user", content: "hi" }],
       tools: [GET_WEATHER_TOOL],

@@ -23,7 +23,7 @@ test("GeminiWebExecutor sets correct provider name", () => {
 test("Returns 401 when no cookies provided", async () => {
   const executor = new GeminiWebExecutor();
   const result = await executor.execute({
-    model: "gemini-3.1-pro",
+    model: "gemini-4-argon",
     body: { messages: [{ role: "user", content: "hi" }], stream: false },
     stream: false,
     credentials: {},
@@ -38,7 +38,7 @@ test("Returns 401 when no cookies provided", async () => {
 test("Returns 400 when no user message", async () => {
   const executor = new GeminiWebExecutor();
   const result = await executor.execute({
-    model: "gemini-3.1-pro",
+    model: "gemini-4-argon",
     body: { messages: [{ role: "system", content: "You are helpful" }], stream: false },
     stream: false,
     credentials: { apiKey: "test-cookie" },
@@ -65,7 +65,7 @@ test("Reads bulk-imported cookie credentials from providerSpecificData.cookie", 
   try {
     const executor = new GeminiWebExecutor();
     const result = await executor.execute({
-      model: "gemini-3.1-pro",
+      model: "gemini-4-argon",
       body: { messages: [{ role: "user", content: "hello" }], stream: false },
       stream: false,
       credentials: {
@@ -88,7 +88,7 @@ test("Reads bulk-imported cookie credentials from providerSpecificData.cookie", 
 test("Ignores array-valued providerSpecificData when resolving cookies", async () => {
   const executor = new GeminiWebExecutor();
   const result = await executor.execute({
-    model: "gemini-3.1-pro",
+    model: "gemini-4-argon",
     body: { messages: [{ role: "user", content: "hello" }], stream: false },
     stream: false,
     credentials: {
@@ -131,7 +131,7 @@ test("Normalizes a bare __Secure-1PSID value before adding browser cookies", asy
   try {
     const executor = new GeminiWebExecutor();
     const result = await executor.execute({
-      model: "gemini-3.1-pro",
+      model: "gemini-4-argon",
       body: { messages: [{ role: "user", content: "hello" }], stream: false },
       stream: false,
       credentials: { apiKey: "raw-psid-value" },
@@ -167,14 +167,44 @@ test("Provider: gemini-web in providerRegistry", async () => {
 test("Provider: gemini-web has correct models", async () => {
   const { REGISTRY } = await import("../../open-sse/config/providerRegistry.ts");
   const models = REGISTRY["gemini-web"].models;
-  assert.deepEqual(
-    models.map((m: any) => [m.id, m.name]),
-    [
-      ["gemini-3.1-pro", "Gemini 3.1 Pro"],
-      ["gemini-3.7-flash", "Gemini 3.7 Flash"],
-      ["gemini-3.1-flash-lite", "Gemini 3.1 Flash-Lite"],
-    ]
-  );
+  assert.ok(models.some((m: any) => m.id === "gemini-4-argon"));
+  assert.ok(models.some((m: any) => m.id === "gemini-4-argon-high"));
+  assert.ok(models.some((m: any) => m.id === "gemini-3.8-flash"));
+  assert.equal(models.some((m: any) => m.id === "gemini-3.1-pro"), false);
+  assert.equal(models.some((m: any) => m.id === "gemini-3.5-flash"), false);
+  assert.equal(models.some((m: any) => m.id === "gemini-3.1-flash-lite"), false);
+});
+
+test("GeminiWebExecutor rejects non-argon, non-3.8 models with HTTP 400", async () => {
+  const executor = new GeminiWebExecutor();
+  for (const invalidModel of ["gemini-3.1-pro", "gemini-3.5-flash", "gemini-2.5-pro", "gpt-4o"]) {
+    const result = await executor.execute({
+      model: invalidModel,
+      body: { messages: [{ role: "user", content: "hi" }], stream: false },
+      stream: false,
+      credentials: { apiKey: "__Secure-1PSID=test" },
+      signal: AbortSignal.timeout(5000),
+      log: null,
+    });
+    assert.equal(result.response.status, 400);
+    const json = (await result.response.json()) as any;
+    assert.equal(json.error.code, "unsupported_model_for_provider");
+    assert.match(json.error.message, /Only Argon and 3\.8 models are supported/);
+  }
+});
+
+test("GeminiWebExecutor defaults to gemini-4-argon when model is omitted", async () => {
+  const executor = new GeminiWebExecutor();
+  const result = await executor.execute({
+    model: undefined,
+    body: { messages: [{ role: "user", content: "hi" }], stream: false },
+    stream: false,
+    credentials: {},
+    signal: AbortSignal.timeout(5000),
+    log: null,
+  });
+  // Missing credentials -> 401 proves model validation passed and defaulted to Argon
+  assert.equal(result.response.status, 401);
 });
 
 // ─── Regression: #2832 / #3516 — Playwright missing in Docker (runner-base) ──
@@ -208,7 +238,7 @@ test("#2832/#3516: missing Playwright browser returns an actionable 503 with coo
   try {
     const executor = new GeminiWebExecutor();
     const result = await executor.execute({
-      model: "gemini-3.1-pro",
+      model: "gemini-4-argon",
       body: { messages: [{ role: "user", content: "hello" }], stream: false },
       stream: false,
       credentials: { apiKey: "fake-cookie=abc" },
@@ -248,7 +278,7 @@ test("#2832: GeminiWebExecutor catch block sanitizes Playwright launch errors (i
   controller.abort(new Error("Request aborted"));
 
   const result = await executor.execute({
-    model: "gemini-3.1-pro",
+    model: "gemini-4-argon",
     body: { messages: [{ role: "user", content: "hello" }], stream: false },
     stream: false,
     credentials: { apiKey: "fake-cookie=abc" },

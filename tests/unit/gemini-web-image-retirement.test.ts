@@ -76,7 +76,7 @@ test("Gemini Web executor treats the retired image-mode extension as ordinary ch
 
   try {
     const result = await new GeminiWebExecutor().execute({
-      model: "gemini-3.1-pro",
+      model: "gemini-3.8-flash",
       body: {
         messages: [{ role: "user", content: "hello" }],
         x_gemini_web_image_mode: true,
@@ -117,7 +117,7 @@ test("Gemini Web chat and legitimate Gemini image providers remain available", a
   assert.equal(REGISTRY["gemini-web"]?.executor, "gemini-web");
   assert.deepEqual(
     REGISTRY["gemini-web"]?.models.map(({ id }) => id),
-    ["gemini-3.1-pro", "gemini-3.7-flash", "gemini-3.1-flash-lite"]
+    ["gemini-4-argon", "gemini-4-argon-high", "gemini-3.8-flash"]
   );
 
   assert.deepEqual(parseImageModel("nano-banana"), {

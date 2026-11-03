@@ -1398,6 +1398,7 @@ export function scoreModelForTask(
     }
     if (modelLower === "agy/gemini-3.8-flash-high") return 1350;
     if (modelLower === "antigravity/gemini-3.8-flash-high" || modelLower === "gemini-3.8-flash-high") return 1340;
+    if (modelLower === "gemini-web/gemini-3.8-flash") return 1335;
     if (modelLower === "agy/gemini-3.8-flash-medium") return 950;
     if (modelLower === "zunef/claude-haiku-4-5") return 940;
     if (modelLower === "antigravity/gemini-3.8-flash-tiered" || modelLower === "agy/gemini-3.8-flash-tiered") return 930;
