@@ -159,11 +159,28 @@ export function buildGeminiPrompt(messages: Array<{ role: string; content: unkno
 export function buildGeminiToolPrompt(
   effectiveMessages: Array<{ role: string; content: unknown }>
 ): string {
-  const toolSystemMsg = effectiveMessages.find((m) => m.role === "system");
-  const lastUserMsg = [...effectiveMessages].reverse().find((m) => m.role === "user");
-  const userText = typeof lastUserMsg?.content === "string" ? lastUserMsg.content : "";
+  // prepareToolMessages() appends the tool contract as the LAST system message, after
+  // the client's own turns. Selecting the first system message instead picked up the
+  // client's system prompt and silently dropped the contract, while keeping only the
+  // last user message dropped the rest of the conversation — the model then answered
+  // conversationally instead of emitting <tool> blocks.
+  const systemMessages = effectiveMessages.filter((m) => m.role === "system");
+  const toolSystemMsg = systemMessages[systemMessages.length - 1];
   const toolPrompt = typeof toolSystemMsg?.content === "string" ? toolSystemMsg.content : "";
-  return toolPrompt ? `${toolPrompt}\n\n${userText}` : userText;
+  const remaining = effectiveMessages.filter((m) => m !== toolSystemMsg);
+  const clientSystemText = remaining
+    .filter((m) => m.role === "system")
+    .map((m) => (typeof m.content === "string" ? m.content : ""))
+    .filter(Boolean)
+    .join("\n\n");
+  // buildGeminiPrompt() drops a system-only prefix on the single-turn path, so the
+  // client system prompt is handled here instead of relying on that fallback.
+  const transcript = buildGeminiPrompt(remaining.filter((m) => m.role !== "system"));
+  const parts: string[] = [];
+  if (toolPrompt) parts.push(toolPrompt);
+  if (clientSystemText) parts.push(`System:\n${clientSystemText}`);
+  if (transcript) parts.push(transcript);
+  return parts.join("\n\n");
 }
 
 /**

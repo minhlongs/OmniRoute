@@ -11,9 +11,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-const { GeminiWebExecutor, buildGeminiToolResponse, buildGeminiToolPrompt } = await import(
-  "../../open-sse/executors/gemini-web.ts"
-);
+const { GeminiWebExecutor, buildGeminiToolResponse, buildGeminiToolPrompt } =
+  await import("../../open-sse/executors/gemini-web.ts");
 
 interface ToolCallLike {
   function: { name: string; arguments: string };
@@ -163,6 +162,36 @@ test("#7286: buildGeminiToolPrompt falls back to the user text alone when there 
   assert.equal(buildGeminiToolPrompt(effectiveMessages), "hello");
 });
 
+test("#7286: buildGeminiToolPrompt keeps the injected trailing contract and the conversation history", () => {
+  // prepareToolMessages() pushes the contract as the LAST system message; a real
+  // client (Claude Code) also sends its own system prompt first and a multi-turn
+  // history. Dropping either leaves the model without the <tool> contract and
+  // without context, so it answers conversationally instead of calling tools.
+  const effectiveMessages = [
+    { role: "system", content: "You are Claude Code." },
+    { role: "user", content: "read a.ts" },
+    { role: "assistant", content: "file contents" },
+    { role: "user", content: "now fix the bug" },
+    { role: "system", content: "TOOL CONTRACT: reply with <tool>{...}</tool>" },
+  ];
+  const prompt = buildGeminiToolPrompt(effectiveMessages);
+  assert.ok(prompt.includes("TOOL CONTRACT"), "injected tool contract must survive");
+  assert.ok(prompt.includes("read a.ts"), "prior user turn must survive");
+  assert.ok(prompt.includes("file contents"), "prior assistant turn must survive");
+  assert.ok(prompt.includes("now fix the bug"), "current user message must survive");
+});
+
+test("#7286: buildGeminiToolPrompt prefers the last system message as the tool contract", () => {
+  const effectiveMessages = [
+    { role: "system", content: "CLIENT SYSTEM PROMPT" },
+    { role: "user", content: "do it" },
+    { role: "system", content: "INJECTED TOOL CONTRACT" },
+  ];
+  const prompt = buildGeminiToolPrompt(effectiveMessages);
+  assert.ok(prompt.startsWith("INJECTED TOOL CONTRACT"), "contract must lead the prompt");
+  assert.ok(prompt.includes("CLIENT SYSTEM PROMPT"), "client system prompt must not be lost");
+});
+
 // ─── Full executor integration (Playwright mocked) ──────────────────────────
 //
 // Mirrors the mocking pattern already used in tests/unit/gemini-web.test.ts
@@ -238,8 +267,7 @@ async function withMockedGeminiBrowser<T>(
 }
 
 test("#7286: executor integration — tools[] present reaches tool_calls end to end", async () => {
-  const responseText =
-    '<tool>{"name":"get_weather","arguments":{"city":"Berlin"}}</tool>';
+  const responseText = '<tool>{"name":"get_weather","arguments":{"city":"Berlin"}}</tool>';
 
   await withMockedGeminiBrowser(responseText, async () => {
     const executor = new GeminiWebExecutor();
