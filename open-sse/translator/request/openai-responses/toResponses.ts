@@ -4,8 +4,9 @@
  * Extracted verbatim from openai-responses.ts. Registration stays in the host.
  */
 import { isOpenAIResponsesStoreEnabled } from "@/lib/providers/requestDefaults";
-import { isInternalReasoningPlaceholder } from "../../../utils/reasoningPlaceholder.ts";
+import { isInternalReasoningPlaceholder, NON_ANTHROPIC_THINKING_PLACEHOLDER } from "../../../utils/reasoningPlaceholder.ts";
 import { getReadableReasoningValue } from "../../../utils/reasoningFields.ts";
+import { isThinkingMessageModel } from "../../../utils/reasoningContentInjector.ts";
 import { generateToolCallId } from "../../helpers/toolCallHelper.ts";
 import {
   JsonRecord,
@@ -104,6 +105,7 @@ export function openaiToOpenAIResponsesRequest(
   void stream;
 
   const root = toRecord(body);
+  const targetModelStr = String(model ?? root.model ?? "");
   const credentialRecord = toRecord(credentials);
   const storeEnabled = isOpenAIResponsesStoreEnabled(credentialRecord.providerSpecificData);
   const result: JsonRecord = {
@@ -231,6 +233,12 @@ export function openaiToOpenAIResponsesRequest(
           // client's plaintext reasoning, so there is no source summary to
           // preserve; default to an empty array like the replay sanitizer does
           // for opaque items in reasoningInputPolicy.ts (#11108).
+          summary: [],
+        });
+      } else if (isThinkingMessageModel(targetModelStr)) {
+        input.push({
+          type: "reasoning",
+          content: [{ type: "reasoning_text", text: NON_ANTHROPIC_THINKING_PLACEHOLDER }],
           summary: [],
         });
       }
