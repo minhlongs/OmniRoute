@@ -21,6 +21,10 @@ import {
   checkGeminiWebUnsupportedControls,
   GEMINI_WEB_UNSUPPORTED_CONTROL_CODE,
 } from "./gemini-web/capabilities.ts";
+import {
+  executeGeminiWebDirectHttp,
+  shouldUseGeminiWebDirectHttp,
+} from "./gemini-web/streamGenerateClient.ts";
 
 // ─── Constants ──────────────────────────────────────────────────────────────
 
@@ -543,6 +547,19 @@ export class GeminiWebExecutor extends BaseExecutor {
       };
     }
 
+    const imageMode = (body as Record<string, unknown>)?.x_gemini_web_image_mode === true;
+    if (!imageMode && shouldUseGeminiWebDirectHttp(model, credentials)) {
+      return executeGeminiWebDirectHttp({
+        input,
+        cookie,
+        prompt,
+        hasTools,
+        requestedTools,
+        mergeRotatedCookies: mergeRotatedGeminiCookies,
+        buildToolResponse: buildGeminiToolResponse,
+      });
+    }
+
     let browser: any = null;
     let abortBrowser: (() => void) | null = null;
     try {
@@ -571,15 +588,6 @@ export class GeminiWebExecutor extends BaseExecutor {
       );
 
       const page = await context.newPage();
-
-      // #10466: image mode — the /v1/images/generations handler sets
-      // x_gemini_web_image_mode. Generated images arrive in the candidate's
-      // extension block ([12][7][0]) of the StreamGenerate frames, sometimes
-      // only in a LATER frame of the stream (or a follow-up StreamGenerate
-      // call), so image mode captures every StreamGenerate response, merges
-      // image URLs across frames, and resolves as soon as one is found.
-      // Chat mode keeps the original first-response-only behavior.
-      const imageMode = (body as Record<string, unknown>)?.x_gemini_web_image_mode === true;
 
       // Capture first StreamGenerate response
       let responseText = "";
