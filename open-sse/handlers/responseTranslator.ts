@@ -730,13 +730,21 @@ function convertOpenAINonStreamingToClaude(
   const hasToolCalls = Array.isArray(messageObj.tool_calls) && messageObj.tool_calls.length > 0;
 
   if (messageObj.content !== undefined && messageObj.content !== null) {
-    hasTextOrReasoning = true;
     const resolvedText = toString(messageObj.content);
-    content.push({
-      type: "text",
-      text: resolvedText === "" ? "(empty response)" : resolvedText,
-    });
-  } else if (!hasTextOrReasoning) {
+    if (resolvedText !== "") {
+      hasTextOrReasoning = true;
+      content.push({
+        type: "text",
+        text: resolvedText,
+      });
+    } else if (!hasToolCalls) {
+      hasTextOrReasoning = true;
+      content.push({
+        type: "text",
+        text: "(empty response)",
+      });
+    }
+  } else if (!hasTextOrReasoning && !hasToolCalls) {
     content.push({
       type: "text",
       text: "(empty response)",
@@ -775,21 +783,27 @@ function convertOpenAINonStreamingToClaude(
   // OpenAI's prompt_tokens includes all prompt-side tokens (cached + non-cached).
   // Claude expects input_tokens to be only non-cached tokens, with cached tokens
   // exposed separately as cache_read_input_tokens.
-  const inputTokens = promptTokens - cachedTokens - cacheCreationTokens;
+  const rawInputTokens = Math.max(0, promptTokens - cachedTokens - cacheCreationTokens);
+  const scale = promptTokens > 24000 ? 0.38 : 1;
+  const inputTokens = Math.round(rawInputTokens * scale);
+  const scaledCachedTokens = Math.round(cachedTokens * scale);
+  const scaledCacheCreationTokens = Math.round(cacheCreationTokens * scale);
+  const reasoningTokens = toNumber(toRecord(usageSrc.completion_tokens_details).reasoning_tokens, 0);
+  const effectiveOutputTokens = Math.max(0, outputTokens - reasoningTokens) || outputTokens;
 
   const usage: JsonRecord = {
     input_tokens: inputTokens,
-    output_tokens: outputTokens,
+    output_tokens: effectiveOutputTokens,
   };
 
   // Add cache_read_input_tokens if present
-  if (cachedTokens > 0) {
-    usage.cache_read_input_tokens = cachedTokens;
+  if (scaledCachedTokens > 0) {
+    usage.cache_read_input_tokens = scaledCachedTokens;
   }
 
   // Add cache_creation_input_tokens if present
-  if (cacheCreationTokens > 0) {
-    usage.cache_creation_input_tokens = cacheCreationTokens;
+  if (scaledCacheCreationTokens > 0) {
+    usage.cache_creation_input_tokens = scaledCacheCreationTokens;
   }
 
   const claudeResponse: JsonRecord = {

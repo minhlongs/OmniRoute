@@ -16,6 +16,10 @@
 import { BaseExecutor, type ExecuteInput } from "./base.ts";
 import { buildErrorBody, sanitizeErrorMessage } from "../utils/error.ts";
 import { prepareToolMessages } from "../translator/webTools.ts";
+import {
+  executeGeminiWebDirectHttp,
+  shouldUseGeminiWebDirectHttp,
+} from "./gemini-web/streamGenerateClient.ts";
 import { buildToolModeResponse } from "./chatgptWebTools.ts";
 import {
   checkGeminiWebUnsupportedControls,
@@ -105,10 +109,124 @@ function formatStreamChunk(content: string, model: string, finishReason: string 
  *   Current user message:
  *   <last user message>
  */
+
+export function extractMessageContentText(content: unknown): string {
+  if (typeof content === "string") return content;
+  if (!content) return "";
+  if (Array.isArray(content)) {
+    const parts: string[] = [];
+    for (const item of content) {
+      if (!item || typeof item !== "object") continue;
+      const block = item as Record<string, unknown>;
+      if (block.type === "text" && typeof block.text === "string") {
+        parts.push(block.text);
+      } else if (block.type === "tool_use") {
+        const name = String(block.name || "");
+        const input = block.input || {};
+        parts.push(`<tool_call>{"name": "${name}", "arguments": ${JSON.stringify(input)}}</tool_call>`);
+      } else if (block.type === "tool_result") {
+        const toolUseId = String(block.tool_use_id || "");
+        const resContent = typeof block.content === "string" ? block.content : JSON.stringify(block.content || "");
+        parts.push(`Tool [${toolUseId}] Result:\n${resContent}`);
+      }
+    }
+    return parts.join("\n");
+  }
+  return String(content);
+}
+
+export function sanitizeGeminiWebOutput(
+  text: string,
+  requestedTools?: unknown
+): string {
+  if (!text) return "";
+  let result = text;
+
+  const hasInternalPython =
+    result.includes("code_reference") ||
+    result.includes("code_stdout") ||
+    result.includes("/home/bard") ||
+    result.includes("subprocess.run");
+
+  if (hasInternalPython) {
+    const hasToolTag = result.includes("<tool>") || result.includes("<tool_call");
+    if (!hasToolTag) {
+      const recoveredCmds: string[] = [];
+      const listRegex = /subprocess\.(?:run|call|Popen|check_output)\s*\(\s*\[([\s\S]*?)\]/g;
+      let m: RegExpExecArray | null;
+      while ((m = listRegex.exec(result)) !== null) {
+        const inner = m[1];
+        const parts: string[] = [];
+        const itemRegex = /["']([^"'\\]*(?:\\.[^"'\\]*)*)["']/g;
+        let itemMatch: RegExpExecArray | null;
+        while ((itemMatch = itemRegex.exec(inner)) !== null) {
+          parts.push(itemMatch[1]);
+        }
+        if (parts.length > 0) {
+          recoveredCmds.push(parts.join(" "));
+        }
+      }
+      const strRegex = /(?:subprocess\.(?:run|call|Popen|check_output)|os\.system)\s*\(\s*["']([^"'\\]*(?:\\.[^"'\\]*)*)["']/g;
+      while ((m = strRegex.exec(result)) !== null) {
+        const cmd = m[1].trim();
+        if (cmd && !recoveredCmds.includes(cmd)) {
+          recoveredCmds.push(cmd);
+        }
+      }
+
+      if (recoveredCmds.length > 0) {
+        const toolBlocks = recoveredCmds
+          .map((cmd) => `<tool_call>{"name": "Bash", "arguments": {"command": ${JSON.stringify(cmd)}}}</tool_call>`)
+          .join("\n");
+        result = `${toolBlocks}\n\n${result}`;
+      }
+    }
+
+    result = result
+      .replace(/```python\?code_reference[^\n]*\n[\s\S]*?```/gi, "")
+      .replace(/```text\?code_stdout[^\n]*\n[\s\S]*?```/gi, "")
+      .replace(/Traceback \(most recent call last\):[\s\S]*?(?=\n\n|$)/gi, "")
+      .replace(/Current working directory: \/home\/bard[\s\S]*?(?=\n\n|$)/gi, "")
+      .replace(/SANDBOX_INPUT_OUTPUT_DIRECTORY: ['"]\/home\/bard['"][\s\S]*?(?=\n\n|$)/gi, "")
+      .replace(/\/home\/bard[^\n]*/gi, "")
+      .replace(/\n{3,}/g, "\n\n")
+      .trim();
+  }
+
+  return result;
+}
+
+export function formatToolsForGemini(tools: unknown): string {
+  if (!Array.isArray(tools) || tools.length === 0) return "";
+  const lines: string[] = [];
+  for (const t of tools) {
+    const fn = (t as { function?: { name?: string; description?: string; parameters?: unknown } })?.function ?? t;
+    if (!fn?.name) continue;
+    const desc = typeof fn.description === "string" && fn.description ? `: ${fn.description}` : "";
+    let params = "";
+    try {
+      const p = fn.parameters ?? (fn as { input_schema?: unknown }).input_schema;
+      if (p && typeof p === "object" && Object.keys(p).length > 0) {
+        params = `\n  parameters: ${JSON.stringify(p)}`;
+      }
+    } catch {
+      params = "";
+    }
+    lines.push(`- ${fn.name}${desc}${params}`);
+  }
+  return lines.join("\n");
+}
+
 export function buildGeminiPrompt(messages: Array<{ role: string; content: unknown }>): string {
-  const textMessages = messages.filter(
-    (m) => typeof m.content === "string" && (m.content as string).trim().length > 0
-  ) as Array<{ role: string; content: string }>;
+  const textMessages = messages
+    .map((m) => ({
+      ...m,
+      content: extractMessageContentText(m.content),
+    }))
+    .filter((m) => typeof m.content === "string" && m.content.trim().length > 0) as Array<{
+    role: string;
+    content: string;
+  }>;
 
   const userMessages = textMessages.filter((m) => m.role === "user");
   if (userMessages.length === 0) return "";
@@ -163,39 +281,101 @@ function sanitizeGeminiToolPrompt(raw: string): string {
 }
 
 export function buildGeminiToolPrompt(
-  effectiveMessages: Array<{ role: string; content: unknown }>
+  effectiveMessages: Array<{ role: string; content: unknown; tool_calls?: unknown }>,
+  requestedTools?: unknown
 ): string {
-  const textMessages = effectiveMessages.filter(
-    (m) => typeof m.content === "string" && (m.content as string).trim().length > 0
-  ) as Array<{ role: string; content: string }>;
+  const extracted = effectiveMessages
+    .map((m) => {
+      let content = extractMessageContentText(m.content).trim();
+      if (!content && Array.isArray((m as any).tool_calls)) {
+        const tcParts: string[] = [];
+        for (const tc of (m as any).tool_calls) {
+          const fn = tc.function || tc;
+          const fnName = fn.name;
+          const fnArgs = typeof fn.arguments === "string" ? JSON.parse(fn.arguments || "{}") : (fn.arguments || {});
+          tcParts.push(`<tool_call>{"name": "${fnName}", "arguments": ${JSON.stringify(fnArgs)}}</tool_call>`);
+        }
+        content = tcParts.join("\n");
+      }
+      return { role: m.role, content };
+    })
+    .filter((m) => m.content.length > 0);
 
-  const rawSystemText = textMessages
+  const rawSystemText = extracted
     .filter((m) => m.role === "system")
     .map((m) => m.content)
     .join("\n\n");
-  const systemText = sanitizeGeminiToolPrompt(rawSystemText);
 
-  const userMessages = textMessages.filter((m) => m.role === "user");
+  const userMessages = extracted.filter((m) => m.role === "user");
   const lastUser = userMessages[userMessages.length - 1];
-  const lastUserContent = sanitizeGeminiToolPrompt(lastUser?.content ?? "");
-  const lastUserIdx = lastUser ? textMessages.lastIndexOf(lastUser) : -1;
+  const lastUserContent = lastUser?.content ?? "";
+  const lastUserIdx = lastUser ? extracted.lastIndexOf(lastUser) : -1;
 
-  const priorTurns = textMessages.filter(
+  const priorTurns = extracted.filter(
     (m, i) => i < lastUserIdx && (m.role === "user" || m.role === "assistant" || m.role === "tool")
   );
 
-  if (priorTurns.length > 0) {
-    const historyLines = priorTurns.map(
-      (m) => `${m.role === "assistant" ? "Assistant" : m.role === "tool" ? "Tool Result" : "User"}: ${m.content}`
-    );
-    const parts: string[] = [];
-    if (systemText) parts.push(systemText);
-    parts.push(`Previous conversation:\n${historyLines.join("\n\n")}`);
-    parts.push(`Current user message:\n${lastUserContent}`);
-    return parts.join("\n\n");
+  const hasExplicitTools = Array.isArray(requestedTools) && requestedTools.length > 0;
+
+  if (!hasExplicitTools && priorTurns.length === 0) {
+    const systemText = sanitizeGeminiToolPrompt(rawSystemText);
+    const userContent = sanitizeGeminiToolPrompt(lastUserContent);
+    return systemText ? `${systemText}\n\n${userContent}` : userContent;
   }
 
-  return systemText ? `${systemText}\n\n${lastUserContent}` : lastUserContent;
+  const clientSystemTexts = extracted
+    .filter((m) => m.role === "system")
+    .map((m) => m.content)
+    .filter(
+      (c) =>
+        !c.includes("The client application provides tools beyond your built-in ones") &&
+        !c.includes("Available tools:")
+    );
+
+  const toolsListStr = formatToolsForGemini(requestedTools);
+
+  const toolContract = [
+    "You have access to the following tools to assist with this coding task. When you want to use a tool, output a <tool_call> block with JSON containing the tool name and arguments. Only output a <tool_call> block when a tool invocation is needed, otherwise answer normally.",
+    "",
+    "Available tools:",
+    toolsListStr,
+    "",
+    "CRITICAL RULES:",
+    "1. DO NOT execute code using your internal Python sandbox. Never run code in /home/bard.",
+    "2. DO NOT output code_reference, code_stdout, or Borg execution cells.",
+    "3. When you need to run bash commands, read/write files, or perform any local action, you MUST invoke the tool using:",
+    '<tool_call>{"name": "<tool_name>", "arguments": { ... }}</tool_call>',
+    "4. When an action requires a tool, emit ONLY the <tool_call> block directly without conversational filler.",
+  ].join("\n");
+
+  const parts: string[] = [];
+  if (clientSystemTexts.length > 0) {
+    parts.push(clientSystemTexts.join("\n\n"));
+  }
+  parts.push(toolContract);
+
+  if (priorTurns.length > 0) {
+    const historyLines = priorTurns.map((m) => {
+      const roleLabel =
+        m.role === "assistant"
+          ? "Assistant"
+          : m.role === "tool"
+            ? "Tool Result"
+            : "User";
+      return `${roleLabel}: ${m.content}`;
+    });
+    parts.push(`Previous conversation:\n${historyLines.join("\n\n")}`);
+  }
+
+  const cleanLastUser = lastUserContent
+    .replace(/\[Client protocol reminder:[\s\S]*?\]/g, "")
+    .trim();
+
+  parts.push(
+    `Current user message:\n${cleanLastUser}\n\n[When an action requires a tool, emit the <tool_call> block directly.]`
+  );
+
+  return parts.join("\n\n");
 }
 
 /**
@@ -215,7 +395,8 @@ export async function buildGeminiToolResponse(
   cid: string,
   created: number
 ): Promise<Response> {
-  const bufferedJson = new Response(JSON.stringify(formatChatCompletion(responseText, model)), {
+  const sanitized = sanitizeGeminiWebOutput(responseText, requestedTools);
+  const bufferedJson = new Response(JSON.stringify(formatChatCompletion(sanitized, model)), {
     status: 200,
     headers: { "Content-Type": "application/json" },
   });
@@ -661,8 +842,10 @@ export class GeminiWebExecutor extends BaseExecutor {
     const rawModel = (model || "").trim();
     const isArgon = /argon/i.test(rawModel);
     const is38 = /3\.8/i.test(rawModel);
+    const isUltra = /ultra/i.test(rawModel);
+    const isHttp = /-http$/i.test(rawModel);
 
-    if (rawModel && !isArgon && !is38) {
+    if (rawModel && !isArgon && !is38 && !isUltra && !isHttp) {
       log?.warn?.("GEMINI-WEB", `Rejected unsupported model for Gemini Web: "${rawModel}"`);
       return {
         response: new Response(
@@ -712,7 +895,7 @@ export class GeminiWebExecutor extends BaseExecutor {
     // (#8371). Single-turn requests stay byte-for-byte identical to the original
     // derivation, keeping the #7286 no-tools regression guard intact.
     const prompt = hasTools
-      ? buildGeminiToolPrompt(effectiveMessages)
+      ? buildGeminiToolPrompt(effectiveMessages, requestedTools)
       : buildGeminiPrompt(messages);
 
     if (!prompt) {
@@ -725,6 +908,45 @@ export class GeminiWebExecutor extends BaseExecutor {
         headers: {},
         transformedBody: body,
       };
+    }
+
+        let isPlaywrightMocked = false;
+    try {
+      const { chromium } = await import("playwright");
+      if (typeof chromium?.launch === "function") {
+        isPlaywrightMocked = !chromium.launch.toString().includes("userDataDir");
+      }
+    } catch {
+      /* ignore */
+    }
+
+    const isDirectHttpCandidate = shouldUseGeminiWebDirectHttp(model, credentials, isPlaywrightMocked);
+    if (isDirectHttpCandidate) {
+      const directResult = await executeGeminiWebDirectHttp({
+        input: { ...input, model: modelId },
+        cookie,
+        prompt,
+        hasTools,
+        requestedTools,
+        mergeRotatedCookies: mergeRotatedGeminiCookies,
+        buildToolResponse: buildGeminiToolResponse,
+      });
+
+      const psd = credentials?.providerSpecificData as Record<string, unknown> | undefined;
+      const explicitDirect =
+        psd?.transport === "http" ||
+        psd?.transport === "direct" ||
+        typeof psd?.endpointUrl === "string" ||
+        (model || "").endsWith("-http");
+
+      if (directResult.response.status === 200 || explicitDirect) {
+        return directResult;
+      }
+
+      log?.warn?.(
+        "GEMINI-WEB",
+        `Direct HTTP returned status ${directResult.response.status}. Falling back to Playwright browser automation.`
+      );
     }
 
     let browser: any = null;
@@ -977,7 +1199,27 @@ export class GeminiWebExecutor extends BaseExecutor {
         transformedBody: body,
       };
     } catch (error) {
-      const rawMessage = error instanceof Error ? error.message : "Unknown error";
+            const rawMessage = error instanceof Error ? error.message : "Unknown error";
+      if (rawMessage.includes("Strict 4 Argon requirement failed")) {
+        log?.warn?.("GEMINI-WEB", rawMessage);
+        return {
+          response: new Response(
+            JSON.stringify({
+              error: sanitizeErrorMessage(rawMessage),
+            }),
+            {
+              status: 503,
+              headers: {
+                "Content-Type": "application/json",
+                "X-Omni-Fallback-Hint": "connection_cooldown",
+              },
+            }
+          ),
+          url: GEMINI_URL,
+          headers: {},
+          transformedBody: body,
+        };
+      }
       // Strict 4 Argon requirement enforcement: tag with connection_cooldown so accountFallback
       // cascades to the next available account without tripping the provider circuit breaker.
       if (rawMessage.includes("Strict 4 Argon requirement failed")) {

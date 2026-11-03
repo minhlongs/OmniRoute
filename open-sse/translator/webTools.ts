@@ -1,4 +1,4 @@
-// Tool-call translation for web-cookie providers (DeepSeek Web, Perplexity Web, etc.).
+// Tool-call translation for web-cookie providers (deepseek-web, chatgpt-web, ...).
 //
 // The web UIs accept only a single plain prompt string and have no native function
 // calling — they reply with tool invocations as raw text. To let agentic clients use
@@ -25,7 +25,7 @@ const TOOL_BLOCK_RE = /<tool>\s*([\s\S]*?)\s*<\/tool>/g;
 // Some web-cookie models (e.g. ds-web) wrap calls as `<tool_call name="...">{json}</tool_call>`
 // instead of the canonical `<tool>{json}</tool>`. Capture the JSON body — the real tool name
 // lives there, never in the tag's `name="..."` attribute (#3260).
-const TOOL_CALL_TAG_RE = /<tool_call(?:\s+[^>]*)?\s*>\s*([\s\S]*?)\s*<\/tool_call>/g;
+const TOOL_CALL_TAG_RE = /<tool_call(?:\s+name=["']([^"']+)["'])?[^>]*>\s*([\s\S]*?)\s*<\/tool_call>/g;
 
 // Per-request nonce binding for tool envelopes (#9343). Associates a random nonce
 // with each tools[] array reference so the serializer and parser can share it
@@ -44,6 +44,7 @@ export function getToolNonce(tools: unknown): string {
 
 interface ToolParseCandidate {
   raw: string;
+  tagToolName?: string | null;
   start: number;
   end: number;
   requireRequestedTool: boolean;
@@ -302,7 +303,7 @@ function findBareJsonCandidates(text: string): ToolParseCandidate[] {
         const raw = text.slice(start, i + 1);
         if (
           /[{,]\s*["']?(name|command)["']?\s*:/i.test(raw) &&
-          /[{,]\s*["']?arguments["']?\s*:/i.test(raw)
+          /[{,]\s*["']?(arguments|input|params|parameters)["']?\s*:/i.test(raw)
         ) {
           candidates.push({ raw, start, end: i + 1, requireRequestedTool: true });
         }
@@ -340,17 +341,22 @@ export function stripRanges(text: string, ranges: Array<{ start: number; end: nu
           : range.end;
     content = `${content.slice(0, start)}${content.slice(end)}`;
   }
-  return content.replace(/\n{3,}/g, "\n\n").trim();
+  content = content
+    .replace(/(?:text\?code_stdout|python\?code_reference)[^\n]*/gi, "")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+  return content;
 }
 
 export function toArgumentsString(value: unknown): string {
-  if (value === undefined) return "{}";
+  if (value === undefined || value === null || value === "") return "{}";
   if (typeof value === "string") {
     const parsed = parseLooseJsonObject(value);
-    return parsed ? JSON.stringify(parsed) : value;
+    return parsed ? JSON.stringify(parsed) : value.trim() ? value : "{}";
   }
   try {
-    return JSON.stringify(value);
+    const s = JSON.stringify(value);
+    return s && s !== "null" ? s : "{}";
   } catch {
     return "{}";
   }
@@ -451,12 +457,17 @@ export function parseToolCallsFromText(
   TOOL_CALL_TAG_RE.lastIndex = 0;
   while ((blockMatch = TOOL_CALL_TAG_RE.exec(text)) !== null) {
     candidates.push({
-      raw: blockMatch[1].trim(),
+      raw: blockMatch[2].trim(),
+      tagToolName: blockMatch[1]?.trim() || null,
       start: blockMatch.index,
       end: TOOL_CALL_TAG_RE.lastIndex,
       requireRequestedTool: false,
     });
   }
+
+
+
+
 
   candidates.sort((a, b) => a.start - b.start);
 
@@ -465,11 +476,11 @@ export function parseToolCallsFromText(
   for (const candidate of candidates) {
     const parsed = parseLooseJsonObject(candidate.raw);
     const emittedName =
-      parsed && typeof parsed.name === "string"
-        ? parsed.name
-        : parsed && typeof parsed.command === "string"
-          ? parsed.command
-          : null;
+      (parsed && typeof parsed.name === "string" ? parsed.name : null) ||
+      (parsed && typeof (parsed as any)?.tool === "string" ? (parsed as any).tool : null) ||
+      (parsed && typeof (parsed as any)?.function === "string" ? (parsed as any).function : null) ||
+      (parsed && typeof (parsed as any)?.function?.name === "string" ? (parsed as any).function.name : null) ||
+      candidate.tagToolName;
     if (!emittedName) continue;
 
     // Nonce binding check (#9343): when the tool prompt embedded a nonce, check
@@ -483,12 +494,38 @@ export function parseToolCallsFromText(
       resolveRequestedToolName(emittedName, requestedToolNames) ||
       (candidate.requireRequestedTool ? null : emittedName);
     if (!name || (candidate.requireRequestedTool && requestedToolNames.length === 0)) continue;
-    const args = toArgumentsString(parsed?.arguments);
-    toolCalls.push({
-      id: `${idSeed}_${toolCalls.length}`,
-      type: "function",
-      function: { name, arguments: args },
-    });
+
+    let rawArgs = parsed?.arguments ?? parsed?.input ?? parsed?.params ?? parsed?.parameters ?? (parsed as any)?.function?.arguments;
+    if (rawArgs === undefined || rawArgs === null || rawArgs === "") {
+      if (parsed && typeof parsed === "object") {
+        const remainingKeys = Object.keys(parsed).filter(
+          (k) => !["name", "tool", "function", "_nonce", "id", "type", "arguments", "input", "params", "parameters"].includes(k)
+        );
+        if (remainingKeys.length > 0) {
+          const directArgs: Record<string, unknown> = {};
+          for (const k of remainingKeys) {
+            directArgs[k] = (parsed as Record<string, unknown>)[k];
+          }
+          rawArgs = directArgs;
+        } else if (candidate.tagToolName && !parsed?.name) {
+          rawArgs = parsed;
+        }
+      }
+    }
+    const args = toArgumentsString(rawArgs);
+
+    // Deduplicate identical consecutive tool calls emitted by streaming or repeated blocks
+    const isDuplicate = toolCalls.some(
+      (tc) => tc.function.name === name && tc.function.arguments === args
+    );
+    if (!isDuplicate) {
+      toolCalls.push({
+        index: toolCalls.length,
+        id: `${idSeed}_${toolCalls.length}`,
+        type: "function",
+        function: { name, arguments: args },
+      });
+    }
     acceptedRanges.push({ start: candidate.start, end: candidate.end });
   }
 
@@ -532,12 +569,12 @@ function buildToolReminder(toolPrompt: string): string {
  * Placement matters: the contract used to be PREPENDED as the first system
  * message. Executors fold all system messages into one block, so with agentic
  * clients whose system prompts exceed ~28K chars the contract sat at the head
- * of a huge block and observed web models ignored it, answering
+ * of a huge block and web models (chatgpt-web observed) ignored it, answering
  * "tool X is not in my tool set" instead of emitting <tool> blocks. Dual
  * placement fixes it: the full contract goes AFTER the client messages (folds
  * to the tail of the system block) and a one-line reminder rides at the end of
- * the latest user message. Captured long-context trials showed prepend 0/3 tool
- * calls and dual placement 16/17 across
+ * the latest user message. Measured on cgpt-web/gpt-5.5-thinking with a
+ * 30K-char system prompt: prepend 0/3 tool calls, dual placement 16/17 across
  * 30K-250K prompts, 30-tool sets, multi-turn tool history, and streaming.
  */
 export function prepareToolMessages(
