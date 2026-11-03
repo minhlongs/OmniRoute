@@ -24,6 +24,8 @@ import { buildToolModeResponse } from "./chatgptWebTools.ts";
 import {
   checkGeminiWebUnsupportedControls,
   GEMINI_WEB_UNSUPPORTED_CONTROL_CODE,
+  stripGeminiWebEffortTier,
+  stripGeminiWebReasoningEffort,
 } from "./gemini-web/capabilities.ts";
 
 // ─── Constants ──────────────────────────────────────────────────────────────
@@ -123,10 +125,13 @@ export function extractMessageContentText(content: unknown): string {
       } else if (block.type === "tool_use") {
         const name = String(block.name || "");
         const input = block.input || {};
-        parts.push(`<tool_call>{"name": "${name}", "arguments": ${JSON.stringify(input)}}</tool_call>`);
+        parts.push(
+          `<tool_call>{"name": "${name}", "arguments": ${JSON.stringify(input)}}</tool_call>`
+        );
       } else if (block.type === "tool_result") {
         const toolUseId = String(block.tool_use_id || "");
-        const resContent = typeof block.content === "string" ? block.content : JSON.stringify(block.content || "");
+        const resContent =
+          typeof block.content === "string" ? block.content : JSON.stringify(block.content || "");
         parts.push(`Tool [${toolUseId}] Result:\n${resContent}`);
       }
     }
@@ -135,10 +140,7 @@ export function extractMessageContentText(content: unknown): string {
   return String(content);
 }
 
-export function sanitizeGeminiWebOutput(
-  text: string,
-  requestedTools?: unknown
-): string {
+export function sanitizeGeminiWebOutput(text: string, requestedTools?: unknown): string {
   if (!text) return "";
   let result = text;
 
@@ -166,7 +168,8 @@ export function sanitizeGeminiWebOutput(
           recoveredCmds.push(parts.join(" "));
         }
       }
-      const strRegex = /(?:subprocess\.(?:run|call|Popen|check_output)|os\.system)\s*\(\s*["']([^"'\\]*(?:\\.[^"'\\]*)*)["']/g;
+      const strRegex =
+        /(?:subprocess\.(?:run|call|Popen|check_output)|os\.system)\s*\(\s*["']([^"'\\]*(?:\\.[^"'\\]*)*)["']/g;
       while ((m = strRegex.exec(result)) !== null) {
         const cmd = m[1].trim();
         if (cmd && !recoveredCmds.includes(cmd)) {
@@ -176,7 +179,10 @@ export function sanitizeGeminiWebOutput(
 
       if (recoveredCmds.length > 0) {
         const toolBlocks = recoveredCmds
-          .map((cmd) => `<tool_call>{"name": "Bash", "arguments": {"command": ${JSON.stringify(cmd)}}}</tool_call>`)
+          .map(
+            (cmd) =>
+              `<tool_call>{"name": "Bash", "arguments": {"command": ${JSON.stringify(cmd)}}}</tool_call>`
+          )
           .join("\n");
         result = `${toolBlocks}\n\n${result}`;
       }
@@ -200,7 +206,9 @@ export function formatToolsForGemini(tools: unknown): string {
   if (!Array.isArray(tools) || tools.length === 0) return "";
   const lines: string[] = [];
   for (const t of tools) {
-    const fn = (t as { function?: { name?: string; description?: string; parameters?: unknown } })?.function ?? t;
+    const fn =
+      (t as { function?: { name?: string; description?: string; parameters?: unknown } })
+        ?.function ?? t;
     if (!fn?.name) continue;
     const desc = typeof fn.description === "string" && fn.description ? `: ${fn.description}` : "";
     let params = "";
@@ -292,8 +300,13 @@ export function buildGeminiToolPrompt(
         for (const tc of (m as any).tool_calls) {
           const fn = tc.function || tc;
           const fnName = fn.name;
-          const fnArgs = typeof fn.arguments === "string" ? JSON.parse(fn.arguments || "{}") : (fn.arguments || {});
-          tcParts.push(`<tool_call>{"name": "${fnName}", "arguments": ${JSON.stringify(fnArgs)}}</tool_call>`);
+          const fnArgs =
+            typeof fn.arguments === "string"
+              ? JSON.parse(fn.arguments || "{}")
+              : fn.arguments || {};
+          tcParts.push(
+            `<tool_call>{"name": "${fnName}", "arguments": ${JSON.stringify(fnArgs)}}</tool_call>`
+          );
         }
         content = tcParts.join("\n");
       }
@@ -357,11 +370,7 @@ export function buildGeminiToolPrompt(
   if (priorTurns.length > 0) {
     const historyLines = priorTurns.map((m) => {
       const roleLabel =
-        m.role === "assistant"
-          ? "Assistant"
-          : m.role === "tool"
-            ? "Tool Result"
-            : "User";
+        m.role === "assistant" ? "Assistant" : m.role === "tool" ? "Tool Result" : "User";
       return `${roleLabel}: ${m.content}`;
     });
     parts.push(`Previous conversation:\n${historyLines.join("\n\n")}`);
@@ -592,7 +601,9 @@ export async function ensureAdvancedModel(
 
   const requestedModel = typeof targetModelOrLog === "string" ? targetModelOrLog : undefined;
   const log = (
-    typeof targetModelOrLog === "object" && targetModelOrLog !== null ? targetModelOrLog : optionalLog
+    typeof targetModelOrLog === "object" && targetModelOrLog !== null
+      ? targetModelOrLog
+      : optionalLog
   ) as ExecuteInput["log"];
 
   const is38 = requestedModel ? /3\.8/i.test(requestedModel) : false;
@@ -605,7 +616,9 @@ export async function ensureAdvancedModel(
   const switchTriggerSelector =
     ".input-area-switch-label, button.input-area-switch, button[aria-label*='mode picker'], [data-test-id='model-selector']";
 
-  let switchElement = await page.waitForSelector(switchTriggerSelector, { timeout: 10000 }).catch(() => null);
+  let switchElement = await page
+    .waitForSelector(switchTriggerSelector, { timeout: 10000 })
+    .catch(() => null);
 
   // Fallback: search for buttons with model picker attributes
   if (!switchElement) {
@@ -643,8 +656,13 @@ export async function ensureAdvancedModel(
     return;
   }
 
-  console.log(`[gemini-web] Model is currently '${currentModel}'. Opening dropdown to switch to ${targetLabel}...`);
-  log?.info?.("GEMINI-WEB", `[gemini-web] Model is currently '${currentModel}'. Opening dropdown to switch to ${targetLabel}...`);
+  console.log(
+    `[gemini-web] Model is currently '${currentModel}'. Opening dropdown to switch to ${targetLabel}...`
+  );
+  log?.info?.(
+    "GEMINI-WEB",
+    `[gemini-web] Model is currently '${currentModel}'. Opening dropdown to switch to ${targetLabel}...`
+  );
 
   // Open the dropdown menu
   await switchElement.click({ force: true });
@@ -766,9 +784,7 @@ export class GeminiWebExecutor extends BaseExecutor {
     _signal?: AbortSignal
   ): Promise<boolean> {
     try {
-      const cookie = resolveGeminiWebCookie(
-        credentials as unknown as ExecuteInput["credentials"]
-      );
+      const cookie = resolveGeminiWebCookie(credentials as unknown as ExecuteInput["credentials"]);
       if (!cookie) return false;
       const pairs = parseCookies(cookie);
       return pairs.some((p) => p.value.length > 0);
@@ -811,12 +827,24 @@ export class GeminiWebExecutor extends BaseExecutor {
     const { model, body, stream, credentials, signal, log, onCredentialsRefreshed } = input;
     const requestBody = body as GeminiRequestBody;
 
-    // #9356: fail fast on controls this provider cannot honor (reasoning_effort
-    // above "minimal", forced tool_choice). Runs before the credential check and
-    // before Playwright launches — the request is unservable no matter which
-    // cookie is used, and answering 200 with ordinary prose made agents believe
-    // their reasoning/tool requirements had been met. See ./gemini-web/capabilities.ts.
-    const violation = checkGeminiWebUnsupportedControls(body as Record<string, unknown>);
+    // #9356: fail fast on controls this provider cannot honor (forced
+    // tool_choice). Runs before the credential check and before Playwright
+    // launches — answering 200 with ordinary prose made agents believe their
+    // tool requirements had been met. See ./gemini-web/capabilities.ts.
+    //
+    // reasoning_effort is DROPPED rather than rejected: the value is injected by
+    // the router (combo / effort-variant resolution), not requested from
+    // gemini-web by the caller, and every agentic client — Claude Code CLI chief
+    // among them — arrives carrying one. Rejecting it turned a servable chat
+    // request into a permanent 400 for this provider.
+    const scrubbed = stripGeminiWebReasoningEffort(body as Record<string, unknown>);
+    if (scrubbed.stripped) {
+      log?.debug?.(
+        "GEMINI-WEB",
+        `Dropped reasoning_effort="${scrubbed.stripped}" — provider has no thinking control`
+      );
+    }
+    const violation = checkGeminiWebUnsupportedControls(scrubbed.body);
     if (violation) {
       log?.warn?.(
         "GEMINI-WEB",
@@ -838,8 +866,10 @@ export class GeminiWebExecutor extends BaseExecutor {
       };
     }
 
-    // Model restriction: strictly Argon and 3.8 only from Gemini Web
-    const rawModel = (model || "").trim();
+    // Model restriction: strictly Argon and 3.8 only from Gemini Web.
+    // Tier suffixes (`-high`/`-medium`/`-low`) are a router concept — gemini-web
+    // drives one web model per family, so both forms resolve to the same id.
+    const rawModel = stripGeminiWebEffortTier(model || "");
     const isArgon = /argon/i.test(rawModel);
     const is38 = /3\.8/i.test(rawModel);
     const isUltra = /ultra/i.test(rawModel);
@@ -868,7 +898,7 @@ export class GeminiWebExecutor extends BaseExecutor {
       };
     }
 
-    const modelId = is38 ? (rawModel || "gemini-3.8-flash") : (rawModel || "gemini-4-argon");
+    const modelId = is38 ? rawModel || "gemini-3.8-flash" : rawModel || "gemini-4-argon";
 
     const cookie = resolveGeminiWebCookie(credentials);
     if (!cookie) {
@@ -910,7 +940,7 @@ export class GeminiWebExecutor extends BaseExecutor {
       };
     }
 
-        let isPlaywrightMocked = false;
+    let isPlaywrightMocked = false;
     try {
       const { chromium } = await import("playwright");
       if (typeof chromium?.launch === "function") {
@@ -920,7 +950,11 @@ export class GeminiWebExecutor extends BaseExecutor {
       /* ignore */
     }
 
-    const isDirectHttpCandidate = shouldUseGeminiWebDirectHttp(model, credentials, isPlaywrightMocked);
+    const isDirectHttpCandidate = shouldUseGeminiWebDirectHttp(
+      model,
+      credentials,
+      isPlaywrightMocked
+    );
     if (isDirectHttpCandidate) {
       const directResult = await executeGeminiWebDirectHttp({
         input: { ...input, model: modelId },
@@ -956,7 +990,8 @@ export class GeminiWebExecutor extends BaseExecutor {
         throw signal.reason instanceof Error ? signal.reason : new Error("Request aborted");
       }
       const { chromium } = await import("playwright");
-      const proxyServer = process.env.HTTPS_PROXY || process.env.ALL_PROXY || process.env.HTTP_PROXY;
+      const proxyServer =
+        process.env.HTTPS_PROXY || process.env.ALL_PROXY || process.env.HTTP_PROXY;
       const launchOptions: import("playwright").LaunchOptions = { headless: true };
       if (proxyServer) {
         launchOptions.proxy = { server: proxyServer };
@@ -1024,17 +1059,23 @@ export class GeminiWebExecutor extends BaseExecutor {
         await inputEl.click();
       }
       if (typeof page.evaluate === "function") {
-        await page.evaluate((text) => {
-          const el = document.querySelector(".ql-editor, [contenteditable='true']") as HTMLElement;
-          if (el) {
-            el.focus();
-            document.execCommand("insertText", false, text);
-          }
-        }, prompt).catch(() => {});
-        const inserted = await page.evaluate(() => {
-          const el = document.querySelector(".ql-editor, [contenteditable='true']");
-          return Boolean(el?.textContent?.trim());
-        }).catch(() => false);
+        await page
+          .evaluate((text) => {
+            const el = document.querySelector(
+              ".ql-editor, [contenteditable='true']"
+            ) as HTMLElement;
+            if (el) {
+              el.focus();
+              document.execCommand("insertText", false, text);
+            }
+          }, prompt)
+          .catch(() => {});
+        const inserted = await page
+          .evaluate(() => {
+            const el = document.querySelector(".ql-editor, [contenteditable='true']");
+            return Boolean(el?.textContent?.trim());
+          })
+          .catch(() => false);
         if (!inserted) {
           if (typeof (inputEl as any).fill === "function") {
             await (inputEl as any).fill(prompt).catch(() => {});
@@ -1069,19 +1110,21 @@ export class GeminiWebExecutor extends BaseExecutor {
           while (Date.now() - startTime < maxWaitMs) {
             if (signal?.aborted || captured) return;
 
-            const state = await page.evaluate(() => {
-              const stopBtn = document.querySelector(
-                "button[aria-label*='Stop'], button[aria-label*='Dừng'], .stop-button, [data-test-id='stop-button'], mat-icon[data-mat-icon-name='stop']"
-              );
-              const msgs = document.querySelectorAll("message-content, .model-response-text");
-              const lastMsg = msgs.length > 0 ? msgs[msgs.length - 1] : null;
-              const text = (lastMsg as HTMLElement)?.innerText?.trim() || "";
-              return {
-                isGenerating: Boolean(stopBtn),
-                text,
-                length: text.length,
-              };
-            }).catch(() => null);
+            const state = await page
+              .evaluate(() => {
+                const stopBtn = document.querySelector(
+                  "button[aria-label*='Stop'], button[aria-label*='Dừng'], .stop-button, [data-test-id='stop-button'], mat-icon[data-mat-icon-name='stop']"
+                );
+                const msgs = document.querySelectorAll("message-content, .model-response-text");
+                const lastMsg = msgs.length > 0 ? msgs[msgs.length - 1] : null;
+                const text = (lastMsg as HTMLElement)?.innerText?.trim() || "";
+                return {
+                  isGenerating: Boolean(stopBtn),
+                  text,
+                  length: text.length,
+                };
+              })
+              .catch(() => null);
 
             if (state && state.length > 0) {
               if (!state.isGenerating && state.length === prevLength) {
@@ -1111,11 +1154,13 @@ export class GeminiWebExecutor extends BaseExecutor {
       }
 
       if (!responseText && typeof page.evaluate === "function") {
-        const domText = await page.evaluate(() => {
-          const msgs = document.querySelectorAll("message-content, .model-response-text");
-          const lastMsg = msgs.length > 0 ? msgs[msgs.length - 1] : null;
-          return (lastMsg as HTMLElement)?.innerText?.trim() || "";
-        }).catch(() => "");
+        const domText = await page
+          .evaluate(() => {
+            const msgs = document.querySelectorAll("message-content, .model-response-text");
+            const lastMsg = msgs.length > 0 ? msgs[msgs.length - 1] : null;
+            return (lastMsg as HTMLElement)?.innerText?.trim() || "";
+          })
+          .catch(() => "");
         if (domText) {
           responseText = domText;
         }
@@ -1199,7 +1244,7 @@ export class GeminiWebExecutor extends BaseExecutor {
         transformedBody: body,
       };
     } catch (error) {
-            const rawMessage = error instanceof Error ? error.message : "Unknown error";
+      const rawMessage = error instanceof Error ? error.message : "Unknown error";
       if (rawMessage.includes("Strict 4 Argon requirement failed")) {
         log?.warn?.("GEMINI-WEB", rawMessage);
         return {

@@ -5,6 +5,7 @@ import { buildGeminiPrompt } from "../gemini-web.ts";
 import {
   checkGeminiWebUnsupportedControls,
   GEMINI_WEB_UNSUPPORTED_CONTROL_CODE,
+  stripGeminiWebReasoningEffort,
 } from "../gemini-web/capabilities.ts";
 
 export const GEMINI_WEB_LAB_DISABLED_CODE = "gemini_web_lab_disabled";
@@ -92,7 +93,8 @@ export function checkGeminiWebLabRequestGuards(
   body: Record<string, unknown> | null | undefined,
   enforceModelAllowlist = true
 ): Response | null {
-  const capViolation = checkGeminiWebUnsupportedControls(body);
+  const scrubbed = stripGeminiWebReasoningEffort(body);
+  const capViolation = checkGeminiWebUnsupportedControls(scrubbed.body);
   if (capViolation) {
     return makeJsonError(400, capViolation.message, GEMINI_WEB_UNSUPPORTED_CONTROL_CODE);
   }

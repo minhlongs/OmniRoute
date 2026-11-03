@@ -83,11 +83,66 @@ export function requestsThinkingBudget(reasoningEffort: unknown): boolean {
 }
 
 /**
+ * Trailing effort tier a router may append to a gemini-web model id
+ * (`gemini-4-argon-high`, `gemini-3.8-flash-medium`). Longest suffix first so
+ * `-xhigh` can never be mistaken for `-high` with a stray `x`.
+ */
+const GEMINI_WEB_EFFORT_TIER_RE = /-(?:xhigh|high|medium|low)$/i;
+
+/**
+ * Collapse an effort-tier model id onto the base model gemini-web can drive.
+ *
+ * The tier is a ROUTER concept (combo / effort-variant resolution), not a
+ * gemini.google.com model: there is no thinking control to set, so
+ * `gemini-4-argon-high` and `gemini-4-argon` are the same upstream request.
+ * Ids that merely contain a tier word (`lowrider-pro`) are untouched — only a
+ * trailing `-<tier>` token matches. Mirrors AIClient2API, which models the same
+ * tiers as `thinkingLevel` on the reasoning-capable cloudcode-pa upstream only.
+ */
+export function stripGeminiWebEffortTier(model: string): string {
+  if (typeof model !== "string") return "";
+  return model.trim().replace(GEMINI_WEB_EFFORT_TIER_RE, "");
+}
+
+/**
+ * Drop `reasoning_effort` from a request before the capability guard runs.
+ *
+ * Returns a shallow COPY — the caller's body is never mutated — plus the value
+ * that was dropped, so the executor can log why the control vanished.
+ * `none`/`minimal` are already compliant and stay in place, and a body without
+ * the field is returned by reference (no allocation on the common path).
+ *
+ * Rationale (2026-11-03, supersedes the #9356 rejection for this field): the
+ * effort is injected by the router, not asked of gemini-web by the caller, and
+ * every agentic client arrives carrying one. `checkGeminiWebUnsupportedControls`
+ * still rejects it for any caller that bypasses this scrub — the executor is
+ * the layer that decides to swallow it.
+ */
+export function stripGeminiWebReasoningEffort(body: Record<string, unknown> | null | undefined): {
+  body: Record<string, unknown>;
+  stripped: string | null;
+} {
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    return { body: {}, stripped: null };
+  }
+  if (!requestsThinkingBudget(body.reasoning_effort)) {
+    return { body, stripped: null };
+  }
+  const { reasoning_effort: dropped, ...rest } = body;
+  return { body: rest, stripped: normalizeString(dropped) };
+}
+
+/**
  * Inspect an OpenAI-shaped request body for controls gemini-web cannot honor.
  * Returns the first violation found, or `null` when the request is servable.
  *
  * `reasoning_effort` is checked before `tool_choice` only for determinism; a
  * request carrying both is rejected either way.
+ *
+ * NOTE: both executors scrub `reasoning_effort` via
+ * `stripGeminiWebReasoningEffort()` before calling this, so in the request
+ * pipeline only `tool_choice` can still trip. The effort branch is kept for
+ * direct callers of the pure function.
  */
 export function checkGeminiWebUnsupportedControls(
   body: Record<string, unknown> | null | undefined

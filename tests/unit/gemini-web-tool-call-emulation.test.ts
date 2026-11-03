@@ -2,7 +2,6 @@ import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import {
   buildGeminiToolPrompt,
-  formatToolsForGemini,
   buildGeminiToolResponse,
 } from "../../open-sse/executors/gemini-web.ts";
 import { parseToolCallsFromText } from "../../open-sse/translator/webTools.ts";
@@ -35,12 +34,18 @@ describe("Gemini Web Tool Call Emulation", () => {
     const prompt = buildGeminiToolPrompt(messages, sampleTools);
 
     assert.ok(prompt.includes("CRITICAL RULES:"), "Should include critical rules");
-    assert.ok(prompt.includes("DO NOT execute code using your internal Python sandbox"), "Should forbid internal Python");
+    assert.ok(
+      prompt.includes("DO NOT execute code using your internal Python sandbox"),
+      "Should forbid internal Python"
+    );
     assert.ok(prompt.includes("/home/bard"), "Should mention /home/bard");
     assert.ok(prompt.includes("<tool_call>"), "Should instruct <tool_call>");
     assert.ok(prompt.includes("You are Claude Code"), "Should preserve client system prompt");
     assert.ok(prompt.includes("Bash: Run a shell command"), "Should list available tools");
-    assert.ok(prompt.includes("Run echo 123"), "Should include user request text from array content");
+    assert.ok(
+      prompt.includes("Run echo 123"),
+      "Should include user request text from array content"
+    );
   });
 
   it("preserves multi-turn conversation history and tool results in prompt", () => {
@@ -50,9 +55,7 @@ describe("Gemini Web Tool Call Emulation", () => {
       {
         role: "assistant",
         content: "",
-        tool_calls: [
-          { function: { name: "Bash", arguments: '{"command":"git status"}' } },
-        ],
+        tool_calls: [{ function: { name: "Bash", arguments: '{"command":"git status"}' } }],
       },
       {
         role: "tool",
@@ -71,7 +74,8 @@ describe("Gemini Web Tool Call Emulation", () => {
   });
 
   it("parses <tool_call> tags and extracts tool calls", () => {
-    const text = 'I will run the command:\n<tool_call>{"name":"Bash","arguments":{"command":"echo hello"}}</tool_call>';
+    const text =
+      'I will run the command:\n<tool_call>{"name":"Bash","arguments":{"command":"echo hello"}}</tool_call>';
     const result = parseToolCallsFromText(text, "call-1", sampleTools);
 
     assert.ok(result.toolCalls, "Should parse tool calls");
@@ -91,8 +95,50 @@ describe("Gemini Web Tool Call Emulation", () => {
     assert.equal(result.toolCalls?.[0]?.function?.arguments, '{"command":"ls -la"}');
   });
 
+  it("parses a bare <tool_call> command object with no name field", () => {
+    // Observed live from Claude Code CLI traffic (2026-11-03): gemini-web answers
+    // with the ARGUMENTS only — `<tool_call>{"command": "...", "description": "..."}</tool_call>`
+    // — no `name`, no `name=""` attribute. Without a fallback the block cannot be
+    // named, so it was left in `content` and the CLI received prose instead of a
+    // tool call. The only requested tool that takes a `command` is Bash here.
+    const text =
+      '<tool_call>{"command": "git status", "description": "Show working tree status"}</tool_call>';
+    const result = parseToolCallsFromText(text, "call-bare", sampleTools);
+
+    assert.ok(result.toolCalls, "a bare command object must still become a tool call");
+    assert.equal(result.toolCalls?.length, 1);
+    assert.equal(result.toolCalls?.[0]?.function?.name, "Bash");
+    assert.deepEqual(JSON.parse(result.toolCalls![0]!.function!.arguments), {
+      command: "git status",
+      description: "Show working tree status",
+    });
+    assert.equal(result.content.trim(), "", "the block must be consumed, not leaked as text");
+  });
+
+  it("does not invent a command tool when none was offered", () => {
+    // Same shape, but the request asked for a web tool. Guessing "Bash" here would
+    // emit a tool call the client cannot execute, so the block stays text.
+    const webTools = [
+      {
+        type: "function",
+        function: {
+          name: "get_weather",
+          description: "Get the weather",
+          parameters: { type: "object", properties: { city: { type: "string" } } },
+        },
+      },
+    ];
+    const result = parseToolCallsFromText(
+      '<tool_call>{"command": "git status"}</tool_call>',
+      "call-bare-2",
+      webTools
+    );
+    assert.equal(result.toolCalls?.length ?? 0, 0);
+  });
+
   it("cleans internal Borg / Python execution artifacts from response text", () => {
-    const text = 'Here is the result:\ntext?code_stdout=123\npython?code_reference=456\n<tool_call>{"name":"Bash","arguments":{"command":"pwd"}}</tool_call>';
+    const text =
+      'Here is the result:\ntext?code_stdout=123\npython?code_reference=456\n<tool_call>{"name":"Bash","arguments":{"command":"pwd"}}</tool_call>';
     const result = parseToolCallsFromText(text, "call-3", sampleTools);
 
     assert.ok(result.toolCalls, "Should parse tool calls");
@@ -101,7 +147,8 @@ describe("Gemini Web Tool Call Emulation", () => {
   });
 
   it("buildGeminiToolResponse formats valid response for streaming and non-streaming", async () => {
-    const responseText = '<tool_call>{"name":"Bash","arguments":{"command":"uname -a"}}</tool_call>';
+    const responseText =
+      '<tool_call>{"name":"Bash","arguments":{"command":"uname -a"}}</tool_call>';
 
     // Non-streaming
     const nonStreamResp = await buildGeminiToolResponse(

@@ -25,7 +25,8 @@ const TOOL_BLOCK_RE = /<tool>\s*([\s\S]*?)\s*<\/tool>/g;
 // Some web-cookie models (e.g. ds-web) wrap calls as `<tool_call name="...">{json}</tool_call>`
 // instead of the canonical `<tool>{json}</tool>`. Capture the JSON body — the real tool name
 // lives there, never in the tag's `name="..."` attribute (#3260).
-const TOOL_CALL_TAG_RE = /<tool_call(?:\s+name=["']([^"']+)["'])?[^>]*>\s*([\s\S]*?)\s*<\/tool_call>/g;
+const TOOL_CALL_TAG_RE =
+  /<tool_call(?:\s+name=["']([^"']+)["'])?[^>]*>\s*([\s\S]*?)\s*<\/tool_call>/g;
 
 // Per-request nonce binding for tool envelopes (#9343). Associates a random nonce
 // with each tools[] array reference so the serializer and parser can share it
@@ -116,6 +117,28 @@ function scoreToolName(emitted: string, requested: RequestedToolName): number {
   const distance = levenshteinDistance(normalized, requested.normalized);
   const similarity = 1 - distance / Math.max(longer, 1);
   return similarity >= 0.72 ? similarity : 0;
+}
+
+/**
+ * Shell tools a web model may address implicitly by emitting only
+ * `{"command": "..."}`. Matched on the NORMALIZED name so `Bash`, `bash` and
+ * `run-command` all hit, while unrelated names never do. Ordered by likelihood.
+ */
+const SHELL_TOOL_NAME_RE =
+  /^(bash|bashtool|shell|sh|terminal|exec|execute|runcommand|executecommand|containerexec)$/;
+
+/**
+ * Pick the shell tool the caller actually offered, if any.
+ *
+ * Returns `null` when the request contains no shell-like tool: a bare
+ * `{"command": ...}` block then stays text, because emitting a tool call the
+ * client never declared would fail every downstream executor.
+ */
+export function findRequestedShellToolName(requestedTools: RequestedToolName[]): string | null {
+  for (const requested of requestedTools) {
+    if (SHELL_TOOL_NAME_RE.test(requested.normalized)) return requested.original;
+  }
+  return null;
 }
 
 export function resolveRequestedToolName(
@@ -465,22 +488,25 @@ export function parseToolCallsFromText(
     });
   }
 
-
-
-
-
   candidates.sort((a, b) => a.start - b.start);
 
   const toolCalls: OpenAIToolCall[] = [];
   const acceptedRanges: Array<{ start: number; end: number }> = [];
   for (const candidate of candidates) {
     const parsed = parseLooseJsonObject(candidate.raw);
+    const parsedFunction = toRecord(parsed?.function);
     const emittedName =
-      (parsed && typeof parsed.name === "string" ? parsed.name : null) ||
-      (parsed && typeof (parsed as any)?.tool === "string" ? (parsed as any).tool : null) ||
-      (parsed && typeof (parsed as any)?.function === "string" ? (parsed as any).function : null) ||
-      (parsed && typeof (parsed as any)?.function?.name === "string" ? (parsed as any).function.name : null) ||
-      candidate.tagToolName;
+      (typeof parsed?.name === "string" ? parsed.name : null) ||
+      (typeof parsed?.tool === "string" ? parsed.tool : null) ||
+      (typeof parsed?.function === "string" ? parsed.function : null) ||
+      (typeof parsedFunction?.name === "string" ? parsedFunction.name : null) ||
+      candidate.tagToolName ||
+      // Bare shell invocation: web models frequently drop the wrapper and answer
+      // with the ARGUMENTS only — `<tool_call>{"command":"git status"}</tool_call>`
+      // (observed from Claude Code CLI traffic, 2026-11-03). The block has no
+      // name anywhere, so it used to fall through and leak as prose. Resolve it
+      // to a shell tool THE CALLER ACTUALLY OFFERED; never invent one.
+      (typeof parsed?.command === "string" ? findRequestedShellToolName(requestedToolNames) : null);
     if (!emittedName) continue;
 
     // Nonce binding check (#9343): when the tool prompt embedded a nonce, check
@@ -495,11 +521,28 @@ export function parseToolCallsFromText(
       (candidate.requireRequestedTool ? null : emittedName);
     if (!name || (candidate.requireRequestedTool && requestedToolNames.length === 0)) continue;
 
-    let rawArgs = parsed?.arguments ?? parsed?.input ?? parsed?.params ?? parsed?.parameters ?? (parsed as any)?.function?.arguments;
+    let rawArgs =
+      parsed?.arguments ??
+      parsed?.input ??
+      parsed?.params ??
+      parsed?.parameters ??
+      parsedFunction?.arguments;
     if (rawArgs === undefined || rawArgs === null || rawArgs === "") {
       if (parsed && typeof parsed === "object") {
         const remainingKeys = Object.keys(parsed).filter(
-          (k) => !["name", "tool", "function", "_nonce", "id", "type", "arguments", "input", "params", "parameters"].includes(k)
+          (k) =>
+            ![
+              "name",
+              "tool",
+              "function",
+              "_nonce",
+              "id",
+              "type",
+              "arguments",
+              "input",
+              "params",
+              "parameters",
+            ].includes(k)
         );
         if (remainingKeys.length > 0) {
           const directArgs: Record<string, unknown> = {};

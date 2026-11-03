@@ -167,12 +167,30 @@ test("Provider: gemini-web in providerRegistry", async () => {
 test("Provider: gemini-web has correct models", async () => {
   const { REGISTRY } = await import("../../open-sse/config/providerRegistry.ts");
   const models = REGISTRY["gemini-web"].models;
-  assert.ok(models.some((m: any) => m.id === "gemini-4-argon"));
-  assert.ok(models.some((m: any) => m.id === "gemini-4-argon-high"));
-  assert.ok(models.some((m: any) => m.id === "gemini-3.8-flash"));
-  assert.equal(models.some((m: any) => m.id === "gemini-3.1-pro"), false);
-  assert.equal(models.some((m: any) => m.id === "gemini-3.5-flash"), false);
-  assert.equal(models.some((m: any) => m.id === "gemini-3.1-flash-lite"), false);
+  assert.ok(models.some((m: { id: string }) => m.id === "gemini-4-argon"));
+  assert.ok(models.some((m: { id: string }) => m.id === "gemini-3.8-flash"));
+  assert.equal(
+    models.some((m: { id: string }) => m.id === "gemini-3.1-pro"),
+    false
+  );
+  assert.equal(
+    models.some((m: { id: string }) => m.id === "gemini-3.5-flash"),
+    false
+  );
+  assert.equal(
+    models.some((m: { id: string }) => m.id === "gemini-3.1-flash-lite"),
+    false
+  );
+  // Effort tiers are a router concept, not gemini-web models: the provider has no
+  // thinking control, so `-high/-medium/-low` must not be advertised. The
+  // executor normalizes a stale tier id onto the base model instead.
+  for (const tier of ["gemini-4-argon-high", "gemini-4-argon-medium", "gemini-4-argon-low"]) {
+    assert.equal(
+      models.some((m: { id: string }) => m.id === tier),
+      false,
+      `${tier} must not be advertised — gemini-web cannot honor a thinking tier`
+    );
+  }
 });
 
 test("GeminiWebExecutor rejects non-argon, non-3.8 models with HTTP 400", async () => {

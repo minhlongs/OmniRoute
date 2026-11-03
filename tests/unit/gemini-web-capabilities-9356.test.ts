@@ -14,24 +14,30 @@
 // tools support it does have is the prompt-emulation shim (`webTools.ts`, #7286),
 // which ASKS the model to emit `<tool>{...}</tool>` and cannot GUARANTEE it.
 //
-// So this suite pins the issue's option (b) for both controls: reject the
-// requests we cannot honor, and keep honoring the ones we can. The line drawn:
+// So this suite pins the contract, updated 2026-11-03:
 //
-//   reasoning_effort  none | minimal        → allowed (gemini-web not thinking
-//                                             IS compliance with "spend little")
-//                     low | medium | high…  → 400, a positive request to think
-//   tool_choice       absent | auto | none  → allowed (emulation path, #7286)
-//                     required | any | {fn} → 400, a guarantee we cannot make
+//   reasoning_effort  any value                → DROPPED before the guard
+//   model tier suffix -high|-medium|-low       → collapsed to the base model
+//   tool_choice       absent | auto | none     → allowed (emulation path, #7286)
+//                     required | any | {fn}     → 400, a guarantee we cannot make
 //
-// The guard must run BEFORE Playwright launches, so every executor assertion
-// here completes without a browser.
+// Effort stopped being a rejection because the value is injected by the ROUTER
+// (combo / effort-variant resolution), not requested from gemini-web by the
+// caller: agentic clients such as Claude Code CLI always arrive with an effort,
+// so the old 400 made this provider unusable for them. The guard must still run
+// BEFORE Playwright launches, so every executor assertion here completes
+// without a browser.
 
 import test from "node:test";
 import assert from "node:assert/strict";
 
 const { GeminiWebExecutor } = await import("../../open-sse/executors/gemini-web.ts");
-const { checkGeminiWebUnsupportedControls, GEMINI_WEB_UNSUPPORTED_CONTROL_CODE } =
-  await import("../../open-sse/executors/gemini-web/capabilities.ts");
+const {
+  checkGeminiWebUnsupportedControls,
+  GEMINI_WEB_UNSUPPORTED_CONTROL_CODE,
+  stripGeminiWebEffortTier,
+  stripGeminiWebReasoningEffort,
+} = await import("../../open-sse/executors/gemini-web/capabilities.ts");
 const { gemini_webProvider } =
   await import("../../open-sse/config/providers/registry/gemini/web/index.ts");
 const { supportsReasoning, supportsToolCalling } =
@@ -69,18 +75,64 @@ async function run(body: Record<string, unknown>) {
 }
 
 // ─── Pure checker: reasoning_effort ─────────────────────────────────────────
+//
+// DECISION REVERSAL (2026-11-03). #9356 rejected reasoning_effort above
+// "minimal" because gemini-web has no thinking control. In practice every
+// agentic client (Claude Code CLI chief among them) routes through a combo that
+// injects a reasoning_effort on the way in, so the guard turned a servable chat
+// request into a hard 400 and the target could never be used — the caller never
+// asked *gemini-web* to think, the router did. gemini-web now DROPS the field
+// and the effort tier suffix (`gemini-4-argon-high` → `gemini-4-argon`) before
+// the guard, matching how the reference implementation (AIClient2API) treats
+// tiers as thinkingLevel on a reasoning-capable upstream only.
+//
+// Forced `tool_choice` keeps the #9356 contract untouched: that is a guarantee
+// about the RESPONSE shape, and dropping it would let an agent act on an
+// answer that never called the tool.
 
-test("#9356 reasoning_effort low/medium/high/xhigh are rejected as unsupported", () => {
+test("#9356 reasoning_effort above minimal is stripped, not rejected", () => {
   for (const effort of ["low", "medium", "high", "xhigh"]) {
-    const violation = checkGeminiWebUnsupportedControls({ reasoning_effort: effort });
+    const scrubbed = stripGeminiWebReasoningEffort({ reasoning_effort: effort });
+    assert.equal(scrubbed.stripped, effort);
     assert.equal(
-      violation?.param,
-      "reasoning_effort",
-      `reasoning_effort="${effort}" asks gemini-web to think harder, which a typed browser ` +
-        `prompt cannot express — it must be rejected, not silently dropped`
+      "reasoning_effort" in scrubbed.body,
+      false,
+      `reasoning_effort="${effort}" must be removed from the body, not forwarded`
     );
-    assert.match(violation!.message, /reasoning_effort/);
+    assert.equal(
+      checkGeminiWebUnsupportedControls(scrubbed.body),
+      null,
+      "the scrubbed body must be servable — the guard is for tool_choice only now"
+    );
   }
+});
+
+test("#9356 stripping does not mutate the caller's body", () => {
+  const original = { reasoning_effort: "high", messages: [{ role: "user", content: "hi" }] };
+  const scrubbed = stripGeminiWebReasoningEffort(original);
+  assert.equal(original.reasoning_effort, "high", "input object must stay untouched");
+  assert.equal(scrubbed.body.messages, original.messages, "unrelated keys ride along by reference");
+});
+
+test("#9356 stripping is a no-op when reasoning_effort is absent or satisfied", () => {
+  assert.equal(stripGeminiWebReasoningEffort({}).stripped, null);
+  assert.equal(stripGeminiWebReasoningEffort({ reasoning_effort: null }).stripped, null);
+  assert.equal(stripGeminiWebReasoningEffort({ reasoning_effort: "none" }).stripped, null);
+  assert.equal(stripGeminiWebReasoningEffort({ reasoning_effort: "minimal" }).stripped, null);
+  assert.equal(stripGeminiWebReasoningEffort(null).stripped, null);
+});
+
+test("#9356 effort tier suffixes normalize to the base Argon/Flash model", () => {
+  assert.equal(stripGeminiWebEffortTier("gemini-4-argon-high"), "gemini-4-argon");
+  assert.equal(stripGeminiWebEffortTier("gemini-4-argon-medium"), "gemini-4-argon");
+  assert.equal(stripGeminiWebEffortTier("gemini-4-argon-low"), "gemini-4-argon");
+  assert.equal(stripGeminiWebEffortTier("gemini-4-argon-xhigh"), "gemini-4-argon");
+  assert.equal(stripGeminiWebEffortTier("gemini-3.8-flash-medium"), "gemini-3.8-flash");
+  // Ids that merely CONTAIN a tier word must survive untouched.
+  assert.equal(stripGeminiWebEffortTier("gemini-4-argon"), "gemini-4-argon");
+  assert.equal(stripGeminiWebEffortTier("gemini-3.8-flash"), "gemini-3.8-flash");
+  assert.equal(stripGeminiWebEffortTier("lowrider-pro"), "lowrider-pro");
+  assert.equal(stripGeminiWebEffortTier(""), "");
 });
 
 test("#9356 reasoning_effort none/minimal and absent stay allowed", () => {
@@ -153,18 +205,54 @@ test("#9356 forcing is rejected on its own terms, even with no tools[] array", (
 
 // ─── Executor wiring ────────────────────────────────────────────────────────
 
-test("#9356 executor returns 400 for reasoning_effort=high before launching a browser", async () => {
-  const result = await run({ reasoning_effort: "high" });
+test("#9356 executor drops reasoning_effort=high and proceeds to the cookie check", async () => {
+  // Previously a hard 400. Now the field is stripped before the guard, so the
+  // request must reach the credential check — 401 proves it was not rejected.
+  // `credentials: {}` keeps the assertion off the network (no browser launch).
+  const result = await new GeminiWebExecutor().execute({
+    model: "gemini-4-argon",
+    body: { messages: [{ role: "user", content: "hi" }], stream: false, reasoning_effort: "high" },
+    stream: false,
+    credentials: {},
+    signal: AbortSignal.timeout(10_000),
+    log: null,
+  });
 
-  assert.equal(result.response.status, 400);
-  const body = (await result.response.json()) as ErrorBodyLike;
-  assert.equal(body.error.code, GEMINI_WEB_UNSUPPORTED_CONTROL_CODE);
-  assert.match(body.error.message, /reasoning_effort/);
   assert.equal(
-    body.error.message.includes("at /"),
+    result.response.status,
+    401,
+    "reasoning_effort must no longer short-circuit the request with a 400"
+  );
+  const body = (await result.response.json()) as { error?: { code?: string; message?: string } };
+  assert.notEqual(
+    body.error?.code,
+    GEMINI_WEB_UNSUPPORTED_CONTROL_CODE,
+    "the capability guard must not fire for reasoning_effort anymore"
+  );
+  assert.equal(
+    String(body.error?.message ?? "").includes("at /"),
     false,
     "error bodies must stay sanitized — no stack traces"
   );
+});
+
+test("#9356 executor normalizes a tier-suffixed model instead of refusing it", async () => {
+  for (const model of ["gemini-4-argon-high", "gemini-4-argon-medium", "gemini-4-argon-low"]) {
+    const result = await new GeminiWebExecutor().execute({
+      model,
+      body: { messages: [{ role: "user", content: "hi" }], stream: false },
+      stream: false,
+      credentials: {},
+      signal: AbortSignal.timeout(10_000),
+      log: null,
+    });
+
+    assert.equal(
+      result.response.status,
+      401,
+      `${model} must collapse to its base model and reach the cookie check, not be refused`
+    );
+  }
 });
 
 test("#9356 executor returns 400 for tool_choice=required before launching a browser", async () => {
@@ -178,10 +266,15 @@ test("#9356 executor returns 400 for tool_choice=required before launching a bro
 
 test("#9356 the capability guard runs ahead of the credential check", async () => {
   // A request that is BOTH uncredentialed and incompatible must report the
-  // incompatibility: adding a cookie would not make it work.
+  // incompatibility: adding a cookie would not make it work. Uses the forced
+  // tool_choice contract, which gemini-web still refuses.
   const result = await new GeminiWebExecutor().execute({
     model: "gemini-4-argon",
-    body: { messages: [{ role: "user", content: "hi" }], reasoning_effort: "high" },
+    body: {
+      messages: [{ role: "user", content: "hi" }],
+      tools: [GET_WEATHER_TOOL],
+      tool_choice: "required",
+    },
     stream: false,
     credentials: {},
     signal: AbortSignal.timeout(10_000),
@@ -230,6 +323,17 @@ test("#9356 registry advertises no native tool calling and no reasoning for gemi
         "reasoning work (the executor has no thinking control to drive)"
     );
   }
+});
+
+test("registry exposes only the non-tier Argon and 3.8 ids", () => {
+  // Effort tiers are not separate models on a provider with no thinking control
+  // (AIClient2API models them as thinkingLevel on the cloudcode-pa upstream).
+  // Advertising `-high/-medium/-low` here only created ids that resolved to a
+  // reasoning_effort the executor cannot honor.
+  assert.deepEqual(
+    gemini_webProvider.models.map((model) => model.id),
+    ["gemini-4-argon", "gemini-3.8-flash"]
+  );
 });
 
 test("#9356 resolved capabilities — not just the raw registry — report no reasoning/tools", () => {

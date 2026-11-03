@@ -108,6 +108,8 @@ describe("GeminiWebLabExecutor & GeminiBusinessExecutor Parity (#03.3)", () => {
     const lab = new GeminiWebLabExecutor();
     const biz = new GeminiBusinessExecutor();
     for (const ex of [lab, biz]) {
+      // reasoning_effort is DROPPED (2026-11-03 reversal): the value is injected
+      // by the router, not requested from gemini-web, so it must not be a 400.
       const r1 = await ex.execute({
         model: "gemini-2.5-pro",
         body: { messages: [{ role: "user", content: "hi" }], reasoning_effort: "high" },
@@ -117,10 +119,14 @@ describe("GeminiWebLabExecutor & GeminiBusinessExecutor Parity (#03.3)", () => {
           providerSpecificData: { mockBaseUrl: mock.baseUrl, entryUrl: mock.baseUrl },
         },
       });
-      assert.equal(r1.response.status, 400);
-      const j1 = (await r1.response.json()) as ErrorEnvelope;
-      assert.equal(j1.error.code, "unsupported_control_for_provider");
+      assert.notEqual(r1.response.status, 400, "reasoning_effort must not be rejected anymore");
+      if (r1.response.status !== 200) {
+        const j1 = (await r1.response.json()) as ErrorEnvelope;
+        assert.notEqual(j1.error?.code, "unsupported_control_for_provider");
+      }
 
+      // Forced tool_choice keeps the #9356 rejection: it is a promise about the
+      // response shape, and dropping it would let an agent act on prose.
       const r2 = await ex.execute({
         model: "gemini-2.5-pro",
         body: { messages: [{ role: "user", content: "hi" }], tool_choice: "required" },
@@ -131,6 +137,8 @@ describe("GeminiWebLabExecutor & GeminiBusinessExecutor Parity (#03.3)", () => {
         },
       });
       assert.equal(r2.response.status, 400);
+      const j2 = (await r2.response.json()) as ErrorEnvelope;
+      assert.equal(j2.error.code, "unsupported_control_for_provider");
     }
     const rModel = await lab.execute({
       model: "gemini-3.8-flash",
