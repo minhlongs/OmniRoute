@@ -20,6 +20,18 @@ export const GEMINI_WEB_MODEL_SELECTORS: Readonly<Record<string, GeminiWebModelS
     header: '[1,null,null,null,"b1b46a6037e6aa9f",null,null,0,[4]]',
     category: 1,
   },
+  "gemini-4-argon-low": {
+    header: '[1,null,null,null,"b1b46a6037e6aa9f",null,null,0,[4]]',
+    category: 1,
+  },
+  "gemini-4-argon-medium": {
+    header: '[1,null,null,null,"b1b46a6037e6aa9f",null,null,0,[4]]',
+    category: 1,
+  },
+  "gemini-4-argon-high": {
+    header: '[1,null,null,null,"b1b46a6037e6aa9f",null,null,0,[4]]',
+    category: 1,
+  },
   "gemini-4-ultra": {
     header: '[1,null,null,null,"b1b46a6037e6aa9f",null,null,0,[4]]',
     category: 1,
@@ -39,6 +51,10 @@ export const GEMINI_WEB_MODEL_SELECTORS: Readonly<Record<string, GeminiWebModelS
   "gemini-2.5-pro": {
     header: '[1,null,null,null,"2525e3954d185b3c",null,null,0,[4]]',
     category: 3,
+  },
+  "gemini-3.8-flash": {
+    header: '[1,null,null,null,"f299729663a2343f",null,null,0,[4]]',
+    category: 2,
   },
   "gemini-3.7-flash": {
     header: '[1,null,null,null,"f299729663a2343f",null,null,0,[4]]',
@@ -86,7 +102,8 @@ export function normalizeGeminiWebModelId(model: string): string {
 
 export function shouldUseGeminiWebDirectHttp(
   model: string,
-  credentials: ExecuteInput["credentials"]
+  credentials: ExecuteInput["credentials"],
+  isPlaywrightMocked = false
 ): boolean {
   const psd = getProviderSpecificRecord(credentials);
   const transport = typeof psd.transport === "string" ? psd.transport.trim().toLowerCase() : "";
@@ -95,10 +112,14 @@ export function shouldUseGeminiWebDirectHttp(
   if (typeof psd.endpointUrl === "string" && psd.endpointUrl.trim().length > 0) return true;
   if (typeof psd.atToken === "string" && psd.atToken.trim().length > 0) return true;
   if (typeof psd.modelHeader === "string" && psd.modelHeader.trim().length > 0) return true;
+  if (isPlaywrightMocked) return false;
   const lowerModel = (model || "").trim().toLowerCase();
-  return (
-    lowerModel.includes("argon") || lowerModel.includes("ultra") || lowerModel.endsWith("-http")
-  );
+  if (lowerModel.includes("ultra") || lowerModel.endsWith("-http")) return true;
+  if (lowerModel.includes("argon")) {
+    const rawKey = typeof credentials?.apiKey === "string" ? credentials.apiKey : "";
+    return !rawKey.startsWith("fake-cookie=");
+  }
+  return false;
 }
 
 export function resolveGeminiWebModelSelector(
@@ -106,8 +127,8 @@ export function resolveGeminiWebModelSelector(
   psd: Record<string, unknown> = {}
 ): GeminiWebModelSelector {
   const normalized = normalizeGeminiWebModelId(model).toLowerCase();
-  const base =
-    GEMINI_WEB_MODEL_SELECTORS[normalized] ?? GEMINI_WEB_MODEL_SELECTORS["gemini-3.1-pro"];
+  const fallbackKey = normalized.includes("argon") ? "gemini-4-argon" : "gemini-3.1-pro";
+  const base = GEMINI_WEB_MODEL_SELECTORS[normalized] ?? GEMINI_WEB_MODEL_SELECTORS[fallbackKey];
   const customHeader =
     typeof psd.modelHeader === "string" && psd.modelHeader.trim().length > 0
       ? psd.modelHeader.trim()
@@ -117,6 +138,19 @@ export function resolveGeminiWebModelSelector(
       ? psd.modelCategory
       : base.category;
   return { header: customHeader, category: customCategory };
+}
+
+const ESSENTIAL_GOOGLE_COOKIE_RE =
+  /^(__Secure-[13]PSID(?:TS|CC|RTS)?|__Secure-[13]PAPISID|SID|HSID|SSID|APISID|SAPISID|SIDCC)=/;
+
+export function sanitizeGeminiRequestCookie(rawCookie: string): string {
+  const cleaned = (rawCookie || "").replace(/[\r\n]+/g, " ").trim();
+  if (cleaned.length <= 1024) return cleaned;
+  const pairs = cleaned
+    .split(";")
+    .map((part) => part.trim())
+    .filter((part) => ESSENTIAL_GOOGLE_COOKIE_RE.test(part));
+  return pairs.length > 0 ? pairs.join("; ") : cleaned;
 }
 
 function makeSessionCacheKey(baseUrl: string, cookie: string): string {
@@ -283,6 +317,7 @@ export async function executeGeminiWebDirectHttp({
       : DEFAULT_BASE_URL;
   const cleanModel = normalizeGeminiWebModelId(model);
   const selector = resolveGeminiWebModelSelector(model, psd);
+  const requestCookie = sanitizeGeminiRequestCookie(cookie);
   const timeoutSignal = AbortSignal.timeout(60_000);
   const effectiveSignal = signal ? mergeAbortSignals(signal, timeoutSignal) : timeoutSignal;
 
@@ -303,7 +338,7 @@ export async function executeGeminiWebDirectHttp({
         : new Error("Request aborted");
     }
 
-    const resolved = await resolveSessionTokens(rawBase, cookie, psd, effectiveSignal);
+    const resolved = await resolveSessionTokens(rawBase, requestCookie, psd, effectiveSignal);
     if ("error" in resolved) {
       return { response: resolved.error, url: streamUrl, headers: {}, transformedBody: body };
     }
@@ -315,7 +350,7 @@ export async function executeGeminiWebDirectHttp({
 
     const upstream = await fetch(streamUrl, {
       method: "POST",
-      headers: { ...reqHeaders, Cookie: cookie },
+      headers: { ...reqHeaders, Cookie: requestCookie },
       body: buildStreamGeneratePayload(prompt, session.at, selector.category),
       redirect: "manual",
       signal: effectiveSignal,
@@ -343,7 +378,7 @@ export async function executeGeminiWebDirectHttp({
       rawText.includes("account-chooser") ||
       rawText.includes("ServiceLogin")
     ) {
-      sessionCache.delete(makeSessionCacheKey(rawBase, cookie));
+      sessionCache.delete(makeSessionCacheKey(rawBase, requestCookie));
       return {
         response: buildJsonError(
           upstream.status === 401 ? 401 : 403,

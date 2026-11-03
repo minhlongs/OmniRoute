@@ -5,6 +5,7 @@ import {
   clearGeminiWebSessionCache,
   GEMINI_WEB_MODEL_SELECTORS,
   resolveGeminiWebModelSelector,
+  sanitizeGeminiRequestCookie,
   shouldUseGeminiWebDirectHttp,
 } from "../../open-sse/executors/gemini-web/streamGenerateClient.ts";
 import { REGISTRY } from "../../open-sse/config/providerRegistry.ts";
@@ -233,4 +234,18 @@ test("Direct HTTP returns sanitized 403 when upstream redirects to account-choos
   const body = (await result.response.json()) as { error: { message: string } };
   assert.match(body.error.message, /unauthorized|expired/i);
   assert.equal(body.error.message.includes("at /"), false);
+});
+
+test("sanitizeGeminiRequestCookie strips oversized non-essential cookies to prevent UND_ERR_HEADERS_OVERFLOW", () => {
+  const essential = "__Secure-1PSID=psid_val; __Secure-1PSIDTS=ts_val; SIDCC=sidcc_val";
+  const bloat = Array.from({ length: 30 }, (_, i) => `OTZ_${i}=${"x".repeat(60)}`).join("; ");
+  const oversized = `${essential}; ${bloat}`;
+  assert.equal(oversized.length > 1024, true);
+
+  const sanitized = sanitizeGeminiRequestCookie(oversized);
+  assert.equal(sanitized, essential);
+  assert.equal(
+    GEMINI_WEB_MODEL_SELECTORS["gemini-4-argon-high"].header,
+    GEMINI_WEB_MODEL_SELECTORS["gemini-4-argon"].header
+  );
 });

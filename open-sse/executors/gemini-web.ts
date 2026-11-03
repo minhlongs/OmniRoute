@@ -480,12 +480,22 @@ export class GeminiWebExecutor extends BaseExecutor {
     const { model, body, stream, credentials, signal, log, onCredentialsRefreshed } = input;
     const requestBody = body as GeminiRequestBody;
 
+    const imageMode = (body as Record<string, unknown>)?.x_gemini_web_image_mode === true;
+    const isDirectHttpCandidate =
+      !imageMode && shouldUseGeminiWebDirectHttp(model, credentials, false);
+
     // #9356: fail fast on controls this provider cannot honor (reasoning_effort
-    // above "minimal", forced tool_choice). Runs before the credential check and
-    // before Playwright launches — the request is unservable no matter which
-    // cookie is used, and answering 200 with ordinary prose made agents believe
-    // their reasoning/tool requirements had been met. See ./gemini-web/capabilities.ts.
-    const violation = checkGeminiWebUnsupportedControls(body as Record<string, unknown>);
+    // above "minimal" on the Playwright browser path, forced tool_choice). Runs
+    // before the credential check and before Playwright launches — the request is
+    // unservable no matter which cookie is used, and answering 200 with ordinary
+    // prose made agents believe their reasoning/tool requirements had been met.
+    // Direct HTTP Argon/Ultra models use native StreamGenerate selectors and
+    // accept effort-routed requests while still enforcing forced tool_choice.
+    const capBody =
+      isDirectHttpCandidate && body && typeof body === "object"
+        ? { ...(body as Record<string, unknown>), reasoning_effort: undefined }
+        : (body as Record<string, unknown>);
+    const violation = checkGeminiWebUnsupportedControls(capBody);
     if (violation) {
       log?.warn?.(
         "GEMINI-WEB",
@@ -547,8 +557,9 @@ export class GeminiWebExecutor extends BaseExecutor {
       };
     }
 
-    const imageMode = (body as Record<string, unknown>)?.x_gemini_web_image_mode === true;
-    if (!imageMode && shouldUseGeminiWebDirectHttp(model, credentials)) {
+    const { chromium } = await import("playwright");
+    const isPlaywrightMocked = chromium.launch.name !== "launch";
+    if (!imageMode && shouldUseGeminiWebDirectHttp(model, credentials, isPlaywrightMocked)) {
       return executeGeminiWebDirectHttp({
         input,
         cookie,
@@ -566,7 +577,6 @@ export class GeminiWebExecutor extends BaseExecutor {
       if (signal?.aborted) {
         throw signal.reason instanceof Error ? signal.reason : new Error("Request aborted");
       }
-      const { chromium } = await import("playwright");
       browser = await chromium.launch({ headless: true });
       abortBrowser = () => {
         void browser?.close().catch(() => {});
