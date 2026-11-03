@@ -9,6 +9,10 @@ export const gemini_webProvider: RegistryEntry = {
   authType: "apikey",
   authHeader: "cookie",
   passthroughModels: true,
+  // The web UI's model list is partial (discovery returns a handful of entries),
+  // so treating it as authoritative would reject statically registered Argon
+  // tiers such as gemini-4-argon-low/-medium that the account can still serve.
+  liveCatalogAuthoritative: false,
   // #9356: `supportsReasoning: false` is a live-behavior statement, not a guess
   // about the underlying Gemini model. The executor drives the gemini.google.com
   // web UI by typing a prompt, so it has no thinking-budget control to set and

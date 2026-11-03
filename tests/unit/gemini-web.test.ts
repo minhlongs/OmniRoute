@@ -181,6 +181,15 @@ test("Provider: gemini-web has correct models", async () => {
   );
 });
 
+test("Provider: gemini-web does not treat the partial web catalog as authoritative", async () => {
+  const { providerUsesAuthoritativeLiveCatalog } =
+    await import("../../open-sse/config/providerRegistry.ts");
+  // Model discovery for the gemini.google.com web UI returns only a subset of the
+  // registered models. Marking the catalog authoritative would exclude the other
+  // statically registered Argon tiers from routing.
+  assert.equal(providerUsesAuthoritativeLiveCatalog("gemini-web"), false);
+});
+
 // ─── Regression: #2832 / #3516 — Playwright missing in Docker (runner-base) ──
 //
 // When the `runner-base` Docker image is used (no Playwright browsers installed),
