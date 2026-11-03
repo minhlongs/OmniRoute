@@ -64,7 +64,7 @@ test("#7676: GeminiWebExecutor persists rotated __Secure-1PSIDTS/__Secure-1PSIDC
   try {
     const executor = new GeminiWebExecutor();
     const result = await executor.execute({
-      model: "gemini-3.1-pro",
+      model: "gemini-4-argon",
       body: { messages: [{ role: "user", content: "hello" }], stream: false },
       stream: false,
       credentials: { apiKey: staleCookie },
