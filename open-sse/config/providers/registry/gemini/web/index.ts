@@ -8,6 +8,7 @@ export const gemini_webProvider: RegistryEntry = {
   baseUrl: "https://gemini.google.com/app",
   authType: "apikey",
   authHeader: "cookie",
+  passthroughModels: true,
   // #9356: `supportsReasoning: false` is a live-behavior statement, not a guess
   // about the underlying Gemini model. The executor drives the gemini.google.com
   // web UI by typing a prompt, so it has no thinking-budget control to set and
