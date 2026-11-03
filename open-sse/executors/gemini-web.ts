@@ -33,6 +33,79 @@ import {
 const GEMINI_URL = "https://gemini.google.com/app";
 
 /**
+ * How long a first pass may take before the forced-tool retry is skipped.
+ *
+ * The combo target budget is 120s and a single gemini-web turn has been measured
+ * at 52s and 101s, so retrying a slow reply would replace a prose answer with a
+ * hard timeout — strictly worse for the caller.
+ */
+export const GEMINI_WEB_TOOL_RETRY_BUDGET_MS = 45_000;
+
+/**
+ * Second-chance instruction appended to the tool prompt when the first reply
+ * contained prose instead of a tool block. It is deliberately blunt: the model
+ * already has the tool contract above, so the only thing left to fix is its
+ * decision to describe the work instead of doing it.
+ */
+export const GEMINI_WEB_FORCED_TOOL_NUDGE = [
+  "STOP. Your previous answer explained things instead of acting.",
+  "You DO have the tools listed above and you CAN call them.",
+  "The web chat interface returning text is NOT a valid reason to refuse.",
+  "Do not apologise, do not describe the interface, do not ask for confirmation.",
+  "Answer NOW with exactly one <tool_call>{...}</tool_call> block and nothing else,",
+  "using the tool names and arguments from the list above.",
+].join(" ");
+
+/** Input for the inner pass, extended with the retry marker. */
+export interface GeminiWebExecuteInput extends ExecuteInput {
+  /**
+   * Set by the public `execute()` wrapper on the single retry. Appends
+   * `GEMINI_WEB_FORCED_TOOL_NUDGE` to the tool prompt.
+   */
+  geminiWebToolNudge?: boolean;
+}
+
+/**
+ * True when the caller offered tools but the reply carries no tool call, so a
+ * single forced-tool retry could change the outcome.
+ *
+ * Signals read from the already-built response body: every non-error path emits
+ * `"tool_calls"` in the JSON / SSE payload when the parser produced at least one
+ * call, and never otherwise. Errors are excluded — retrying a 429/401 would just
+ * burn a second upstream attempt on the same failure.
+ *
+ * `elapsedMs` excludes slow first passes: the combo target budget is 120s and a
+ * gemini-web turn has been measured at 52s and 101s, so retrying a slow reply
+ * would trade a prose answer for a hard timeout.
+ */
+export function shouldRetryGeminiWebToolCall(
+  input: Pick<GeminiWebExecuteInput, "body" | "geminiWebToolNudge">,
+  status: number,
+  responseBodyText: string,
+  elapsedMs = 0
+): boolean {
+  if (input.geminiWebToolNudge) return false;
+  if (status !== 200) return false;
+  if (!responseBodyText) return false;
+  if (elapsedMs > GEMINI_WEB_TOOL_RETRY_BUDGET_MS) return false;
+
+  const body = input.body as Record<string, unknown> | null | undefined;
+  const tools = body?.tools;
+  if (!Array.isArray(tools) || tools.length === 0) return false;
+
+  return !responseBodyText.includes('"tool_calls"');
+}
+
+/** Read a response body without consuming it for the caller. */
+async function peekBody(response: Response): Promise<string> {
+  try {
+    return await response.clone().text();
+  } catch {
+    return "";
+  }
+}
+
+/**
  * Whether an error came from Playwright failing to launch because the browser binary is not
  * installed (`chromium.launch: Executable doesn't exist at ...`). This is a host/config
  * problem, not a transient upstream fault, so the executor must NOT surface it as a retryable
@@ -823,7 +896,45 @@ export class GeminiWebExecutor extends BaseExecutor {
     }
   }
 
+  /**
+   * Run the request, and when an agentic caller offered tools but the model
+   * answered with prose, run it ONE more time with a forced-tool reminder.
+   *
+   * gemini-web answers with a chat reply instead of a `<tool_call>` block on
+   * roughly a third of the real Claude Code CLI payloads we measured
+   * (2026-11-03, four independent accounts, same behaviour), which surfaces as
+   * `tool_calls: []` plus an explanation. The prompt shim cannot force the
+   * model, but a second, blunter ask recovers a share of those turns for the
+   * price of one extra round trip — and only on the failing path.
+   *
+   * The whole response is buffered before it leaves the executor (the web
+   * provider captures StreamGenerate, then re-emits), so inspecting it does not
+   * steal bytes from a streaming client.
+   */
   async execute(input: ExecuteInput) {
+    const startedAt = Date.now();
+    const first = await this.executeOnce(input);
+    const elapsedMs = Date.now() - startedAt;
+    if (
+      !shouldRetryGeminiWebToolCall(
+        input,
+        first.response.status,
+        await peekBody(first.response),
+        elapsedMs
+      )
+    ) {
+      return first;
+    }
+    if (input.signal?.aborted) return first;
+
+    input.log?.info?.(
+      "GEMINI-WEB",
+      `Reply carried no tool call after ${elapsedMs}ms — retrying once with a forced-tool reminder`
+    );
+    return this.executeOnce({ ...input, geminiWebToolNudge: true });
+  }
+
+  private async executeOnce(input: GeminiWebExecuteInput) {
     const { model, body, stream, credentials, signal, log, onCredentialsRefreshed } = input;
     const requestBody = body as GeminiRequestBody;
 
@@ -925,7 +1036,9 @@ export class GeminiWebExecutor extends BaseExecutor {
     // (#8371). Single-turn requests stay byte-for-byte identical to the original
     // derivation, keeping the #7286 no-tools regression guard intact.
     const prompt = hasTools
-      ? buildGeminiToolPrompt(effectiveMessages, requestedTools)
+      ? `${buildGeminiToolPrompt(effectiveMessages, requestedTools)}${
+          input.geminiWebToolNudge ? `\n\n${GEMINI_WEB_FORCED_TOOL_NUDGE}` : ""
+        }`
       : buildGeminiPrompt(messages);
 
     if (!prompt) {
