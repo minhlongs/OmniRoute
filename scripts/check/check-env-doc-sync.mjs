@@ -203,6 +203,10 @@ const IGNORE_FROM_CODE = new Set([
   // Test-only override: points setup-open-code.mjs at a fixture plugin dir without
   // requiring the real bundled plugin to be built.
   "OMNIROUTE_OPENCODE_PLUGIN_DIR",
+  // Ad-hoc mesh relay script helpers (scripts/ad-hoc/mesh-send.mjs) — developer CLI utility,
+  // not OmniRoute runtime configuration.
+  "BOT_TOKEN",
+  "BOT_URL",
 ]);
 
 // Vars documented in ENVIRONMENT.md but intentionally absent from .env.example.
