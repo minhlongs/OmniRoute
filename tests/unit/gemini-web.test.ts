@@ -170,6 +170,10 @@ test("Provider: gemini-web has correct models", async () => {
   assert.deepEqual(
     models.map((m: any) => [m.id, m.name]),
     [
+      ["gemini-4-argon", "Gemini 4 Argon"],
+      ["gemini-4-argon-low", "Gemini 4 Argon (Low)"],
+      ["gemini-4-argon-medium", "Gemini 4 Argon (Medium)"],
+      ["gemini-4-argon-high", "Gemini 4 Argon (High)"],
       ["gemini-3.1-pro", "Gemini 3.1 Pro"],
       ["gemini-3.7-flash", "Gemini 3.7 Flash"],
       ["gemini-3.1-flash-lite", "Gemini 3.1 Flash-Lite"],
