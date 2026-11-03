@@ -19,6 +19,26 @@ export const deepseekProvider: RegistryEntry = {
   ],
   models: [
     {
+      id: "deepseek-flash",
+      name: "DeepSeek V4.1 Flash (Rescue Fallback)",
+      contextLength: 1_000_000,
+      maxOutputTokens: 384_000,
+      supportsReasoning: true,
+      supportedThinkingEfforts: ["none", "low", "high", "max"],
+      toolCalling: true,
+      interleavedField: "reasoning_content",
+    },
+    {
+      id: "deepseek-v4-flash",
+      name: "DeepSeek V4 Flash",
+      contextLength: 1_000_000,
+      maxOutputTokens: 384_000,
+      supportsReasoning: true,
+      supportedThinkingEfforts: ["none", "low", "high", "max"],
+      toolCalling: true,
+      interleavedField: "reasoning_content",
+    },
+    {
       id: "deepseek-v4-pro",
       name: "DeepSeek V4 Pro (0813)",
       contextLength: 1_000_000,
@@ -26,15 +46,7 @@ export const deepseekProvider: RegistryEntry = {
       supportsReasoning: true,
       supportedThinkingEfforts: ["none", "low", "high", "max"],
       toolCalling: true,
-    },
-    {
-      id: "deepseek-v4-flash",
-      name: "DeepSeek V4 Flash (0731)",
-      contextLength: 1_000_000,
-      maxOutputTokens: 384_000,
-      supportsReasoning: true,
-      supportedThinkingEfforts: ["none", "low", "high", "max"],
-      toolCalling: true,
+      interleavedField: "reasoning_content",
     },
   ],
 };

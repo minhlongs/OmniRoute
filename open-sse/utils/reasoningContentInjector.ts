@@ -63,7 +63,7 @@ export function shouldInjectReasoningContentPlaceholder(
     .trim()
     .toLowerCase();
   return (
-    (normalizedProvider === "moonshot" || normalizedProvider === "kimi") &&
+    (normalizedProvider === "moonshot" || normalizedProvider === "kimi" || normalizedProvider === "deepseek") &&
     !requiresAuthenticReasoningContent(normalizedProvider, model) &&
     isThinkingMessageModel(model)
   );

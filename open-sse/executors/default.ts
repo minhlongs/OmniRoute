@@ -1019,7 +1019,7 @@ export class DefaultExecutor extends BaseExecutor {
     // direct connections hit neither injection path. Scope to Moonshot ids so
     // gateway-served models that merely match the thinking-model name pattern
     // (and may reject an extra field) are unaffected.
-    if (this.provider === "kimi" || this.provider === "moonshot") {
+    if (this.provider === "kimi" || this.provider === "moonshot" || this.provider === "deepseek") {
       const outboundModel =
         typeof (withDefaults as Record<string, unknown>)?.model === "string"
           ? ((withDefaults as Record<string, unknown>).model as string)
@@ -1054,6 +1054,20 @@ export class DefaultExecutor extends BaseExecutor {
           configurable: true,
           writable: true,
         });
+      }
+    }
+
+    // Clamp max_tokens for OpenRouter to avoid 402 pre-flight rejections when
+    // clients (e.g. Claude Code CLI) request huge token budgets (53k-64k)
+    // on low-balance accounts. OpenRouter checks (max_tokens * price <= balance).
+    if (this.provider === "openrouter" && typeof withDefaults === "object" && withDefaults !== null) {
+      const defaultsRecord = withDefaults as Record<string, unknown>;
+      const maxAllowed = 2048;
+      if (typeof defaultsRecord.max_tokens === "number" && defaultsRecord.max_tokens > maxAllowed) {
+        defaultsRecord.max_tokens = maxAllowed;
+      }
+      if (typeof defaultsRecord.max_completion_tokens === "number" && defaultsRecord.max_completion_tokens > maxAllowed) {
+        defaultsRecord.max_completion_tokens = maxAllowed;
       }
     }
 

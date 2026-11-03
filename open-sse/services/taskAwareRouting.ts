@@ -1380,6 +1380,16 @@ export function scoreModelForTask(
     if (cap === "vision" && caps.supportsVision !== true) return -10000;
   }
 
+  // ── ULTIMATE RESCUE FALLBACK: DeepSeek Flash Only ──────────────────────────
+  // User mandate: strictly Flash only, sits at the absolute end of the chain
+  // to rescue the request when all Claude and Argon models fail.
+  if (modelLower.startsWith("deepseek/") || modelLower.includes("deepseek")) {
+    if (!modelLower.includes("flash")) {
+      return -99999; // Non-flash DeepSeek models strictly banned
+    }
+    return 50; // Guaranteed positive score below all normal stages (500-1680), above banned (-5000)
+  }
+
   const requestedModel = (task.requestedModel ?? "").toLowerCase();
   const reasons = Array.isArray(task.reasons) ? task.reasons : [];
 
