@@ -19,6 +19,30 @@ export const gemini_webProvider: RegistryEntry = {
   // on the provider constant (src/shared/constants/providers/web-cookie.ts).
   models: [
     {
+      id: "gemini-4-argon",
+      name: "Gemini 4 Argon",
+      toolCalling: false,
+      supportsReasoning: false,
+    },
+    {
+      id: "gemini-4-argon-low",
+      name: "Gemini 4 Argon (Low)",
+      toolCalling: false,
+      supportsReasoning: false,
+    },
+    {
+      id: "gemini-4-argon-medium",
+      name: "Gemini 4 Argon (Medium)",
+      toolCalling: false,
+      supportsReasoning: false,
+    },
+    {
+      id: "gemini-4-argon-high",
+      name: "Gemini 4 Argon (High)",
+      toolCalling: false,
+      supportsReasoning: false,
+    },
+    {
       id: "gemini-3.1-pro",
       name: "Gemini 3.1 Pro",
       toolCalling: false,
