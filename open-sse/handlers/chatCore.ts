@@ -2654,7 +2654,8 @@ export async function handleChatCore({
   const toolNameMap = resolveResponseToolNameMap(
     translatedToolNameMap,
     nativeClaudeToolNameMap,
-    requestToolIdentityMap
+    requestToolIdentityMap,
+    (body as { tools?: unknown })?.tools
   );
   delete translatedBody._toolNameMap;
   delete translatedBody._disableToolPrefix;

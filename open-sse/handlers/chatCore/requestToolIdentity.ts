@@ -41,12 +41,35 @@ export function toToolNameAliasMap(
 export function resolveResponseToolNameMap(
   translatedToolNameMap: unknown,
   nativeClaudeToolNameMap: Map<string, string> | null,
-  requestToolIdentityMap: ReadonlyMap<string, unknown> | null
+  requestToolIdentityMap: ReadonlyMap<string, unknown> | null,
+  declaredTools: unknown = null
 ): Map<string, string> | null {
   if (translatedToolNameMap instanceof Map && translatedToolNameMap.size > 0) {
     return translatedToolNameMap as Map<string, string>;
   }
-  return nativeClaudeToolNameMap ?? toToolNameAliasMap(requestToolIdentityMap);
+  const ledger = nativeClaudeToolNameMap ?? toToolNameAliasMap(requestToolIdentityMap);
+  if (ledger && ledger.size > 0) return ledger;
+  // Last resort: the client's own tool list. A model can emit `bash` for a tool
+  // the client declared as `Bash` without any sanitisation happening on our side
+  // (nothing to put in the ledger), and the client is case-sensitive:
+  // "No such tool available: bash. Tool names are case-sensitive: call Bash
+  // instead." An identity ledger lets restoreClaudeToolName()'s case-insensitive
+  // branch map the name back to the exact casing the client declared.
+  return buildDeclaredToolNameMap(declaredTools);
+}
+
+/**
+ * Build an identity alias ledger (`declared name -> declared name`) from the
+ * request's `tools[]`. Returns null when there is nothing to learn from.
+ */
+export function buildDeclaredToolNameMap(tools: unknown): Map<string, string> | null {
+  if (!Array.isArray(tools)) return null;
+  const ledger = new Map<string, string>();
+  for (const tool of tools) {
+    const name = (tool as { name?: unknown } | null)?.name;
+    if (typeof name === "string" && name.length > 0) ledger.set(name, name);
+  }
+  return ledger.size > 0 ? ledger : null;
 }
 
 /**
