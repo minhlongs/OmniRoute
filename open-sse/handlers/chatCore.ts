@@ -141,11 +141,7 @@ import {
 } from "../utils/stream.ts";
 import { ensureStreamReadiness } from "../utils/streamReadiness.ts";
 import { resolveSuppressThinkClose, THINKING_MARKER_HEADER } from "../utils/thinkCloseMarker.ts";
-import {
-  resolveStreamReadinessTimeout,
-  isClaudeFormatReasoningProvider,
-  isExtendedThinkingModel,
-} from "../utils/streamReadinessPolicy.ts";
+import { resolveStreamReadinessTimeout } from "../utils/streamReadinessPolicy.ts";
 import { resolveAgentGoalPolicy } from "../utils/agentGoalPolicy.ts";
 import { createStreamController } from "../utils/streamHandler.ts";
 import * as streamFailure from "../utils/streamFailureFinalization.ts";
@@ -228,8 +224,6 @@ import {
   COOLDOWN_MS,
   HTTP_STATUS,
   PROVIDER_MAX_TOKENS,
-  STREAM_READINESS_MAX_TIMEOUT_MS,
-  STREAM_READINESS_TIMEOUT_MS,
   ANTIGRAVITY_PRE_RESPONSE_TIMEOUT_CODE,
   STREAM_RECOVERY,
   DEFAULT_MAX_TOKENS,
@@ -1832,10 +1826,9 @@ export async function handleChatCore({
           if (result.compressed) {
             body = result.body as typeof body;
             estimatedTokens = result.stats.compressedTokens;
-            tokensCompressed = (tokensCompressed ?? 0) + Math.max(
-              0,
-              result.stats.originalTokens - result.stats.compressedTokens
-            );
+            tokensCompressed =
+              (tokensCompressed ?? 0) +
+              Math.max(0, result.stats.originalTokens - result.stats.compressedTokens);
           }
 
           // Fire-and-forget: emit live compression event for dashboard (U5).
@@ -2078,7 +2071,8 @@ export async function handleChatCore({
             })
           : compressionResult.body;
         const stats = compressionResult.stats;
-        tokensCompressed = (tokensCompressed ?? 0) + Math.max(0, (stats?.original ?? 0) - (stats?.final ?? 0));
+        tokensCompressed =
+          (tokensCompressed ?? 0) + Math.max(0, (stats?.original ?? 0) - (stats?.final ?? 0));
         const layersInfo =
           stats && "layers" in stats && Array.isArray(stats.layers)
             ? ` (layers: ${stats.layers.map((l: { name: string }) => l.name).join(", ")})`
@@ -2558,10 +2552,12 @@ export async function handleChatCore({
           ...(postResult.body as typeof translatedBody),
           ...Object.fromEntries(transientFields),
         };
-        tokensCompressed = (tokensCompressed ?? 0) + Math.max(
-          0,
-          (postResult.stats?.originalTokens ?? 0) - (postResult.stats?.compressedTokens ?? 0)
-        );
+        tokensCompressed =
+          (tokensCompressed ?? 0) +
+          Math.max(
+            0,
+            (postResult.stats?.originalTokens ?? 0) - (postResult.stats?.compressedTokens ?? 0)
+          );
         if (postResult.stats) {
           const annotation = formatCompressionAnnotation(postResult.stats);
           if (annotation) {
@@ -2692,13 +2688,27 @@ export async function handleChatCore({
     // the resolved upstream model, so it covers every routing mode. See claudeAdaptiveThinking.ts.
     translatedBody = normalizeClaudeAdaptiveThinking(translatedBody, finalModelToUpstream);
     // Cap thinking budget for simple / routine queries to prevent 40s+ reasoning delays
-    if (translatedBody && typeof translatedBody === "object" && (translatedBody as Record<string, unknown>).thinking) {
+    if (
+      translatedBody &&
+      typeof translatedBody === "object" &&
+      (translatedBody as Record<string, unknown>).thinking
+    ) {
       const isSimpleQuery =
-        (Array.isArray((translatedBody as Record<string, unknown>).messages) && ((translatedBody as Record<string, unknown>).messages as unknown[]).length <= 2) ||
-        (typeof (translatedBody as Record<string, unknown>).max_tokens === "number" && Number((translatedBody as Record<string, unknown>).max_tokens) <= 256);
+        (Array.isArray((translatedBody as Record<string, unknown>).messages) &&
+          ((translatedBody as Record<string, unknown>).messages as unknown[]).length <= 2) ||
+        (typeof (translatedBody as Record<string, unknown>).max_tokens === "number" &&
+          Number((translatedBody as Record<string, unknown>).max_tokens) <= 256);
       const thObj = (translatedBody as Record<string, unknown>).thinking as Record<string, unknown>;
-      if (isSimpleQuery && thObj.type === "enabled" && typeof thObj.budget_tokens === "number" && thObj.budget_tokens > 2048) {
-        log?.info?.("THINKING", `[RTK-CAP] Capped thinking budget from ${thObj.budget_tokens} to 2048 for simple/routine turn`);
+      if (
+        isSimpleQuery &&
+        thObj.type === "enabled" &&
+        typeof thObj.budget_tokens === "number" &&
+        thObj.budget_tokens > 2048
+      ) {
+        log?.info?.(
+          "THINKING",
+          `[RTK-CAP] Capped thinking budget from ${thObj.budget_tokens} to 2048 for simple/routine turn`
+        );
         thObj.budget_tokens = 2048;
       }
     }
@@ -3201,6 +3211,15 @@ export async function handleChatCore({
                 {
                   executor: executor as unknown as { getTimeoutMs?: () => unknown },
                   providerSpecificData: execCreds?.providerSpecificData,
+                  // Tokens this dispatch will spend upstream — feeds the TPM
+                  // budget gate when the connection declares a `tpm` override.
+                  // `bodyToSend` is the post-compression body, so the estimate
+                  // matches what the provider actually meters.
+                  tokenCost: estimateTokens(
+                    (bodyToSend as { messages?: unknown; input?: unknown })?.messages ??
+                      (bodyToSend as { input?: unknown })?.input ??
+                      []
+                  ),
                 }
               );
               const res = normalizeExecutorResult(rawExecutorResult);
@@ -5560,11 +5579,26 @@ export async function handleChatCore({
   // upstream body and synthesize an equivalent OpenAI SSE stream so the
   // streaming pipeline (and the client) get a valid stream.
   providerResponse = await maybeConvertJsonBodyToSse(providerResponse, { log, provider, model });
-  const isZunef = Boolean(provider && (provider.startsWith("anthropic-compatible") || provider.includes("zunef"))) || /zunef/i.test(String(model || ""));
+  const isZunef =
+    Boolean(
+      provider && (provider.startsWith("anthropic-compatible") || provider.includes("zunef"))
+    ) || /zunef/i.test(String(model || ""));
   const isOpusModel = /opus/i.test(String(model || ""));
   const isSonnetOrHeavy = /sonnet|fable|argon|gpt-5/i.test(String(model || ""));
-  const targetReadinessCapMs = isZunef ? 230_000 : (isOpusModel ? 90_000 : (isSonnetOrHeavy ? 60_000 : 35_000));
-  const effectiveBaseTimeoutMs = isZunef ? 60_000 : (isOpusModel ? 40_000 : (isSonnetOrHeavy ? 25_000 : 15_000));
+  const targetReadinessCapMs = isZunef
+    ? 230_000
+    : isOpusModel
+      ? 90_000
+      : isSonnetOrHeavy
+        ? 60_000
+        : 35_000;
+  const effectiveBaseTimeoutMs = isZunef
+    ? 60_000
+    : isOpusModel
+      ? 40_000
+      : isSonnetOrHeavy
+        ? 25_000
+        : 15_000;
   const effectiveReadinessMaxTimeoutMs = targetReadinessCapMs;
 
   const streamReadinessPolicy = resolveStreamReadinessTimeout({

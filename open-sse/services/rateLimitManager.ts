@@ -15,6 +15,7 @@ import { getAntigravityQuotaFamily } from "./antigravityQuotaFamily.ts";
 import { getProviderCategory } from "../config/providerRegistry.ts";
 import { getCodexRateLimitKey } from "../executors/codex.ts";
 import { awaitProviderDefaultSlot, setProviderQuotaOverrides } from "./providerDefaultRateLimit.ts";
+import { reserveTokens, waitMsForTokenBudget } from "./rateLimitManager/tokenBudget.ts";
 import {
   DEFAULT_RESILIENCE_SETTINGS,
   resolveResilienceSettings,
@@ -566,7 +567,92 @@ function getLimiter(provider, connectionId, model = null) {
  * @param {AbortSignal} signal - Optional abort signal to cancel waiting
  * @returns {Promise<unknown>} Result of fn()
  */
-export async function withRateLimit(provider, connectionId, model, fn, signal = null) {
+function abortErrorFor(signal) {
+  const reason = signal?.reason;
+  if (reason instanceof Error) return reason;
+  const err = new Error(typeof reason === "string" ? reason : "The operation was aborted");
+  err.name = "AbortError";
+  return err;
+}
+
+/** Abortable sleep used by the TPM budget gate. */
+function sleepWithAbort(ms, signal) {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(abortErrorFor(signal));
+      return;
+    }
+    const onAbort = () => {
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", onAbort);
+      reject(abortErrorFor(signal));
+    };
+    const timer = setTimeout(() => {
+      signal?.removeEventListener("abort", onAbort);
+      resolve(undefined);
+    }, ms);
+    signal?.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
+/**
+ * TPM gate — the token half of the rate limiter.
+ *
+ * Requests-only pacing cannot protect a provider that meters by TOKEN rate: a
+ * single 100k-token prompt burns a whole rolling minute of budget however few
+ * requests were sent. When the connection declares a `tpm` override, wait for
+ * room before dispatching; otherwise this is a no-op (every existing deployment
+ * keeps its exact behaviour).
+ *
+ * A request costing more than the entire budget is admitted once — it cannot be
+ * split, and waiting forever would deadlock the caller.
+ */
+async function awaitTokenBudget(provider, connectionId, model, tokenCost, signal, maxWaitMs) {
+  const tpm = connectionRateLimitOverrides.get(connectionId)?.tpm;
+  if (!tpm || tpm <= 0 || !tokenCost || tokenCost <= 0) return;
+
+  const deadline = Date.now() + Math.max(0, Number(maxWaitMs) || 0);
+  let waitedMs = 0;
+  for (;;) {
+    if (signal?.aborted) throw abortErrorFor(signal);
+    const now = Date.now();
+    const waitMs = waitMsForTokenBudget(connectionId, tpm, tokenCost, now);
+    if (waitMs <= 0) {
+      reserveTokens(connectionId, tokenCost, now);
+      if (waitedMs > 0) {
+        logRateLimit(
+          `🪙 [RATE-LIMIT] ${getLimiterKey(provider, connectionId, model)} — TPM budget admitted after ${Math.ceil(waitedMs / 1000)}s (cost≈${tokenCost} tok of ${tpm}/min)`
+        );
+      }
+      return;
+    }
+    const remaining = deadline - now;
+    if (remaining <= 0) {
+      const tpmErr = new Error(
+        `Request dropped: TPM budget exhausted for ${model ? `${provider}/${model}` : provider} — ` +
+          `this request costs ≈${tokenCost} tokens of a ${tpm}/min allowance. Lower the prompt size ` +
+          `or raise the connection's tpm override.`
+      ) as Error & { status?: number; code?: string };
+      tpmErr.status = 429;
+      tpmErr.code = "RATE_LIMIT_TPM_BUDGET";
+      throw tpmErr;
+    }
+    const slice = Math.min(waitMs, remaining, 1000);
+    await sleepWithAbort(slice, signal);
+    waitedMs += slice;
+  }
+}
+
+export async function withRateLimit(
+  provider,
+  connectionId,
+  model,
+  fn,
+  signal = null,
+  _maxWaitMsOverride = null,
+  _correlationId = null,
+  extra = null
+) {
   if (!enabledConnections.has(connectionId)) {
     return fn();
   }
@@ -583,6 +669,18 @@ export async function withRateLimit(provider, connectionId, model, fn, signal = 
   // (Fase 8.2). No-op unless PROVIDER_DEFAULT_RATE_LIMITS has an entry for `provider`.
   const maxWaitMs = resolveRequestQueueMaxWaitMs(provider, undefined, connectionId);
   await awaitProviderDefaultSlot(provider, connectionId, signal, maxWaitMs);
+
+  // Token-rate pacing (TPM). No-op unless the connection carries a `tpm` override.
+  // The wait budget honours the caller's remaining queue budget when supplied.
+  const tokenWaitBudgetMs = Number(_maxWaitMsOverride) > 0 ? Number(_maxWaitMsOverride) : maxWaitMs;
+  await awaitTokenBudget(
+    provider,
+    connectionId,
+    model,
+    extra?.tokenCost,
+    signal,
+    tokenWaitBudgetMs
+  );
 
   const limiter = getLimiter(provider, connectionId, model);
   // Bottleneck's `expiration` starts only after a job leaves QUEUED, so it
