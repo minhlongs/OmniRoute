@@ -363,7 +363,7 @@ export async function buildAutoCandidates(
   // apply, so auto-routing behavior is unchanged.
   const quotaCutoffEnabled =
     (resilienceSettings ?? resolveResilienceSettings(null))?.quotaPreflight?.enabled === true;
-  const { getPricingForModel } = await import("../../src/lib/localDb");
+  const { getPricingForModel } = await import("../../src/lib/db/settings/pricing.ts");
   const quotaPromises = new Map<string, Promise<unknown>>();
   let historicalLatencyStats: Record<string, HistoricalLatencyStatsEntry> = {};
   try {
@@ -764,9 +764,7 @@ export async function handleComboChat({
   // reads weights from the combo during the pipeline). Fail-open: returns the
   // same combo when the flag is off or the load fails.
   const pipelineCombo =
-    strategy === "weighted"
-      ? await adaptComboWeightsForWeightedStrategy(combo, log)
-      : combo;
+    strategy === "weighted" ? await adaptComboWeightsForWeightedStrategy(combo, log) : combo;
 
   const targetResolution = await resolveComboTargetPipeline({
     body,
@@ -1534,7 +1532,7 @@ export async function handleComboChat({
               const connId = effectiveConnectionId || undefined;
               void (async () => {
                 try {
-                  const { setLKGP } = await import("../../src/lib/localDb");
+                  const { setLKGP } = await import("../../src/lib/db/settings/lkgp.ts");
                   await Promise.all([
                     setLKGP(combo.name, target.executionKey, provider, connId),
                     setLKGP(combo.name, combo.id || combo.name, provider, connId),
@@ -2818,7 +2816,7 @@ async function handleRoundRobinCombo({
             const connId = effectiveConnectionId || undefined;
             void (async () => {
               try {
-                const { setLKGP } = await import("../../src/lib/localDb");
+                const { setLKGP } = await import("../../src/lib/db/settings/lkgp.ts");
                 await Promise.all([
                   setLKGP(combo.name, target.executionKey, provider, connId),
                   setLKGP(combo.name, combo.id || combo.name, provider, connId),
