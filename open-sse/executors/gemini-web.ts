@@ -156,6 +156,32 @@ export function buildGeminiPrompt(messages: Array<{ role: string; content: unkno
  * only ever sends a single flat string (no native message array), so the
  * tool contract and the user's ask are concatenated (#7286).
  */
+/**
+ * Appended when the last client turn is a tool RESULT rather than an
+ * instruction. Without it the prompt ends on a file listing, which the model
+ * reads as "task finished" — the single largest prose class measured on
+ * 2026-11-03/04 (15 hallucinations of completion + 9 bare greetings out of 38
+ * non-parsed replies). The explicit DONE escape keeps a genuinely finished task
+ * from looping into another call.
+ */
+export const GEMINI_WEB_CONTINUATION_HINT =
+  "Continue the task: emit the next <tool_call>{...}</tool_call> block now, " +
+  "or reply exactly DONE if nothing remains.";
+
+/**
+ * Where the tool contract sits in the flat prompt.
+ *
+ * `tail` (default): client system → transcript → contract. The contract used to
+ * be first, which put it at 21.7% of a 392K-char prompt with 307K chars after it;
+ * measured tool-call rate falls with prompt size (<100K 87%, 200-300K 57%), so
+ * the contract has to be the last thing the model reads. `head` restores the old
+ * order for an instant rollback without a revert.
+ */
+function geminiWebContractPosition(): "head" | "tail" {
+  const raw = (process.env.OMNIROUTE_GEMINI_WEB_CONTRACT_POSITION ?? "tail").trim().toLowerCase();
+  return raw === "head" ? "head" : "tail";
+}
+
 export function buildGeminiToolPrompt(
   effectiveMessages: Array<{ role: string; content: unknown }>
 ): string {
@@ -176,10 +202,20 @@ export function buildGeminiToolPrompt(
   // buildGeminiPrompt() drops a system-only prefix on the single-turn path, so the
   // client system prompt is handled here instead of relying on that fallback.
   const transcript = buildGeminiPrompt(remaining.filter((m) => m.role !== "system"));
+  const position = geminiWebContractPosition();
+
   const parts: string[] = [];
-  if (toolPrompt) parts.push(toolPrompt);
+  if (position === "head" && toolPrompt) parts.push(toolPrompt);
   if (clientSystemText) parts.push(`System:\n${clientSystemText}`);
   if (transcript) parts.push(transcript);
+  if (position === "tail" && toolPrompt) parts.push(toolPrompt);
+
+  // The continuation hint goes last so the final instruction the model reads is
+  // about THIS turn, not a restatement of the tool list.
+  if (position === "tail" && /Current user message:\s*Tool \[/.test(transcript)) {
+    parts.push(GEMINI_WEB_CONTINUATION_HINT);
+  }
+
   return parts.join("\n\n");
 }
 

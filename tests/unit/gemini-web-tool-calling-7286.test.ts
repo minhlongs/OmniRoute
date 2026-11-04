@@ -154,7 +154,10 @@ test("#7286: buildGeminiToolPrompt concatenates the synthetic tool system prompt
     { role: "user", content: "what's the weather in Paris?" },
   ];
   const prompt = buildGeminiToolPrompt(effectiveMessages);
-  assert.equal(prompt, "TOOL CONTRACT HERE\n\nwhat's the weather in Paris?");
+  // Contract tail placement (2026-11-04): the contract must be the LAST thing the
+  // model reads, because on 200-300K prompts it previously sat at 21.7% offset and
+  // the tool-call rate dropped to 57%.
+  assert.equal(prompt, "what's the weather in Paris?\n\nTOOL CONTRACT HERE");
 });
 
 test("#7286: buildGeminiToolPrompt falls back to the user text alone when there is no system message", () => {
@@ -188,7 +191,7 @@ test("#7286: buildGeminiToolPrompt prefers the last system message as the tool c
     { role: "system", content: "INJECTED TOOL CONTRACT" },
   ];
   const prompt = buildGeminiToolPrompt(effectiveMessages);
-  assert.ok(prompt.startsWith("INJECTED TOOL CONTRACT"), "contract must lead the prompt");
+  assert.ok(prompt.endsWith("INJECTED TOOL CONTRACT"), "contract must end the prompt");
   assert.ok(prompt.includes("CLIENT SYSTEM PROMPT"), "client system prompt must not be lost");
 });
 
