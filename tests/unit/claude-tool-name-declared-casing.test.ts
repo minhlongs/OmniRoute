@@ -32,7 +32,9 @@ test("no declared tools and no other ledger stays null (unchanged behaviour)", (
 test("an existing sanitisation ledger still wins over the declared list", () => {
   const sanitised = new Map([["bash", "Bash"]]);
   const resolved = resolveResponseToolNameMap(sanitised, null, null, [{ name: "Other" }]);
-  assert.equal(resolved, sanitised);
+  // The merged ledger is a copy, but the sanitisation alias still wins.
+  assert.equal(resolved?.get("bash"), "Bash");
+  assert.equal(resolved?.get("Other"), "Other");
 });
 
 test("a lowercase model emission is restored to the declared casing", () => {
