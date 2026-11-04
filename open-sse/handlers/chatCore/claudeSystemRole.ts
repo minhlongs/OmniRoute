@@ -216,11 +216,7 @@ export function relocateDirectiveOnlyMessages(payload: Record<string, unknown>):
   let insertAfter = -1;
   for (let i = runEnd; i < messages.length; i++) {
     const candidate = messages[i];
-    if (
-      candidate != null &&
-      typeof candidate === "object" &&
-      !isSystemRole(candidate.role)
-    ) {
+    if (candidate != null && typeof candidate === "object" && !isSystemRole(candidate.role)) {
       insertAfter = i;
       break;
     }
@@ -244,4 +240,52 @@ export function relocateDirectiveOnlyMessages(payload: Record<string, unknown>):
     ...directives,
     ...messages.slice(insertAfter + 1),
   ];
+}
+
+/**
+ * Restored from 1aa0af9cbf: the implementation was dropped from this module while
+ * chatCore.ts kept importing and calling it, which made the /v1/messages route
+ * fail at module evaluation (import of a non-existent export).
+ */
+export function hoistLeadingTextSystemMessages(payload: Record<string, unknown>): void {
+  if (!Array.isArray(payload.messages) || payload.messages.length === 0) return;
+  const messages = payload.messages as Array<Record<string, unknown>>;
+  const isSystemRole = (role: unknown): boolean =>
+    typeof role === "string" &&
+    (role.toLowerCase() === "system" || role.toLowerCase() === "developer");
+
+  const blocks: Array<Record<string, unknown>> = [];
+  const kept: Array<Record<string, unknown>> = [];
+  let i = 0;
+  for (; i < messages.length; i++) {
+    const m = messages[i];
+    if (m == null || typeof m !== "object" || !isSystemRole(m.role)) break;
+    if (typeof m.content === "string") {
+      if (m.content.length > 0) blocks.push({ type: "text", text: m.content });
+      continue;
+    }
+    if (Array.isArray(m.content) && m.content.length > 0) {
+      let hoisted = false;
+      for (const block of m.content as Array<Record<string, unknown>>) {
+        if (block?.type === "text" && typeof block.text === "string" && block.text.length > 0) {
+          blocks.push({ type: "text", text: block.text });
+          hoisted = true;
+        }
+      }
+      if (!hoisted) kept.push(m);
+      continue;
+    }
+    kept.push(m);
+  }
+  if (blocks.length === 0) return;
+
+  const existing = payload.system;
+  if (typeof existing === "string" && existing.length > 0) {
+    payload.system = [{ type: "text", text: existing }, ...blocks];
+  } else if (Array.isArray(existing)) {
+    payload.system = [...(existing as Array<Record<string, unknown>>), ...blocks];
+  } else {
+    payload.system = blocks;
+  }
+  payload.messages = [...kept, ...messages.slice(i)];
 }
