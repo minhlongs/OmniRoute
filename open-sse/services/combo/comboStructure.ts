@@ -140,14 +140,13 @@ function normalizeRuntimeStep(
     // to a subset of the provider's connections. This is the second writer of
     // `allowedConnectionIds` (tag routing is the first); both feed the existing
     // credential-selection filter in auth.ts.
-    ...(allowedConnectionIds && allowedConnectionIds.length > 0
-      ? { allowedConnectionIds }
-      : {}),
+    ...(allowedConnectionIds && allowedConnectionIds.length > 0 ? { allowedConnectionIds } : {}),
     weight,
     label,
     // `prompt` is a per-step pipeline input and only exists on a model step —
     // #8894 widened the union with ComboProviderWildcardStep, which has no prompt.
     prompt: (step.kind === "model" ? step.prompt : null) || null,
+    ...(step.kind === "model" && step.noHedge ? { noHedge: true } : {}),
     ...(step.kind === "model" && step.fallbackOnlyOnQuotaExhaustion
       ? { fallbackOnlyOnQuotaExhaustion: true }
       : {}),
@@ -671,7 +670,11 @@ export function describeCapabilityFilterExhaustion(
     reasons: getTargetCompatibilityFailures(target, requirements),
   }));
   const unmet = Array.from(
-    new Set(rejected.flatMap((entry) => entry.reasons.filter((r) => HARD_COMPAT_REASONS.has(r) || r === "output_tokens")))
+    new Set(
+      rejected.flatMap((entry) =>
+        entry.reasons.filter((r) => HARD_COMPAT_REASONS.has(r) || r === "output_tokens")
+      )
+    )
   );
   if (unmet.length === 0) return null;
 

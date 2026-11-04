@@ -261,6 +261,8 @@ export async function dispatchWithCooldownRetry(opts: {
         );
         // Operators who explicitly enabled `hedging` asked for a latency cap, so their
         // configured delay wins over the 60s Zunef default (see the helper's contract).
+        const nextTarget = state.orderedTargets[i + 1] as { noHedge?: boolean } | undefined;
+        const nextAllowsHedge = canHedgeInto(nextTarget);
         const ZUNEF_HEDGE_DELAY_MS = resolveZunefHedgeDelayMs(
           Boolean(deps.config.hedging && zeroLatencyOptimizationsEnabled),
           deps.config.hedgeDelayMs,
@@ -274,6 +276,7 @@ export async function dispatchWithCooldownRetry(opts: {
         } else if (
           zeroLatencyOptimizationsEnabled &&
           deps.config.hedging &&
+          nextAllowsHedge &&
           !hasProtectedPriorityTarget &&
           i + 1 < state.orderedTargets.length
         ) {
@@ -631,4 +634,16 @@ export function resolveZunefHedgeDelayMs(
   const configured = Number(configuredDelayMs);
   if (!Number.isFinite(configured) || configured <= 0) return fallbackMs;
   return Math.min(Math.round(configured), fallbackMs);
+}
+
+/**
+ * Whether the NEXT target may be started early as a hedge sibling.
+ *
+ * A pinned fallback (e.g. a single spare account) exists for "everything else
+ * failed", not for racing: starting it on every slow request cancels it almost
+ * immediately (recorded as a 499), burns its quota and pollutes the error rate.
+ * Marking it `noHedge: true` keeps it in the fallback chain, just never as a racer.
+ */
+export function canHedgeInto(nextTarget: { noHedge?: boolean } | null | undefined): boolean {
+  return nextTarget?.noHedge !== true;
 }

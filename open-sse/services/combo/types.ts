@@ -202,6 +202,8 @@ export type ResolvedComboTarget = {
   prompt?: string | null;
   failoverBeforeRetry?: unknown;
   fallbackOnlyOnQuotaExhaustion?: boolean;
+  /** Never start this target early as a hedge sibling; only try it in normal order. */
+  noHedge?: boolean;
   trafficType?: "production" | "shadow";
   /**
    * Fingerprint-based account pin resolved from a combo builder composite
@@ -229,6 +231,8 @@ export type ResolvedComboRefTarget = {
   weight: number;
   label: string | null;
   fallbackOnlyOnQuotaExhaustion?: boolean;
+  /** Never start this target early as a hedge sibling; only try it in normal order. */
+  noHedge?: boolean;
 };
 
 export type ResolvedComboUnit = ResolvedComboTarget | ResolvedComboRefTarget;
