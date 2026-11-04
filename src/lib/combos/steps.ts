@@ -26,6 +26,8 @@ export interface ComboModelStep {
   prompt?: string | null;
   tags?: string[];
   fallbackOnlyOnQuotaExhaustion?: boolean;
+  /** Never start this step early as a hedge sibling; normal fallback order still applies. */
+  noHedge?: boolean;
 }
 
 export interface ComboRefStep {

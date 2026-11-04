@@ -21,6 +21,7 @@ export const comboStepMetaSchema = {
   weight: z.number().min(0).max(100).optional().default(0),
   label: z.string().trim().min(1).max(200).optional(),
   fallbackOnlyOnQuotaExhaustion: z.boolean().optional(),
+  noHedge: z.boolean().optional(),
 };
 
 export const comboModelStepInputSchema = z.object({
