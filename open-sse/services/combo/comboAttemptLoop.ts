@@ -4,7 +4,11 @@
  *
  * @internal — not part of the public combo.ts barrel.
  */
-import { formatRetryAfter, getModelLockoutInfo, clearAllModelLockouts } from "../accountFallback.ts";
+import {
+  formatRetryAfter,
+  getModelLockoutInfo,
+  clearAllModelLockouts,
+} from "../accountFallback.ts";
 import {
   errorResponse,
   errorResponseWithComboDiagnostics,
@@ -250,16 +254,19 @@ export async function dispatchWithCooldownRetry(opts: {
         // Zunef hedge: Zunef often sits on keep-alive pings for 60-150s. If a Zunef leg has not
         // produced its first content after ZUNEF_HEDGE_DELAY_MS, race the next leg (Zunef Sonnet,
         // then Antigravity Claude 5.5) in parallel; first to answer wins, losers are aborted.
-        const curTarget = state.orderedTargets[i] as { provider?: string; modelStr?: string } | undefined;
+        const curTarget = state.orderedTargets[i] as
+          { provider?: string; modelStr?: string } | undefined;
         const isZunefLeg = /zunef|anthropic-compatible/i.test(
           `${String(curTarget?.provider || "")} ${String(curTarget?.modelStr || "")}`
         );
-        const ZUNEF_HEDGE_DELAY_MS = 60_000;
-        if (
-          isZunefLeg &&
-          !hasProtectedPriorityTarget &&
-          i + 1 < state.orderedTargets.length
-        ) {
+        // Operators who explicitly enabled `hedging` asked for a latency cap, so their
+        // configured delay wins over the 60s Zunef default (see the helper's contract).
+        const ZUNEF_HEDGE_DELAY_MS = resolveZunefHedgeDelayMs(
+          Boolean(deps.config.hedging && zeroLatencyOptimizationsEnabled),
+          deps.config.hedgeDelayMs,
+          60_000
+        );
+        if (isZunefLeg && !hasProtectedPriorityTarget && i + 1 < state.orderedTargets.length) {
           const timeoutPromise = new Promise<void>((r) => {
             setTimeout(r, ZUNEF_HEDGE_DELAY_MS);
           });
@@ -419,9 +426,15 @@ export async function dispatchWithCooldownRetry(opts: {
       finishComboTrace(deps.traceInvocationId, { status: 503 });
       if (!state.lastStatus) {
         if (state.recordedAttempts === 0) {
-          if (!(state as unknown as Record<string, unknown>).__failOpenRetried && state.orderedTargets.length > 0) {
+          if (
+            !(state as unknown as Record<string, unknown>).__failOpenRetried &&
+            state.orderedTargets.length > 0
+          ) {
             (state as unknown as Record<string, unknown>).__failOpenRetried = true;
-            deps.log.warn("COMBO", `[FAIL-OPEN-503-GUARD] All ${state.orderedTargets.length} targets in combo "${deps.combo.name}" were skipped by pre-dispatch filters; clearing in-memory model lockouts and dispatching live!`);
+            deps.log.warn(
+              "COMBO",
+              `[FAIL-OPEN-503-GUARD] All ${state.orderedTargets.length} targets in combo "${deps.combo.name}" were skipped by pre-dispatch filters; clearing in-memory model lockouts and dispatching live!`
+            );
             clearAllModelLockouts();
             state.exhaustedProviders.clear();
             state.exhaustedConnections.clear();
@@ -597,4 +610,25 @@ export async function dispatchWithCooldownRetry(opts: {
       activeLoopSafetyTimer = null;
     }
   }
+}
+
+/**
+ * Delay before a Zunef leg is hedged by the next target.
+ *
+ * Zunef legitimately sits on keep-alive pings for 60-150s on huge prompts, so the
+ * default is a full minute. That default used to be unconditional, which silently
+ * ignored an operator's configured `hedgeDelayMs` — turning `hedging: true` into a
+ * no-op for every Zunef-first combo. When hedging is explicitly enabled the
+ * configured delay now wins, clamped to the 60s default so the option can never
+ * make an existing deployment wait *longer* than it already did.
+ */
+export function resolveZunefHedgeDelayMs(
+  hedgingEnabled: boolean,
+  configuredDelayMs: unknown,
+  fallbackMs = 60_000
+): number {
+  if (!hedgingEnabled) return fallbackMs;
+  const configured = Number(configuredDelayMs);
+  if (!Number.isFinite(configured) || configured <= 0) return fallbackMs;
+  return Math.min(Math.round(configured), fallbackMs);
 }
