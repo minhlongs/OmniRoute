@@ -10,7 +10,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-const { canHedgeInto } = await import("../../open-sse/services/combo/comboAttemptLoop.ts");
+const { canHedgeInto } = await import("../../open-sse/services/combo/hedgePolicy.ts");
 
 test("a normal target can be hedged into", () => {
   assert.equal(canHedgeInto({}), true);

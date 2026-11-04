@@ -32,6 +32,7 @@ import {
   clearComboFailureTracking,
   recordComboFailure,
 } from "./combo/failureTracker.ts";
+import { canHedgeInto } from "./combo/hedgePolicy.ts";
 import { buildNoUpstreamResponseDiagnostics, buildRecoveryHint } from "./combo/pinRecovery.ts";
 import { buildTargetTimeoutRunner } from "./combo/targetTimeoutRunner.ts";
 import { loadAdaptationScores, recordOutcome } from "./combo/adaptation/store.ts";
@@ -2046,7 +2047,15 @@ export async function handleComboChat({
         runningTasks.add(task);
         task.finally(() => runningTasks.delete(task));
 
-        if (zeroLatencyOptimizationsEnabled && config.hedging && i + 1 < orderedTargets.length) {
+        const nextTargetAllowsHedge = canHedgeInto(
+          orderedTargets[i + 1] as { noHedge?: boolean } | undefined
+        );
+        if (
+          zeroLatencyOptimizationsEnabled &&
+          config.hedging &&
+          nextTargetAllowsHedge &&
+          i + 1 < orderedTargets.length
+        ) {
           const hedgeDelay = resolveDelayMs(config.hedgeDelayMs, 500);
           let timeoutResolve: () => void;
           const timeoutPromise = new Promise<void>((r) => {
