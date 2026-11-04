@@ -17,6 +17,7 @@ import {
 import type { ComboDiagnostics } from "../../utils/error.ts";
 import { COMBO_FAILURE_THRESHOLD, recordComboFailure } from "./failureTracker.ts";
 import { buildNoUpstreamResponseDiagnostics, buildRecoveryHint } from "./pinRecovery.ts";
+import { canHedgeInto } from "./hedgePolicy.ts";
 import { formatExhaustedConnectionKey } from "./comboDiagFormat.ts";
 import { recordComboRequest } from "../comboMetrics.ts";
 import { notifyWebhookEvent } from "../../../src/lib/webhookDispatcher.ts";
@@ -634,16 +635,4 @@ export function resolveZunefHedgeDelayMs(
   const configured = Number(configuredDelayMs);
   if (!Number.isFinite(configured) || configured <= 0) return fallbackMs;
   return Math.min(Math.round(configured), fallbackMs);
-}
-
-/**
- * Whether the NEXT target may be started early as a hedge sibling.
- *
- * A pinned fallback (e.g. a single spare account) exists for "everything else
- * failed", not for racing: starting it on every slow request cancels it almost
- * immediately (recorded as a 499), burns its quota and pollutes the error rate.
- * Marking it `noHedge: true` keeps it in the fallback chain, just never as a racer.
- */
-export function canHedgeInto(nextTarget: { noHedge?: boolean } | null | undefined): boolean {
-  return nextTarget?.noHedge !== true;
 }
