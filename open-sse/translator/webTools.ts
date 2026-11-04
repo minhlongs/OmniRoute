@@ -245,9 +245,81 @@ function normalizeLooseJson(value: string): string {
     .replace(/,\s*([}\]])/g, "$1");
 }
 
+const VALID_JSON_ESCAPES = new Set(['"', "\\", "/", "b", "f", "n", "r", "t", "u"]);
+
+/**
+ * Repair the two escaping mistakes web models make when they paste a shell command
+ * into a JSON string value:
+ *
+ *   1. UNESCAPED QUOTES — `"command": "grep -n "foo" file"`. The value ends at the
+ *      first inner quote, `JSON.parse` throws, and the whole `<tool_call>` block
+ *      leaks into `content`, so the agent receives prose instead of a tool call.
+ *   2. INVALID ESCAPES — a shell `\|` inside the command is not a legal JSON
+ *      escape and fails the parse for the same reason.
+ *
+ * A quote inside a string counts as the real terminator only when the next
+ * non-space character can legally follow a string in JSON (`, } ] :` or EOF).
+ * Returns `null` when nothing needed repairing, so the caller keeps the plain
+ * parse first and only pays for this pass on genuinely broken input.
+ */
+function repairLooseJsonString(input: string): string | null {
+  let out = "";
+  let inString = false;
+  let changed = false;
+
+  for (let i = 0; i < input.length; i++) {
+    const ch = input[i];
+
+    if (!inString) {
+      if (ch === '"') inString = true;
+      out += ch;
+      continue;
+    }
+
+    if (ch === '"') {
+      let j = i + 1;
+      while (j < input.length && /\s/.test(input[j])) j++;
+      const next = input[j];
+      const terminates =
+        next === undefined || next === "," || next === "}" || next === "]" || next === ":";
+      if (terminates) {
+        inString = false;
+        out += ch;
+      } else {
+        out += '\\"';
+        changed = true;
+      }
+      continue;
+    }
+
+    if (ch === "\\") {
+      const next = input[i + 1];
+      if (next !== undefined && VALID_JSON_ESCAPES.has(next)) {
+        out += ch + next;
+        i++;
+        continue;
+      }
+      out += "\\\\";
+      changed = true;
+      continue;
+    }
+
+    out += ch;
+  }
+
+  return changed ? out : null;
+}
+
 export function parseLooseJsonObject(raw: string): Record<string, unknown> | null {
   const trimmed = stripCodeFence(raw);
-  for (const candidate of [trimmed, normalizeLooseJson(trimmed)]) {
+  const normalized = normalizeLooseJson(trimmed);
+
+  // The repair is tried LAST and only when it actually changed something, so a
+  // well-formed payload always takes the plain path.
+  const repaired = repairLooseJsonString(normalized);
+  const candidates = repaired ? [trimmed, normalized, repaired] : [trimmed, normalized];
+
+  for (const candidate of candidates) {
     try {
       return toRecord(JSON.parse(candidate));
     } catch {
