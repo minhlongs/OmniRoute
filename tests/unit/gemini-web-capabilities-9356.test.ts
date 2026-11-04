@@ -153,15 +153,28 @@ test("#9356 forcing is rejected on its own terms, even with no tools[] array", (
 
 // ─── Executor wiring ────────────────────────────────────────────────────────
 
-test("#9356 executor returns 400 for reasoning_effort=high before launching a browser", async () => {
-  const result = await run({ reasoning_effort: "high" });
+test("#9356 executor drops reasoning_effort=high and proceeds to the cookie check", async () => {
+  // 2026-11-04 revisit: the effort is injected by the router, not asked of
+  // gemini-web by the caller, so the executor scrubs it instead of failing the
+  // request. Reaching the credential check (401) proves it was not rejected.
+  const result = await new GeminiWebExecutor().execute({
+    model: "gemini-4-argon",
+    body: { messages: [{ role: "user", content: "hi" }], stream: false, reasoning_effort: "high" },
+    stream: false,
+    credentials: {},
+    signal: AbortSignal.timeout(10_000),
+    log: null,
+  });
 
-  assert.equal(result.response.status, 400);
-  const body = (await result.response.json()) as ErrorBodyLike;
-  assert.equal(body.error.code, GEMINI_WEB_UNSUPPORTED_CONTROL_CODE);
-  assert.match(body.error.message, /reasoning_effort/);
+  assert.equal(result.response.status, 401, "scrubbed, so it reaches the cookie check");
+  const body = (await result.response.json()) as { error?: unknown };
+  assert.notEqual(
+    typeof body.error === "object" ? (body.error as { code?: string }).code : undefined,
+    GEMINI_WEB_UNSUPPORTED_CONTROL_CODE,
+    "the capability guard must not fire for reasoning_effort any more"
+  );
   assert.equal(
-    body.error.message.includes("at /"),
+    JSON.stringify(body).includes("at /"),
     false,
     "error bodies must stay sanitized — no stack traces"
   );
@@ -180,8 +193,12 @@ test("#9356 the capability guard runs ahead of the credential check", async () =
   // A request that is BOTH uncredentialed and incompatible must report the
   // incompatibility: adding a cookie would not make it work.
   const result = await new GeminiWebExecutor().execute({
-    model: "gemini-3.6-flash",
-    body: { messages: [{ role: "user", content: "hi" }], reasoning_effort: "high" },
+    model: "gemini-4-argon",
+    body: {
+      messages: [{ role: "user", content: "hi" }],
+      tools: [GET_WEATHER_TOOL],
+      tool_choice: "required",
+    },
     stream: false,
     credentials: {},
     signal: AbortSignal.timeout(10_000),

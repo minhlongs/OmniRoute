@@ -117,6 +117,28 @@ function scoreToolName(emitted: string, requested: RequestedToolName): number {
   return similarity >= 0.72 ? similarity : 0;
 }
 
+/**
+ * Shell tools a web model may address implicitly by emitting only
+ * `{"command": "..."}`. Matched against the NORMALIZED requested name so `Bash`,
+ * `bash` and `run-command` all hit, while unrelated tools never do.
+ */
+const SHELL_TOOL_NAME_RE =
+  /^(bash|bashtool|shell|sh|terminal|exec|execute|runcommand|executecommand|containerexec)$/;
+
+/**
+ * Pick the shell tool the caller actually offered, if any.
+ *
+ * Returns `null` when the request declares no shell-like tool: a bare
+ * `{"command": …}` block then stays text, because emitting a call the client never
+ * declared fails every downstream executor.
+ */
+export function findRequestedShellToolName(requestedTools: RequestedToolName[]): string | null {
+  for (const requested of requestedTools) {
+    if (SHELL_TOOL_NAME_RE.test(requested.normalized)) return requested.original;
+  }
+  return null;
+}
+
 export function resolveRequestedToolName(
   emitted: string,
   requestedTools: RequestedToolName[]
@@ -540,7 +562,12 @@ export function parseToolCallsFromText(
       parsed && typeof parsed.name === "string"
         ? parsed.name
         : parsed && typeof parsed.command === "string"
-          ? parsed.command
+          ? // Bare shell invocation: web models drop the wrapper and answer with the
+            // ARGUMENTS only (`<tool_call>{"command":"git status"}</tool_call>`,
+            // observed in Claude Code CLI traffic). Using `parsed.command` as the tool
+            // NAME produced a call named after the command string, which no client can
+            // execute — resolve it to a shell tool the caller actually declared.
+            findRequestedShellToolName(requestedToolNames)
           : null;
     if (!emittedName) continue;
 
@@ -555,7 +582,22 @@ export function parseToolCallsFromText(
       resolveRequestedToolName(emittedName, requestedToolNames) ||
       (candidate.requireRequestedTool ? null : emittedName);
     if (!name || (candidate.requireRequestedTool && requestedToolNames.length === 0)) continue;
-    const args = toArgumentsString(parsed?.arguments);
+    // A bare block carries its arguments at the top level, so `parsed.arguments` is
+    // absent — hand the object through (minus bookkeeping keys) instead of `{}`.
+    let argumentSource: unknown = parsed?.arguments ?? parsed?.input ?? parsed?.params;
+    if (argumentSource === undefined && parsed && typeof parsed.command === "string") {
+      const {
+        name: _name,
+        tool: _tool,
+        function: _fn,
+        _nonce: _nonce,
+        id: _id,
+        type: _type,
+        ...rest
+      } = parsed;
+      argumentSource = rest;
+    }
+    const args = toArgumentsString(argumentSource);
     toolCalls.push({
       id: `${idSeed}_${toolCalls.length}`,
       type: "function",

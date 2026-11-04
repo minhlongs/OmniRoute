@@ -83,6 +83,35 @@ export function requestsThinkingBudget(reasoningEffort: unknown): boolean {
 }
 
 /**
+ * Drop `reasoning_effort` before the capability guard runs.
+ *
+ * Returns a shallow COPY — the caller's body is never mutated — plus the value
+ * that was dropped so the executor can log why the control vanished.
+ * `none`/`minimal` already comply and stay in place, and a body without the field
+ * is returned as-is (no allocation on the common path).
+ *
+ * Rationale: the effort is injected by the ROUTER (combo / effort-variant
+ * resolution), not asked of gemini-web by the caller, and every agentic client —
+ * Claude Code CLI first — arrives carrying one. Rejecting it turned a servable
+ * chat request into a permanent 400 for this provider. The pure guard below still
+ * rejects it for any caller that bypasses this scrub.
+ */
+export function stripGeminiWebReasoningEffort(body: Record<string, unknown> | null | undefined): {
+  body: Record<string, unknown>;
+  stripped: string | null;
+} {
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    return { body: {}, stripped: null };
+  }
+  if (!requestsThinkingBudget(body.reasoning_effort)) {
+    return { body, stripped: null };
+  }
+  const { reasoning_effort: dropped, ...rest } = body;
+  const effort = normalizeString(dropped);
+  return { body: rest, stripped: effort };
+}
+
+/**
  * Inspect an OpenAI-shaped request body for controls gemini-web cannot honor.
  * Returns the first violation found, or `null` when the request is servable.
  *

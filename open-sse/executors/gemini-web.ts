@@ -20,6 +20,7 @@ import { buildToolModeResponse } from "./chatgptWebTools.ts";
 import {
   checkGeminiWebUnsupportedControls,
   GEMINI_WEB_UNSUPPORTED_CONTROL_CODE,
+  stripGeminiWebReasoningEffort,
 } from "./gemini-web/capabilities.ts";
 import {
   executeGeminiWebDirectHttp,
@@ -637,11 +638,20 @@ export class GeminiWebExecutor extends BaseExecutor {
     // prose made agents believe their reasoning/tool requirements had been met.
     // Direct HTTP Argon/Ultra models use native StreamGenerate selectors and
     // accept effort-routed requests while still enforcing forced tool_choice.
-    const capBody =
-      isDirectHttpCandidate && body && typeof body === "object"
-        ? { ...(body as Record<string, unknown>), reasoning_effort: undefined }
-        : (body as Record<string, unknown>);
-    const violation = checkGeminiWebUnsupportedControls(capBody);
+    // reasoning_effort is DROPPED rather than rejected on every path: the value is
+    // injected by the router, not asked of gemini-web by the caller, so rejecting it
+    // made this provider permanently unusable for agentic clients (Claude Code CLI
+    // always arrives with one). Forced tool_choice keeps its rejection — that is a
+    // promise about the shape of the response, and ignoring it lets an agent act on
+    // prose that never called the tool.
+    const scrubbed = stripGeminiWebReasoningEffort(body as Record<string, unknown>);
+    if (scrubbed.stripped) {
+      log?.debug?.(
+        "GEMINI-WEB",
+        `Dropped reasoning_effort="${scrubbed.stripped}" — provider has no thinking control`
+      );
+    }
+    const violation = checkGeminiWebUnsupportedControls(scrubbed.body);
     if (violation) {
       log?.warn?.(
         "GEMINI-WEB",

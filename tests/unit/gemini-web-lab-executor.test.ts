@@ -117,9 +117,13 @@ describe("GeminiWebLabExecutor & GeminiBusinessExecutor Parity (#03.3)", () => {
           providerSpecificData: { mockBaseUrl: mock.baseUrl, entryUrl: mock.baseUrl },
         },
       });
-      assert.equal(r1.response.status, 400);
-      const j1 = (await r1.response.json()) as ErrorEnvelope;
-      assert.equal(j1.error.code, "unsupported_control_for_provider");
+      // reasoning_effort is scrubbed (2026-11-04 revisit), so this must NOT be a
+      // capability rejection any more — only forced tool_choice still is.
+      assert.notEqual(r1.response.status, 400);
+      if (r1.response.status !== 200) {
+        const j1 = (await r1.response.json()) as ErrorEnvelope;
+        assert.notEqual(j1.error?.code, "unsupported_control_for_provider");
+      }
 
       const r2 = await ex.execute({
         model: "gemini-2.5-pro",
