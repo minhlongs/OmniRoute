@@ -44,18 +44,47 @@ export function resolveResponseToolNameMap(
   requestToolIdentityMap: ReadonlyMap<string, unknown> | null,
   declaredTools: unknown = null
 ): Map<string, string> | null {
+  const declared = buildDeclaredToolNameMap(declaredTools);
   if (translatedToolNameMap instanceof Map && translatedToolNameMap.size > 0) {
-    return translatedToolNameMap as Map<string, string>;
+    return mergeToolNameMaps(translatedToolNameMap as Map<string, string>, declared);
   }
   const ledger = nativeClaudeToolNameMap ?? toToolNameAliasMap(requestToolIdentityMap);
-  if (ledger && ledger.size > 0) return ledger;
+  if (ledger && ledger.size > 0) return mergeToolNameMaps(ledger, declared);
   // Last resort: the client's own tool list. A model can emit `bash` for a tool
   // the client declared as `Bash` without any sanitisation happening on our side
   // (nothing to put in the ledger), and the client is case-sensitive:
   // "No such tool available: bash. Tool names are case-sensitive: call Bash
   // instead." An identity ledger lets restoreClaudeToolName()'s case-insensitive
   // branch map the name back to the exact casing the client declared.
-  return buildDeclaredToolNameMap(declaredTools);
+  return declared;
+}
+
+/**
+ * Fold the declared-tool identity ledger into whichever alias ledger won.
+ *
+ * The passthrough ledger only knows the well-known Claude Code tool names, so a
+ * harness tool such as `ListAgents` or `AskUserQuestion` is absent from it and a
+ * lowercased emission (`listagents`) cannot be restored — the client then loops
+ * on "No such tool available". The declared list is the only ledger that knows
+ * every tool this request actually exposes, so it is merged in.
+ *
+ * `base` wins on conflict (case-insensitively): a real sanitisation alias must
+ * never be replaced by the identity entry.
+ */
+export function mergeToolNameMaps(
+  base: Map<string, string> | null | undefined,
+  extra: Map<string, string> | null | undefined
+): Map<string, string> | null {
+  if (!base || base.size === 0) return extra ?? null;
+  if (!extra || extra.size === 0) return base;
+  const merged = new Map(base);
+  const taken = new Set<string>();
+  for (const key of base.keys()) taken.add(key.toLowerCase());
+  for (const [key, value] of extra) {
+    if (taken.has(key.toLowerCase())) continue;
+    merged.set(key, value);
+  }
+  return merged;
 }
 
 /**
