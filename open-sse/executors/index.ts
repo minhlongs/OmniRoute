@@ -30,6 +30,8 @@ import { ChatGptWebExecutor } from "./chatgpt-web.ts";
 import { ChatGptWebCodexExecutor } from "./chatgpt-web-codex.ts";
 import { BlackboxWebExecutor } from "./blackbox-web.ts";
 import { MuseSparkWebExecutor } from "./muse-spark-web.ts";
+import { MuseExecutor } from "./muse.ts";
+import { MuseWebExecutor } from "./muse-web.ts";
 import { AzureOpenAIExecutor } from "./azure-openai.ts";
 import { AzureAiExecutor } from "./azure-ai.ts";
 import { CommandCodeExecutor } from "./commandCode.ts";
@@ -148,6 +150,8 @@ const executors = {
   "bb-web": new BlackboxWebExecutor(), // Alias
   "muse-spark-web": new MuseSparkWebExecutor(),
   "ms-web": new MuseSparkWebExecutor(), // Alias
+  muse: new MuseExecutor(),
+  "muse-web": new MuseWebExecutor(),
   "devin-desktop": new DevinDesktopExecutor(),
   "zed-hosted": new ZedHostedExecutor(),
   "devin-cli": new DevinCliExecutor(),
@@ -319,6 +323,8 @@ export { KieExecutor } from "./kie.ts";
 export { ChatGptWebExecutor } from "./chatgpt-web.ts";
 export { BlackboxWebExecutor } from "./blackbox-web.ts";
 export { MuseSparkWebExecutor } from "./muse-spark-web.ts";
+export { MuseExecutor } from "./muse.ts";
+export { MuseWebExecutor } from "./muse-web.ts";
 export { AzureOpenAIExecutor } from "./azure-openai.ts";
 export { AzureAiExecutor } from "./azure-ai.ts";
 export { CommandCodeExecutor } from "./commandCode.ts";

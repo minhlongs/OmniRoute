@@ -26,6 +26,7 @@ import { glm_cnProvider } from "./registry/glm/cn/index.ts";
 import { traeProvider } from "./registry/trae/index.ts";
 import { raycastProvider } from "./registry/raycast/index.ts";
 import { muse_spark_webProvider } from "./registry/muse-spark-web/index.ts";
+import { museProvider, muse_webProvider } from "./registry/muse/index.ts";
 import { lmarenaProvider } from "./registry/lmarena/index.ts";
 import { kilocodeProvider } from "./registry/kilocode/index.ts";
 import { githubProvider } from "./registry/github/index.ts";
@@ -294,6 +295,8 @@ export const REGISTRY: Record<string, RegistryEntry> = {
   trae: traeProvider,
   raycast: raycastProvider,
   "muse-spark-web": muse_spark_webProvider,
+  muse: museProvider,
+  "muse-web": muse_webProvider,
   lmarena: lmarenaProvider,
   kilocode: kilocodeProvider,
   github: githubProvider,
