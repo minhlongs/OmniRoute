@@ -965,6 +965,10 @@ async function handleChatImplementation(
   // Check if model is a combo (has multiple models with fallback)
   telemetry.startPhase("resolve");
   let combo: any = rawModelMappedCombo ?? (await getComboForModel(resolvedModelStr));
+  log.info(
+    "ROUTING",
+    `mapping-probe raw=${modelStr} rawHit=${rawModelMappedCombo?.name ?? "none"} resolved=${resolvedModelStr} combo=${combo?.name ?? "none"}`
+  );
   if (reasoningDecision?.targetCombo) combo = reasoningDecision.targetCombo;
 
   // "auto" prefix fuzzy matching: "auto/fast" → "auto/best-fast", etc.
