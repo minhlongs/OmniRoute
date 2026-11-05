@@ -170,11 +170,24 @@ test("Provider: gemini-web has correct models", async () => {
   assert.deepEqual(
     models.map((m: any) => [m.id, m.name]),
     [
+      ["gemini-4-argon", "Gemini 4 Argon"],
+      ["gemini-4-argon-low", "Gemini 4 Argon (Low)"],
+      ["gemini-4-argon-medium", "Gemini 4 Argon (Medium)"],
+      ["gemini-4-argon-high", "Gemini 4 Argon (High)"],
       ["gemini-3.1-pro", "Gemini 3.1 Pro"],
       ["gemini-3.7-flash", "Gemini 3.7 Flash"],
       ["gemini-3.1-flash-lite", "Gemini 3.1 Flash-Lite"],
     ]
   );
+});
+
+test("Provider: gemini-web does not treat the partial web catalog as authoritative", async () => {
+  const { providerUsesAuthoritativeLiveCatalog } =
+    await import("../../open-sse/config/providerRegistry.ts");
+  // Model discovery for the gemini.google.com web UI returns only a subset of the
+  // registered models. Marking the catalog authoritative would exclude the other
+  // statically registered Argon tiers from routing.
+  assert.equal(providerUsesAuthoritativeLiveCatalog("gemini-web"), false);
 });
 
 // ─── Regression: #2832 / #3516 — Playwright missing in Docker (runner-base) ──

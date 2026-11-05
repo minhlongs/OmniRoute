@@ -21,6 +21,10 @@ import {
   checkGeminiWebUnsupportedControls,
   GEMINI_WEB_UNSUPPORTED_CONTROL_CODE,
 } from "./gemini-web/capabilities.ts";
+import {
+  executeGeminiWebDirectHttp,
+  shouldUseGeminiWebDirectHttp,
+} from "./gemini-web/streamGenerateClient.ts";
 
 // ─── Constants ──────────────────────────────────────────────────────────────
 
@@ -155,11 +159,28 @@ export function buildGeminiPrompt(messages: Array<{ role: string; content: unkno
 export function buildGeminiToolPrompt(
   effectiveMessages: Array<{ role: string; content: unknown }>
 ): string {
-  const toolSystemMsg = effectiveMessages.find((m) => m.role === "system");
-  const lastUserMsg = [...effectiveMessages].reverse().find((m) => m.role === "user");
-  const userText = typeof lastUserMsg?.content === "string" ? lastUserMsg.content : "";
+  // prepareToolMessages() appends the tool contract as the LAST system message, after
+  // the client's own turns. Selecting the first system message instead picked up the
+  // client's system prompt and silently dropped the contract, while keeping only the
+  // last user message dropped the rest of the conversation — the model then answered
+  // conversationally instead of emitting <tool> blocks.
+  const systemMessages = effectiveMessages.filter((m) => m.role === "system");
+  const toolSystemMsg = systemMessages[systemMessages.length - 1];
   const toolPrompt = typeof toolSystemMsg?.content === "string" ? toolSystemMsg.content : "";
-  return toolPrompt ? `${toolPrompt}\n\n${userText}` : userText;
+  const remaining = effectiveMessages.filter((m) => m !== toolSystemMsg);
+  const clientSystemText = remaining
+    .filter((m) => m.role === "system")
+    .map((m) => (typeof m.content === "string" ? m.content : ""))
+    .filter(Boolean)
+    .join("\n\n");
+  // buildGeminiPrompt() drops a system-only prefix on the single-turn path, so the
+  // client system prompt is handled here instead of relying on that fallback.
+  const transcript = buildGeminiPrompt(remaining.filter((m) => m.role !== "system"));
+  const parts: string[] = [];
+  if (toolPrompt) parts.push(toolPrompt);
+  if (clientSystemText) parts.push(`System:\n${clientSystemText}`);
+  if (transcript) parts.push(transcript);
+  return parts.join("\n\n");
 }
 
 /**
@@ -476,12 +497,22 @@ export class GeminiWebExecutor extends BaseExecutor {
     const { model, body, stream, credentials, signal, log, onCredentialsRefreshed } = input;
     const requestBody = body as GeminiRequestBody;
 
+    const imageMode = (body as Record<string, unknown>)?.x_gemini_web_image_mode === true;
+    const isDirectHttpCandidate =
+      !imageMode && shouldUseGeminiWebDirectHttp(model, credentials, false);
+
     // #9356: fail fast on controls this provider cannot honor (reasoning_effort
-    // above "minimal", forced tool_choice). Runs before the credential check and
-    // before Playwright launches — the request is unservable no matter which
-    // cookie is used, and answering 200 with ordinary prose made agents believe
-    // their reasoning/tool requirements had been met. See ./gemini-web/capabilities.ts.
-    const violation = checkGeminiWebUnsupportedControls(body as Record<string, unknown>);
+    // above "minimal" on the Playwright browser path, forced tool_choice). Runs
+    // before the credential check and before Playwright launches — the request is
+    // unservable no matter which cookie is used, and answering 200 with ordinary
+    // prose made agents believe their reasoning/tool requirements had been met.
+    // Direct HTTP Argon/Ultra models use native StreamGenerate selectors and
+    // accept effort-routed requests while still enforcing forced tool_choice.
+    const capBody =
+      isDirectHttpCandidate && body && typeof body === "object"
+        ? { ...(body as Record<string, unknown>), reasoning_effort: undefined }
+        : (body as Record<string, unknown>);
+    const violation = checkGeminiWebUnsupportedControls(capBody);
     if (violation) {
       log?.warn?.(
         "GEMINI-WEB",
@@ -543,13 +574,26 @@ export class GeminiWebExecutor extends BaseExecutor {
       };
     }
 
+    const { chromium } = await import("playwright");
+    const isPlaywrightMocked = chromium.launch.name !== "launch";
+    if (!imageMode && shouldUseGeminiWebDirectHttp(model, credentials, isPlaywrightMocked)) {
+      return executeGeminiWebDirectHttp({
+        input,
+        cookie,
+        prompt,
+        hasTools,
+        requestedTools,
+        mergeRotatedCookies: mergeRotatedGeminiCookies,
+        buildToolResponse: buildGeminiToolResponse,
+      });
+    }
+
     let browser: any = null;
     let abortBrowser: (() => void) | null = null;
     try {
       if (signal?.aborted) {
         throw signal.reason instanceof Error ? signal.reason : new Error("Request aborted");
       }
-      const { chromium } = await import("playwright");
       browser = await chromium.launch({ headless: true });
       abortBrowser = () => {
         void browser?.close().catch(() => {});
@@ -571,15 +615,6 @@ export class GeminiWebExecutor extends BaseExecutor {
       );
 
       const page = await context.newPage();
-
-      // #10466: image mode — the /v1/images/generations handler sets
-      // x_gemini_web_image_mode. Generated images arrive in the candidate's
-      // extension block ([12][7][0]) of the StreamGenerate frames, sometimes
-      // only in a LATER frame of the stream (or a follow-up StreamGenerate
-      // call), so image mode captures every StreamGenerate response, merges
-      // image URLs across frames, and resolves as soon as one is found.
-      // Chat mode keeps the original first-response-only behavior.
-      const imageMode = (body as Record<string, unknown>)?.x_gemini_web_image_mode === true;
 
       // Capture first StreamGenerate response
       let responseText = "";

@@ -1,6 +1,6 @@
 import { SEARCH_PROVIDERS } from "../config/searchRegistry.ts";
-import { registerExecutor, getRegisteredExecutor, hasRegisteredExecutor } from "./registry.ts";
 import type { BaseExecutor } from "./base.ts";
+import { registerExecutor, getRegisteredExecutor, hasRegisteredExecutor } from "./registry.ts";
 import { AntigravityExecutor } from "./antigravity.ts";
 import { GithubExecutor } from "./github.ts";
 import { GheCopilotExecutor } from "./ghe-copilot.ts";
@@ -26,6 +26,7 @@ import { GrokWebExecutor } from "./grok-web.ts";
 import { GeminiWebExecutor } from "./gemini-web.ts";
 import { TencentAIStudioWebExecutor } from "./tencent-aistudio-web.ts";
 import { GeminiBusinessExecutor } from "./gemini-business.ts";
+import { GeminiWebLabExecutor } from "./gemini-web-lab.ts";
 import { ChatGptWebExecutor } from "./chatgpt-web.ts";
 import { ChatGptWebCodexExecutor } from "./chatgpt-web-codex.ts";
 import { BlackboxWebExecutor } from "./blackbox-web.ts";
@@ -144,6 +145,8 @@ const executors = {
   gweb: new GeminiWebExecutor(), // Alias
   "gemini-business": new GeminiBusinessExecutor(),
   gembiz: new GeminiBusinessExecutor(), // Alias
+  "gemini-web-lab": new GeminiWebLabExecutor(),
+  gweblab: new GeminiWebLabExecutor(), // Alias
   "chatgpt-web": new ChatGptWebExecutor(),
   "cgpt-web": new ChatGptWebExecutor(), // Alias
   "blackbox-web": new BlackboxWebExecutor(),
@@ -243,8 +246,8 @@ const executors = {
 // Bootstrap: register every built-in in the ExecutorRegistry. registerExecutor
 // throws on duplicates, so an alias collision fails at module load, exactly as
 // loudly as a duplicate object key would have failed at lint time.
-for (const [alias, executor] of Object.entries(executors) as [string, BaseExecutor][]) {
-  registerExecutor(alias, executor);
+for (const [alias, executor] of Object.entries(executors)) {
+  registerExecutor(alias, executor as unknown as BaseExecutor);
 }
 
 const defaultCache = new Map();
@@ -319,6 +322,7 @@ export { VertexExecutor } from "./vertex.ts";
 export { PerplexityWebExecutor } from "./perplexity-web.ts";
 export { GrokWebExecutor } from "./grok-web.ts";
 export { GeminiWebExecutor } from "./gemini-web.ts";
+export { GeminiWebLabExecutor } from "./gemini-web-lab.ts";
 export { KieExecutor } from "./kie.ts";
 export { ChatGptWebExecutor } from "./chatgpt-web.ts";
 export { BlackboxWebExecutor } from "./blackbox-web.ts";

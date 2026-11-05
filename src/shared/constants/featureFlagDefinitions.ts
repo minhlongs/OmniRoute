@@ -628,4 +628,16 @@ export const FEATURE_FLAG_DEFINITIONS: FeatureFlagDefinition[] = [
     requiresRestart: false,
     warningLevel: "caution",
   },
+  {
+    key: "GEMINI_WEB_LAB_ENABLED",
+    label: "Gemini Web LAB Sandbox",
+    description:
+      "Enable the isolated loopback-only Gemini Web LAB executor (mock/fixture testing only; off by default).",
+    descriptionI18nKey: "featureFlagGeminiWebLabEnabledDescription",
+    category: "security",
+    defaultValue: "false",
+    type: "boolean",
+    requiresRestart: false,
+    warningLevel: "danger",
+  },
 ];

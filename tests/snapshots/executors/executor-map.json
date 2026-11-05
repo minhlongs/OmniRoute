@@ -320,6 +320,11 @@
       "configSource": "<custom-config>",
       "provider": "gemini-web"
     },
+    "gemini-web-lab": {
+      "className": "GeminiWebLabExecutor",
+      "configSource": "<custom-config>",
+      "provider": "gemini-web-lab"
+    },
     "ghe-copilot": {
       "className": "GheCopilotExecutor",
       "configSource": "<custom-config>",
@@ -369,6 +374,11 @@
       "className": "GeminiWebExecutor",
       "configSource": "<custom-config>",
       "provider": "gemini-web"
+    },
+    "gweblab": {
+      "className": "GeminiWebLabExecutor",
+      "configSource": "<custom-config>",
+      "provider": "gemini-web-lab"
     },
     "ha": {
       "className": "HyperAgentExecutor",
@@ -460,10 +470,20 @@
       "configSource": "<custom-config>",
       "provider": "microsoft-designer-web"
     },
+    "muse": {
+      "className": "MuseExecutor",
+      "configSource": "<custom-config>",
+      "provider": "muse"
+    },
     "muse-spark-web": {
       "className": "MuseSparkWebExecutor",
       "configSource": "<custom-config>",
       "provider": "muse-spark-web"
+    },
+    "muse-web": {
+      "className": "MuseWebExecutor",
+      "configSource": "<custom-config>",
+      "provider": "muse-web"
     },
     "nlpcloud": {
       "className": "NlpCloudExecutor",
@@ -711,6 +731,6 @@
       "provider": "zai-web"
     }
   },
-  "keyCount": 142,
+  "keyCount": 146,
   "sharedInstances": []
 }
