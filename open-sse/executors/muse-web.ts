@@ -32,8 +32,10 @@ import {
 
 // ─── Constants & Configuration ───────────────────────────────────────────────
 
-const META_AI_GRAPHQL_API = "https://www.meta.ai/api/graphql";
-const META_AI_REST_API = "https://api.meta.ai/v1/chat/completions";
+const META_AI_GRAPHQL_API =
+  process.env.MUSE_WEB_GRAPHQL_URL?.trim() || "https://www.meta.ai/api/graphql";
+const META_AI_REST_API =
+  process.env.MUSE_WEB_REST_URL?.trim() || "https://api.meta.ai/v1/chat/completions";
 const META_AI_DEFAULT_COOKIE = "ecto_1_sess";
 
 // Meta Persisted Query IDs
