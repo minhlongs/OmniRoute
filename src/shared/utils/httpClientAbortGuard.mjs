@@ -49,6 +49,19 @@ export function isClientAbortError(err) {
   // `Error: aborted` — an emitter-left 'error' event on any of these used to
   // kill the process (#fix-dev-server-aborted).
   if (e.name === "AbortError" && /abort/i.test(String(e.message))) return true;
+  // Undici aborts an in-flight fetch with a TimeoutError when the upstream never
+  // sends response headers/body inside the configured fetch window. The request
+  // is already dead by then — but the promise rejection escaped to the process
+  // handler and killed the gateway mid-stream (which clients see as
+  // "connection lost mid-response"). Same benign class as a client abort.
+  if (
+    e.code === "UND_ERR_HEADERS_TIMEOUT" ||
+    e.code === "UND_ERR_BODY_TIMEOUT" ||
+    e.code === "UND_ERR_CONNECT_TIMEOUT" ||
+    (e.name === "TimeoutError" && /upstream request did not return/i.test(String(e.message)))
+  ) {
+    return true;
+  }
   switch (e.code) {
     case "ERR_STREAM_PREMATURE_CLOSE":
     case "ECONNRESET":
