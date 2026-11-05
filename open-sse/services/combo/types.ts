@@ -100,6 +100,8 @@ export type ComboNestingContext = {
 export type HiddenModelsByProvider = ReadonlyMap<string, ReadonlySet<string>>;
 
 export type HandleComboChatOptions = {
+  /** #10681: optional opaque parent invocation id for the decision trace. */
+  invocationId?: string;
   body: Record<string, unknown>;
   combo: ComboLike;
   handleSingleModel: HandleSingleModel;

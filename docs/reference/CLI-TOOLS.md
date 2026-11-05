@@ -1,19 +1,19 @@
 ---
 title: "CLI Tools — OmniRoute"
 version: 3.8.50
-lastUpdated: 2026-08-18
+lastUpdated: 2026-08-23
 ---
 
 # CLI Tools — OmniRoute
 
-Last updated: 2026-08-18
+Last updated: 2026-08-23
 
 OmniRoute integrates with three categories of CLI tools spread across three dedicated dashboard pages:
 
 | Page           | Route                   | Concept                                                                   | Count        |
 | -------------- | ----------------------- | ------------------------------------------------------------------------- | ------------ |
 | **CLI Code's** | `/dashboard/cli-code`   | Coding tools you point at OmniRoute (Client → CLI → OmniRoute → Provider) | 26           |
-| **CLI Agents** | `/dashboard/cli-agents` | Autonomous agents you point at OmniRoute (same flow, broader scope)       | 8            |
+| **CLI Agents** | `/dashboard/cli-agents` | Autonomous agents you point at OmniRoute (same flow, broader scope)       | 9            |
 | **ACP Agents** | `/dashboard/acp-agents` | CLIs that OmniRoute spawns as backend via stdio/ACP (reverse flow)        | see registry |
 
 Legacy routes redirect via 308: `/dashboard/cli-tools` → `/dashboard/cli-code`, `/dashboard/agents` → `/dashboard/acp-agents`.
@@ -176,7 +176,7 @@ All tools that appear in `/dashboard/cli-code`. Those with `baseUrlSupport: none
 Tools with `baseUrlSupport: "partial"` show a badge "⚠ Base URL parcial" in the dashboard card.
 ---
 
-## 2. CLI Agents Catalog (8 tools)
+## 2. CLI Agents Catalog (9 tools)
 
 Autonomous agents that appear in `/dashboard/cli-agents`:
 
@@ -190,6 +190,7 @@ Autonomous agents that appear in `/dashboard/cli-agents`:
 | agent-deck   | Agent Deck       | asheshgoplani (OSS)      | full           | false        |
 | omp          | Oh My Pi         | OSS                      | full           | true         |
 | letta        | Letta CLI        | Letta                    | full           | false        |
+| prime-agent  | Prime Agent      | Prime Intellect (OSS)    | full           | false        |
 
 ---
 

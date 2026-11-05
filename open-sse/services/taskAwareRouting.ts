@@ -65,7 +65,7 @@ const MAX_CONVERSATION_AFFINITY_ENTRIES = 1000;
  * Task routing is additive: other strategies are wholly unaffected.
  */
 export function isTaskRoutingStrategy(strategy: unknown): boolean {
-  return ["smart", "task", "task-aware", "task_aware", "auto"].includes(
+  return ["smart", "task", "task-aware", "task_aware"].includes(
     String(strategy ?? "").toLowerCase()
   );
 }

@@ -184,6 +184,11 @@ const EXTRA_MODULE_ENTRIES = [
     dest: ["main-server-timeouts.mjs"],
   },
   {
+    label: "systemd sd_notify helper (server-ws.mjs dependency)",
+    src: ["scripts", "dev", "systemd-notify.mjs"],
+    dest: ["systemd-notify.mjs"],
+  },
+  {
     label: "HTTP method guard (server-ws.mjs dependency)",
     src: ["scripts", "dev", "http-method-guard.cjs"],
     dest: ["http-method-guard.cjs"],
@@ -623,12 +628,11 @@ function copyNativeAssetsAndExtraModules(projectRoot, resolvedOutDir) {
  * This keeps the fix narrowly scoped to packages the standalone already expects.
  *
  * @param {string} projectRoot
- * @param {string} resolvedOutDir
+ * @param {string} bundleNodeModules
  * @returns {{repaired: number, packages: string[]}}
  */
-function repairEmptyExternalPackageDirs(projectRoot, resolvedOutDir) {
+function repairEmptyExternalPackageDirs(projectRoot, bundleNodeModules) {
   const summary = { repaired: 0, packages: [] };
-  const bundleNodeModules = path.join(resolvedOutDir, "node_modules");
   const sourceNodeModules = path.join(projectRoot, "node_modules");
   if (!fsSync.existsSync(bundleNodeModules) || !fsSync.existsSync(sourceNodeModules)) {
     return summary;
@@ -894,12 +898,23 @@ export function assembleStandalone({
   // 6. Optionally copy native assets + extra modules (synchronous)
   if (copyNatives) {
     copyNativeAssetsAndExtraModules(projectRoot, resolvedOutDir);
-    const emptyPkgRepair = repairEmptyExternalPackageDirs(projectRoot, resolvedOutDir);
-    if (emptyPkgRepair.repaired > 0) {
-      console.log(
-        `[assembleStandalone] Repaired ${emptyPkgRepair.repaired} hollow external package dir(s): ` +
-          emptyPkgRepair.packages.join(", ")
-      );
+    // Repair hollow externalized package dirs in BOTH locations Turbopack's standalone
+    // tracer can populate: the top-level bundle node_modules, and — for projects with a
+    // custom distDir (see next.config.mjs) — the nested <relDistDir>/node_modules mirrored
+    // alongside the traced server chunks. materializeBundledSymlinks (step 7 below) already
+    // treats these as two distinct targets; #9913 only covered the top-level one, which left
+    // the nested location's hollow dirs unrepaired (#7346).
+    for (const bundleNodeModules of [
+      path.join(resolvedOutDir, "node_modules"),
+      path.join(resolvedOutDir, relDistDir, "node_modules"),
+    ]) {
+      const emptyPkgRepair = repairEmptyExternalPackageDirs(projectRoot, bundleNodeModules);
+      if (emptyPkgRepair.repaired > 0) {
+        console.log(
+          `[assembleStandalone] Repaired ${emptyPkgRepair.repaired} hollow external package dir(s) in ` +
+            `${path.relative(resolvedOutDir, bundleNodeModules) || "."}: ${emptyPkgRepair.packages.join(", ")}`
+        );
+      }
     }
 
     // #9166: dynamically imported LLMLingua packages are not reliably traced

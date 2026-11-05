@@ -430,13 +430,17 @@ export default function OAuthModal({
           const verifyUrl = data.verification_uri_complete || data.verification_uri;
           if (typeof verifyUrl === "string" && verifyUrl) window.open(verifyUrl, "oauth_verify");
 
-          // Start polling - pass extraData for Kiro (contains _clientId, _clientSecret)
+          // Start polling - pass extraData for Kiro (contains _clientId, _clientSecret).
+          // _authMethod must be forwarded too: pollToken falls back to "builder-id" without it,
+          // which makes postExchange skip the Q Developer profile lookup. An IdC connection then
+          // gets persisted with no profileArn and every usage call returns 403.
           const extraData =
             provider === "kiro" || provider === "amazon-q"
               ? {
                   _clientId: data._clientId,
                   _clientSecret: data._clientSecret,
                   _region: data._region,
+                  _authMethod: data._authMethod,
                 }
               : provider === "ghe-copilot" && gheUrl.trim()
                 ? { gheUrl: gheUrl.trim() }

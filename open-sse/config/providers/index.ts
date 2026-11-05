@@ -3,6 +3,8 @@ import { unorouterProvider } from "./registry/unorouter/index.ts";
 
 import { aimlapiProvider } from "./registry/aimlapi/index.ts";
 import { byteplusProvider } from "./registry/byteplus/index.ts";
+import { mlxGemmaProvider } from "./registry/mlx/index.ts";
+import { mlxQwenProvider } from "./registry/mlx/index.ts";
 import { ollama_cloudProvider } from "./registry/ollama-cloud/index.ts";
 import { syntheticProvider } from "./registry/synthetic/index.ts";
 import { ideogramProvider } from "./registry/ideogram/index.ts";
@@ -16,6 +18,7 @@ import { deepaiProvider } from "./registry/deepai/index.ts";
 import { upstageProvider } from "./registry/upstage/index.ts";
 import { nebiusProvider } from "./registry/nebius/index.ts";
 import { fireworksProvider } from "./registry/fireworks/index.ts";
+import { freebuffProvider } from "./registry/freebuff/index.ts";
 import { llamagateProvider } from "./registry/llamagate/index.ts";
 import { glmProvider } from "./registry/glm/index.ts";
 import { glmtProvider } from "./registry/glm/t/index.ts";
@@ -23,6 +26,7 @@ import { glm_cnProvider } from "./registry/glm/cn/index.ts";
 import { traeProvider } from "./registry/trae/index.ts";
 import { raycastProvider } from "./registry/raycast/index.ts";
 import { muse_spark_webProvider } from "./registry/muse-spark-web/index.ts";
+import { museProvider, muse_webProvider } from "./registry/muse/index.ts";
 import { lmarenaProvider } from "./registry/lmarena/index.ts";
 import { kilocodeProvider } from "./registry/kilocode/index.ts";
 import { githubProvider } from "./registry/github/index.ts";
@@ -65,9 +69,10 @@ import { api_airforceProvider } from "./registry/api-airforce/index.ts";
 import { mistralProvider } from "./registry/mistral/index.ts";
 import { togetherProvider } from "./registry/together/index.ts";
 import { cohereProvider } from "./registry/cohere/index.ts";
-import { cursorProvider } from "./registry/cursor/index.ts";
+import { cursorProvider, cursor_apiProvider } from "./registry/cursor/index.ts";
 import { volcengineProvider } from "./registry/volcengine/index.ts";
-import { hackclubProvider } from "./registry/hackclub/index.ts";
+import { volcengine_agent_planProvider } from "./registry/volcengine/agent-plan/index.ts";
+import { volcengine_coding_planProvider } from "./registry/volcengine/coding-plan/index.ts";
 import { freetheaiProvider } from "./registry/freetheai/index.ts";
 import { g4f_groqProvider } from "./registry/g4f-groq/index.ts";
 import { g4f_geminiProvider } from "./registry/g4f-gemini/index.ts";
@@ -208,11 +213,13 @@ import { baiduProvider } from "./registry/baidu/index.ts";
 import { pollinationsProvider } from "./registry/pollinations/index.ts";
 import { veoaifree_webProvider } from "./registry/veoaifree-web/index.ts";
 import { codexProvider } from "./registry/codex/index.ts";
+import { codexAppServerProvider } from "./registry/codex-app-server/index.ts";
 import { veniceProvider } from "./registry/venice/index.ts";
 import { kiroProvider } from "./registry/kiro/index.ts";
 import { openadapterProvider } from "./registry/openadapter/index.ts";
 import { ditProvider } from "./registry/dit/index.ts";
 import { tokenrouterProvider } from "./registry/tokenrouter/index.ts";
+import { token_kioskProvider } from "./registry/token-kiosk/index.ts";
 import { grok_cliProvider } from "./registry/grok-cli/index.ts";
 import { codebuddy_cnProvider } from "./registry/codebuddy-cn/index.ts";
 import { pioneerProvider } from "./registry/pioneer/index.ts";
@@ -260,9 +267,13 @@ import { freeinferenceProvider } from "./registry/freeinference/index.ts";
 import { freeAiProvider } from "./registry/free-ai/index.ts";
 import { voidAiProvider } from "./registry/void-ai/index.ts";
 import { helixmindProvider } from "./registry/helixmind/index.ts";
+import { tabitokenProvider } from "./registry/tabitoken/index.ts";
+import { logfareProvider } from "./registry/logfare/index.ts";
 
 export const REGISTRY: Record<string, RegistryEntry> = {
   aimlapi: aimlapiProvider,
+  "mlx-gemma": mlxGemmaProvider,
+  "mlx-qwen": mlxQwenProvider,
   "ollama-cloud": ollama_cloudProvider,
   synthetic: syntheticProvider,
   ideogram: ideogramProvider,
@@ -276,6 +287,7 @@ export const REGISTRY: Record<string, RegistryEntry> = {
   deepai: deepaiProvider,
   nebius: nebiusProvider,
   fireworks: fireworksProvider,
+  freebuff: freebuffProvider,
   llamagate: llamagateProvider,
   glm: glmProvider,
   glmt: glmtProvider,
@@ -283,6 +295,8 @@ export const REGISTRY: Record<string, RegistryEntry> = {
   trae: traeProvider,
   raycast: raycastProvider,
   "muse-spark-web": muse_spark_webProvider,
+  muse: museProvider,
+  "muse-web": muse_webProvider,
   lmarena: lmarenaProvider,
   kilocode: kilocodeProvider,
   github: githubProvider,
@@ -326,8 +340,10 @@ export const REGISTRY: Record<string, RegistryEntry> = {
   together: togetherProvider,
   cohere: cohereProvider,
   cursor: cursorProvider,
+  "cursor-api": cursor_apiProvider,
   volcengine: volcengineProvider,
-  hackclub: hackclubProvider,
+  "volcengine-agent-plan": volcengine_agent_planProvider,
+  "volcengine-coding-plan": volcengine_coding_planProvider,
   freetheai: freetheaiProvider,
   "g4f-groq": g4f_groqProvider,
   "g4f-gemini": g4f_geminiProvider,
@@ -468,6 +484,7 @@ export const REGISTRY: Record<string, RegistryEntry> = {
   pollinations: pollinationsProvider,
   "veoaifree-web": veoaifree_webProvider,
   codex: codexProvider,
+  "codex-app-server": codexAppServerProvider,
   venice: veniceProvider,
   kiro: kiroProvider,
   byteplus: byteplusProvider,
@@ -475,6 +492,7 @@ export const REGISTRY: Record<string, RegistryEntry> = {
   openadapter: openadapterProvider,
   dit: ditProvider,
   tokenrouter: tokenrouterProvider,
+  "token-kiosk": token_kioskProvider,
   "grok-cli": grok_cliProvider,
   "codebuddy-cn": codebuddy_cnProvider,
   pioneer: pioneerProvider,
@@ -523,4 +541,6 @@ export const REGISTRY: Record<string, RegistryEntry> = {
   "free-ai": freeAiProvider,
   "void-ai": voidAiProvider,
   helixmind: helixmindProvider,
+  tabitoken: tabitokenProvider,
+  logfare: logfareProvider,
 };

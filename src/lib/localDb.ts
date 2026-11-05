@@ -771,7 +771,7 @@ export type {
 } from "./db/usageAnalytics";
 
 // ---------------------------------------------------------------------------
-// usage_logs — auto-routing analytics (#3500 slice 4)
+// call_logs auto-routing analytics (#3500 slice 4)
 // ---------------------------------------------------------------------------
 export {
   getAutoRoutingTotalCount,

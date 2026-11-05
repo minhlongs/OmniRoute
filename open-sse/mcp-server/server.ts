@@ -18,6 +18,8 @@ import {
   costReportInput,
   listModelsCatalogInput,
   webSearchInput,
+  buildWebSearchInputSchema,
+  xSearchInput,
   webFetchInput,
   simulateRouteInput,
   setBudgetGuardInput,
@@ -92,6 +94,7 @@ import { getDbInstance } from "../../src/lib/db/core.ts";
 import { normalizeQuotaResponse } from "../../src/shared/contracts/quota.ts";
 import { resolveOmniRouteBaseUrl } from "../../src/shared/utils/resolveOmniRouteBaseUrl.ts";
 import { sanitizeErrorMessage } from "../utils/error.ts";
+import { mcpFetchTimeoutSignal } from "./fetchTimeout.ts";
 import { getMcpModelsCatalog } from "./catalog.ts";
 import { registerRadarCatalogTool } from "./radarCatalog.ts";
 import type { TextToolResult } from "./toolResult.ts";
@@ -213,7 +216,7 @@ export async function omniRouteFetch(path: string, options: RequestInit = {}): P
     ...getInternalServiceAuthHeaders(),
   };
 
-  const signal = options.signal || AbortSignal.timeout(10000);
+  const signal = options.signal || mcpFetchTimeoutSignal("management");
   const response = await fetch(url, { ...options, headers, signal });
 
   if (!response.ok) {
@@ -518,6 +521,10 @@ async function handleRouteRequest(args: {
     const raw = (await omniRouteFetch("/v1/chat/completions", {
       method: "POST",
       body: JSON.stringify(body),
+      // #9717: this hop waits on an upstream provider (and on auto-combo
+      // candidate probing before one is even chosen), so it must not inherit
+      // the management-read budget.
+      signal: mcpFetchTimeoutSignal("upstream"),
     })) as JsonRecord;
     const choices = toArray(raw.choices);
     const firstChoice = toRecord(choices[0]);
@@ -648,7 +655,7 @@ async function handleWebSearch(args: {
     const result = await omniRouteFetch("/v1/search", {
       method: "POST",
       body: JSON.stringify(body),
-      signal: AbortSignal.timeout(60000),
+      signal: mcpFetchTimeoutSignal("upstream"),
     });
     await logToolCall("omniroute_web_search", args, result, Date.now() - start, true);
     return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
@@ -659,9 +666,31 @@ async function handleWebSearch(args: {
   }
 }
 
+async function handleXSearch(args: { query: string; max_results?: number }) {
+  const start = Date.now();
+  try {
+    const result = await omniRouteFetch("/v1/search", {
+      method: "POST",
+      body: JSON.stringify({
+        query: args.query,
+        max_results: args.max_results ?? 5,
+        search_type: "x",
+        provider: "x-search",
+      }),
+      signal: AbortSignal.timeout(120000),
+    });
+    await logToolCall("omniroute_x_search", args, result, Date.now() - start, true);
+    return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    await logToolCall("omniroute_x_search", args, null, Date.now() - start, false, msg);
+    return { content: [{ type: "text" as const, text: `Error: ${msg}` }], isError: true };
+  }
+}
+
 async function handleWebFetch(args: {
   url: string;
-  provider?: "firecrawl" | "jina-reader" | "tavily-search" | "tinyfish";
+  provider?: "firecrawl" | "jina-reader" | "tavily-search" | "tinyfish" | "context7";
   format?: "markdown" | "html" | "links" | "screenshot";
   include_metadata?: boolean;
   depth?: number;
@@ -681,7 +710,7 @@ async function handleWebFetch(args: {
     const result = await omniRouteFetch("/v1/web/fetch", {
       method: "POST",
       body: JSON.stringify(body),
-      signal: AbortSignal.timeout(60000),
+      signal: mcpFetchTimeoutSignal("upstream"),
     });
     await logToolCall("omniroute_web_fetch", args, result, Date.now() - start, true);
     return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
@@ -692,7 +721,24 @@ async function handleWebFetch(args: {
   }
 }
 
-export function createMcpServer(): McpServer {
+export interface CreateMcpServerOptions {
+  blockedProviders?: string[] | (() => string[]);
+}
+
+export function createMcpServer(options?: CreateMcpServerOptions): McpServer {
+  const resolveBlockedProviders = (): string[] => {
+    if (typeof options?.blockedProviders === "function") {
+      return options.blockedProviders();
+    }
+    if (Array.isArray(options?.blockedProviders)) {
+      return options.blockedProviders;
+    }
+    return [];
+  };
+
+  const blockedProviders = resolveBlockedProviders();
+  const dynamicWebSearchInput = buildWebSearchInputSchema(blockedProviders);
+
   const server = new McpServer({
     name: "omniroute",
     version: process.env.npm_package_version || "1.8.1",
@@ -1016,11 +1062,25 @@ export function createMcpServer(): McpServer {
     {
       description:
         "Performs a web search using OmniRoute's search gateway. Supports multiple providers (Serper, Brave, Perplexity, Exa, Tavily) with automatic failover. Returns search results with titles, URLs, snippets, and position data.",
-      inputSchema: webSearchInput,
+      inputSchema: dynamicWebSearchInput,
     },
     withScopeEnforcement("omniroute_web_search", (args) =>
-      handleWebSearch(webSearchInput.parse(args))
+      // Resolve per invocation (not the startup snapshot above) so a resolver
+      // function passed via CreateMcpServerOptions sees policy changes without
+      // a server rebuild. The advertised inputSchema stays a creation-time
+      // snapshot — MCP clients fetch it once at tools/list.
+      handleWebSearch(buildWebSearchInputSchema(resolveBlockedProviders()).parse(args))
     )
+  );
+
+  server.registerTool(
+    "omniroute_x_search",
+    {
+      description:
+        "Search X (Twitter) through OmniRoute using SuperGrok / xAI server-side x_search. Requires xai-oauth or an xAI API key. Not web search.",
+      inputSchema: xSearchInput,
+    },
+    withScopeEnforcement("omniroute_x_search", (args) => handleXSearch(xSearchInput.parse(args)))
   );
 
   server.registerTool(

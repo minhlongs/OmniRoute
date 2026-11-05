@@ -72,10 +72,12 @@ test("usage service covers GitHub free-plan parsing, auth denial and unsupported
   assert.equal(freeUsage.quotas.completions.used, 0);
   assert.equal(freeUsage.quotas.completions.remainingPercentage, 100);
   assert.equal(calls[0].headers.Authorization, "token gho-free");
-  assert.equal(calls[0].headers["User-Agent"], "GitHubCopilotChat/0.54.0");
-  assert.equal(calls[0].headers["Editor-Version"], "vscode/1.126.0");
-  assert.equal(calls[0].headers["Editor-Plugin-Version"], "copilot-chat/0.54.0");
-  assert.equal(calls[0].headers["X-GitHub-Api-Version"], "2026-06-01");
+  // #10952 re-based the Copilot wire identity on the live-captured CLI 1.0.81-6
+  // (copilot-developer-cli integration id; API version 2026-08-01).
+  assert.equal(calls[0].headers["User-Agent"], "GitHubCopilotChat/1.0.81-6");
+  assert.equal(calls[0].headers["Editor-Version"], "copilot/1.0.81-6");
+  assert.equal(calls[0].headers["Editor-Plugin-Version"], "copilot-chat/1.0.81-6");
+  assert.equal(calls[0].headers["X-GitHub-Api-Version"], "2026-08-01");
 
   globalThis.fetch = async () => new Response("forbidden", { status: 403 });
   const forbidden: any = await usageService.getUsageForProvider({
@@ -706,6 +708,7 @@ test("usage service covers Codex, Kiro and Kimi usage parsing and error branches
           },
           limits: [
             {
+              window: { duration: 300, timeUnit: "TIME_UNIT_MINUTE" },
               detail: {
                 limit: "20",
                 remaining: "3",
@@ -771,8 +774,8 @@ test("usage service covers Codex, Kiro and Kimi usage parsing and error branches
     accessToken: "kimi-token",
   });
   assert.equal(kimi.plan, "Allegro");
-  assert.equal(kimi.quotas.Weekly.remaining, 8);
-  assert.equal(kimi.quotas.Ratelimit.remaining, 3);
+  assert.equal(kimi.quotas.code_7d.remaining, 8);
+  assert.equal(kimi.quotas.code_5h.remaining, 3);
   assert.equal(kimi.quotas["session (5h)"].remaining, 25);
 
   globalThis.fetch = async (url) => {

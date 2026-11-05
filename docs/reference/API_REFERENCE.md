@@ -636,6 +636,49 @@ completion.
 
 ---
 
+## Self-service usage (`/api/usage/om-usage`)
+
+Any API key can read **its own** usage and quotas — no management auth. This is the endpoint a
+client (CLI, the OmniCopilot panel) uses to show a key holder their spend.
+
+```bash
+# Text form (the historical contract — plain text for a terminal)
+curl -H "Authorization: Bearer <your-api-key>" \
+  http://localhost:20128/api/usage/om-usage
+
+# Structured form — what a UI consumes
+curl -H "Authorization: Bearer <your-api-key>" \
+  "http://localhost:20128/api/usage/om-usage?format=json"
+```
+
+The key must have **`allowUsageCommand`** enabled (off by default — the dashboard's API-key
+manager toggles it per key). Without it the endpoint answers `403`.
+
+`?format=json` returns a discriminated shape so a caller never reads a data field off a
+refusal. On success:
+
+```jsonc
+{
+  "allowed": true,
+  // present only when the key opted into per-key usage limits (daily/weekly USD):
+  "personal": { "dailySpentUsd": 1.25, "dailyLimitUsd": 5, "dailyResetAtIso": "…", "weeklySpentUsd": 8, "weeklyLimitUsd": 20, "weeklyResetAtIso": "…" /* … */ },
+  // the selected provider quota snapshot, or null when nothing is cached yet:
+  "provider": { "connectionId": "…", "provider": "claude", "plan": "…", "quotas": { /* … */ } },
+  // every connection's snapshot, so a UI can render several providers side by side:
+  "providers": [ { "connectionId": "…", "provider": "claude", /* … */ }, { "provider": "codex", /* … */ } ]
+}
+```
+
+On refusal (`401` bad key / `403` not allowed) the same route returns
+`{ "allowed": false, "error": { "message": "…" } }` — a present-but-empty `personal`/`provider`
+(key allowed, nothing learned yet) is a different state from a refusal, and only the JSON form
+distinguishes them.
+
+**Auth:** the caller's own Bearer API key, validated with `isValidApiKey` — this is *not* the
+management surface (`/api/keys/…`), which stays behind `requireManagementAuth`.
+
+---
+
 ## Semantic Cache
 
 ```bash
@@ -702,6 +745,10 @@ X-OmniRoute-No-Cache: true
 ---
 
 ## Dashboard & Management
+
+Management routes (`/api/*` except public auth/login) are **not** authorized by
+ordinary inference API keys. Credential families, scopes, and curl examples:
+[Management Authentication](../guides/MANAGEMENT-AUTH.md).
 
 ### Authentication
 
@@ -1668,9 +1715,14 @@ See [Security > Guardrails](../security/GUARDRAILS.md) for full details.
 
 ## Authentication
 
+See [Management Authentication](../guides/MANAGEMENT-AUTH.md) for the four
+credential families (dashboard session, local CLI token, `oma_live_…` Access
+Token, manage-scoped API key) and how they differ from inference keys.
+
 - Dashboard routes (`/dashboard/*`) use `auth_token` cookie
 - Login uses saved password hash; fallback to `INITIAL_PASSWORD`
 - `requireLogin` toggleable via `/api/settings/require-login`
 - `/v1/*` routes optionally require Bearer API key when `REQUIRE_API_KEY=true`
+- "management token" / "management-scoped API key" in this reference means one of the families in that guide — not an undefined extra secret type
 
 > **Breaking change (v3.8.0)** — `/api/v1/agents/tasks/*` and the cooldown management endpoints now require **management auth** (dashboard `auth_token` cookie or a management-scoped API key). Clients that previously called these routes unauthenticated will receive `401 Unauthorized`. See commit `588a0333` (`fix(auth): require management auth for agent and cooldown APIs`).

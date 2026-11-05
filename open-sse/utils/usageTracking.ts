@@ -567,6 +567,14 @@ export function sanitizeUsagePayloadForRequest(
     return replaceUsage(payload.message, "usage", FORMATS.CLAUDE);
   }
   if (payload.type === "message_delta" && payload.usage) {
+    // message_delta is output-only by spec. #10705 0-input repair would
+    // overwrite a valid message_start input count with an estimate.
+    const delta = payload.usage;
+    const deltaInput =
+      tokenNumber(delta.input_tokens) +
+      tokenNumber(delta.cache_read_input_tokens) +
+      tokenNumber(delta.cache_creation_input_tokens);
+    if (deltaInput === 0) return false;
     return replaceUsage(payload, "usage", FORMATS.CLAUDE);
   }
   if (payload.response?.usage) {

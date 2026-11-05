@@ -370,15 +370,29 @@ export function buildPplxRequestBody(
   };
 }
 
+const SEARCH_HINT = "You have built-in web search. Answer questions directly using search results.";
+
+/**
+ * Whether to append {@link SEARCH_HINT} to the caller's system message.
+ *
+ * It used to be unconditional. Perplexity's answer engine is search-first anyway, and
+ * for coding clients the sentence leaks into replies as meta-commentary ("I need to
+ * search before responding per my instructions"), so it is now opt-in via
+ * `OMNIROUTE_PPLX_SEARCH_HINT`. Read per call rather than at module load so the flag
+ * can be flipped without restarting the server (and so tests can toggle it).
+ */
+function searchHintEnabled(): boolean {
+  return /^(1|true|yes|on)$/i.test(process.env.OMNIROUTE_PPLX_SEARCH_HINT ?? "");
+}
+
 export function buildQuery(parsed: ParsedMessages, followUpUuid: string | null): string {
   if (followUpUuid) return parsed.currentMsg;
 
   const obj: Record<string, unknown> = {};
   if (parsed.systemMsg.trim()) {
-    obj.instructions = [
-      parsed.systemMsg.trim(),
-      "You have built-in web search. Answer questions directly using search results.",
-    ];
+    obj.instructions = searchHintEnabled()
+      ? [parsed.systemMsg.trim(), SEARCH_HINT]
+      : [parsed.systemMsg.trim()];
   }
   if (parsed.history.length > 0) {
     obj.history = parsed.history;

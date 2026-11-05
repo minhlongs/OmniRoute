@@ -180,7 +180,22 @@ function dispatchOnePanelModel(opts: {
         log?.info?.(
           `CHAOS panel ${index} (${model}) ok=${res.ok} status=${res.status} textLen=${text.length}`
         );
-        const part: ChaosPart = { model, index, ok: true, text };
+        // G5b: honor the upstream response status — a 4xx/5xx is a panel FAILURE,
+        // not a success (previously ok:true was hardcoded, so an all-error panel
+        // never reached the all-failed branch and the error text was streamed as
+        // if it were a successful answer).
+        if (res.ok) {
+          const part: ChaosPart = { model, index, ok: true, text };
+          await onResult?.(part);
+          return part;
+        }
+        const part: ChaosPart = {
+          model,
+          index,
+          ok: false,
+          text: "",
+          error: `upstream ${res.status}: ${text.slice(0, 200) || res.statusText || "error"}`,
+        };
         await onResult?.(part);
         return part;
       } catch (err) {
@@ -466,8 +481,17 @@ export async function handleChaosChat(opts: {
       }
 
       if (successes.length === 0) {
-        const errText = "All chaos panel models failed";
-        await safeEnqueue(chatChunk(chunkId, panelToDispatch[0] ?? "", errText));
+        // G5 (silent-stop fix): make an all-panel failure visible server-side.
+        // The status stays 200 (SSE envelope must stay well-formed), but the
+        // failure is now logged with the per-model errors so operators can see
+        // why the chaos panel produced nothing.
+        const modelErrors = allParts.map((p) => `${p.model}: ${p.error ?? "unknown"}`).join(" | ");
+        log?.warn?.(
+          "CHAOS",
+          `All chaos panel models failed for ${comboName ?? "panel"}: ${modelErrors}`
+        );
+        const errText = `All chaos panel models failed — ${modelErrors}`;
+        await safeEnqueue(chatChunk(chunkId, panelToDispatch[0] ?? panel[0] ?? "", errText));
         await safeEnqueue(SSE_DONE);
         await enqueueChain;
         closed = true;

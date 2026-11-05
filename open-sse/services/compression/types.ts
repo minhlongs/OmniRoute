@@ -103,6 +103,10 @@ export interface RtkConfig {
   trustProjectFilters: boolean;
   rawOutputRetention: RtkRawOutputRetention;
   rawOutputMaxBytes: number;
+  /** #10659: cap on total raw-output files before the oldest are purged. Default: 100_000. */
+  rawOutputMaxFiles?: number;
+  /** #10659: max age (days) of retained raw-output files. Default: 30. */
+  rawOutputMaxAgeDays?: number;
   /** R5: enable grouping of near-equivalent consecutive lines. Default: false. */
   enableGrouping?: boolean;
   /** R5: minimum consecutive similar-line run to trigger grouping. Default: 3. */
@@ -473,6 +477,8 @@ export const DEFAULT_RTK_CONFIG: RtkConfig = {
   trustProjectFilters: false,
   rawOutputRetention: "never",
   rawOutputMaxBytes: 1_048_576,
+  rawOutputMaxFiles: 100_000,
+  rawOutputMaxAgeDays: 30,
   enableGrouping: false,
   groupingThreshold: 3,
   stripCodeComments: false,

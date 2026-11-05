@@ -70,7 +70,7 @@ export async function recordRejectedRequestUsage(input: RejectedRequestUsageInpu
   const duration = typeof startTime === "number" ? now - startTime : 0;
 
   // 1. call_logs — preserves /dashboard/logs visibility (unchanged behavior).
-  saveCallLog({
+  await saveCallLog({
     id: undefined,
     method: "POST",
     path: endpoint || "/v1/chat/completions",

@@ -7,6 +7,7 @@ import { GheCopilotExecutor } from "./ghe-copilot.ts";
 import { QoderExecutor } from "./qoder.ts";
 import { KiroExecutor } from "./kiro.ts";
 import { CodexExecutor } from "./codex.ts";
+import { CodexAppServerExecutor } from "./codex-app-server.ts";
 import { CursorExecutor } from "./cursor.ts";
 import { TraeExecutor } from "./trae.ts";
 import { DefaultExecutor } from "./default.ts";
@@ -14,6 +15,7 @@ import { BedrockExecutor } from "./bedrock.ts";
 import { GlmExecutor } from "./glm.ts";
 import { PollinationsExecutor } from "./pollinations.ts";
 import { CloudflareAIExecutor } from "./cloudflare-ai.ts";
+import { FreebuffExecutor } from "./freebuff.ts";
 import { OpencodeExecutor } from "./opencode.ts";
 import { VertexExecutor } from "./vertex.ts";
 import { CliproxyapiExecutor } from "./cliproxyapi.ts";
@@ -29,6 +31,8 @@ import { ChatGptWebExecutor } from "./chatgpt-web.ts";
 import { ChatGptWebCodexExecutor } from "./chatgpt-web-codex.ts";
 import { BlackboxWebExecutor } from "./blackbox-web.ts";
 import { MuseSparkWebExecutor } from "./muse-spark-web.ts";
+import { MuseExecutor } from "./muse.ts";
+import { MuseWebExecutor } from "./muse-web.ts";
 import { AzureOpenAIExecutor } from "./azure-openai.ts";
 import { AzureAiExecutor } from "./azure-ai.ts";
 import { CommandCodeExecutor } from "./commandCode.ts";
@@ -97,6 +101,7 @@ const executors = {
   "amazon-q": new KiroExecutor("amazon-q"),
   bedrock: new BedrockExecutor(),
   codex: new CodexExecutor(),
+  "codex-app-server": new CodexAppServerExecutor({}, "codex-app-server"),
   "chatgpt-web-codex": new ChatGptWebCodexExecutor(),
   "cgpt-codex": new ChatGptWebCodexExecutor(),
   cursor: new CursorExecutor(),
@@ -105,6 +110,8 @@ const executors = {
   "glm-cn": new GlmExecutor("glm-cn"),
   glmt: new GlmExecutor("glmt"),
   cu: new CursorExecutor(), // Alias for cursor
+  "cursor-api": new CursorExecutor("cursor-api"),
+  cua: new CursorExecutor("cursor-api"),
   "azure-openai": new AzureOpenAIExecutor(),
   "azure-ai": new AzureAiExecutor(),
   "command-code": new CommandCodeExecutor(),
@@ -116,6 +123,8 @@ const executors = {
   pol: new PollinationsExecutor(), // Alias
   "cloudflare-ai": new CloudflareAIExecutor(),
   cf: new CloudflareAIExecutor(), // Alias
+  freebuff: new FreebuffExecutor(),
+  fb: new FreebuffExecutor(), // Alias
   "opencode-zen": new OpencodeExecutor("opencode-zen"),
   "opencode-go": new OpencodeExecutor("opencode-go"),
   opencode: new OpencodeExecutor("opencode-zen"), // Alias for opencode-zen
@@ -144,6 +153,8 @@ const executors = {
   "bb-web": new BlackboxWebExecutor(), // Alias
   "muse-spark-web": new MuseSparkWebExecutor(),
   "ms-web": new MuseSparkWebExecutor(), // Alias
+  muse: new MuseExecutor(),
+  "muse-web": new MuseWebExecutor(),
   "devin-desktop": new DevinDesktopExecutor(),
   "zed-hosted": new ZedHostedExecutor(),
   "devin-cli": new DevinCliExecutor(),
@@ -316,6 +327,8 @@ export { KieExecutor } from "./kie.ts";
 export { ChatGptWebExecutor } from "./chatgpt-web.ts";
 export { BlackboxWebExecutor } from "./blackbox-web.ts";
 export { MuseSparkWebExecutor } from "./muse-spark-web.ts";
+export { MuseExecutor } from "./muse.ts";
+export { MuseWebExecutor } from "./muse-web.ts";
 export { AzureOpenAIExecutor } from "./azure-openai.ts";
 export { AzureAiExecutor } from "./azure-ai.ts";
 export { CommandCodeExecutor } from "./commandCode.ts";

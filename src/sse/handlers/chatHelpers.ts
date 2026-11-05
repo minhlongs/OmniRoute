@@ -422,6 +422,7 @@ export async function executeChatWithBreaker({
   conversationId = null,
   modelPinned = false,
   routingComboId = null,
+  reasoningTransportFallback = "drop",
   sessionAffinityKey = null,
   managedLease = null,
 }: ExecuteChatWithBreakerOptions): Promise<ExecuteChatWithBreakerResult> {
@@ -481,6 +482,7 @@ export async function executeChatWithBreaker({
             modelPinned,
             routingComboId,
             sessionAffinityKey,
+            reasoningTransportFallback,
             managedLease,
             skipResourcePressureGuard: true,
             onCredentialsRefreshed: async (newCreds: any) => {
@@ -630,7 +632,8 @@ export function handleNoCredentials(
   model: string,
   lastError: string | null,
   lastStatus: number | null,
-  candidateAliases?: readonly string[]
+  candidateAliases?: readonly string[],
+  isCombo: boolean = false
 ) {
   if (credentials?.allRateLimited) {
     const errorMsg = lastError || credentials.lastError || "Unavailable";
@@ -666,6 +669,14 @@ export function handleNoCredentials(
     );
   }
 
+  if (lastError && lastStatus) {
+    log.warn("CHAT", "Preserving last upstream error after credential exhaustion", {
+      provider,
+      model,
+      lastStatus,
+    });
+    return errorResponse(lastStatus, lastError);
+  }
   if (credentials?.allExpired) {
     // Every connection for this provider is in a terminal state (expired,
     // banned, or credits_exhausted). Surface as 401 with a re-auth hint
@@ -683,14 +694,6 @@ export function handleNoCredentials(
     log.warn("CHAT", message);
     return errorResponse(HTTP_STATUS.UNAUTHORIZED, message);
   }
-  if (lastError && lastStatus) {
-    log.warn("CHAT", "Preserving last upstream error after credential exhaustion", {
-      provider,
-      model,
-      lastStatus,
-    });
-    return errorResponse(lastStatus, lastError);
-  }
   if (!excludeConnectionId) {
     // Ported from upstream decolua/9router#336 (Ibrahim Ryan): surface as 404
     // NOT_FOUND instead of 400 BAD_REQUEST so combo routing can fall through to
@@ -705,7 +708,7 @@ export function handleNoCredentials(
     log.warn("AUTH", `No active credentials for provider: ${provider}`);
     // #FIX: surface the candidate aliases (from resolveModelOrError) so the
     // operator can pick a working provider/model prefix instead of guessing.
-    // Without this, "No active credentials for provider: kiro" leaves the
+    // Without this, "No active credentials for provider: byNara" leaves the
     // user staring at a wall — most bugs in this area are actually "wrong
     // provider was picked", not "the provider is broken".
     const hint =
@@ -715,6 +718,26 @@ export function handleNoCredentials(
             .map((a) => `${a}/${model}`)
             .join(", ")}.`
         : "";
+
+    // Issue #2: for single-model (non-combo) requests, a 404 leaks a misleading
+    // "No active credentials" status to a direct API client (e.g. OpenCode) that
+    // then mis-files it as "resource not found" instead of an auth/credential
+    // failure. The 404 is only meaningful as a combo fall-through signal, so
+    // remap it to an explicit error status for single-model traffic: a 401 when
+    // the provider exists but has no usable credentials, else 503 when the
+    // provider itself is unknown/unreachable. Combo routing keeps the 404 so it
+    // can still skip past a disabled-credentials leg.
+    if (!isCombo) {
+      const singleModelStatus =
+        provider && String(provider).trim().length > 0
+          ? HTTP_STATUS.UNAUTHORIZED
+          : HTTP_STATUS.SERVICE_UNAVAILABLE;
+      return errorResponse(
+        singleModelStatus,
+        `No active credentials for provider: ${provider}.${hint}`
+      );
+    }
+
     return errorResponse(
       HTTP_STATUS.NOT_FOUND,
       `No active credentials for provider: ${provider}.${hint}`

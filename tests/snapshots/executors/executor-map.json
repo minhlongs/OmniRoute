@@ -155,6 +155,11 @@
       "configSource": "codex",
       "provider": "codex"
     },
+    "codex-app-server": {
+      "className": "CodexAppServerExecutor",
+      "configSource": "codex-app-server",
+      "provider": "codex-app-server"
+    },
     "command-code": {
       "className": "CommandCodeExecutor",
       "configSource": "<custom-config>",
@@ -190,10 +195,20 @@
       "configSource": "cursor",
       "provider": "cursor"
     },
+    "cua": {
+      "className": "CursorExecutor",
+      "configSource": "cursor-api",
+      "provider": "cursor-api"
+    },
     "cursor": {
       "className": "CursorExecutor",
       "configSource": "cursor",
       "provider": "cursor"
+    },
+    "cursor-api": {
+      "className": "CursorExecutor",
+      "configSource": "cursor-api",
+      "provider": "cursor-api"
     },
     "cw-web": {
       "className": "ClaudeWebExecutor",
@@ -260,6 +275,11 @@
       "configSource": "<custom-config>",
       "provider": "duckduckgo-web"
     },
+    "fb": {
+      "className": "FreebuffExecutor",
+      "configSource": "freebuff",
+      "provider": "freebuff"
+    },
     "felo": {
       "className": "FeloWebExecutor",
       "configSource": "<custom-config>",
@@ -274,6 +294,11 @@
       "className": "AdobeFireflyExecutor",
       "configSource": "<custom-config>",
       "provider": "adobe-firefly"
+    },
+    "freebuff": {
+      "className": "FreebuffExecutor",
+      "configSource": "freebuff",
+      "provider": "freebuff"
     },
     "gc": {
       "className": "GrokCliExecutor",
@@ -445,10 +470,20 @@
       "configSource": "<custom-config>",
       "provider": "microsoft-designer-web"
     },
+    "muse": {
+      "className": "MuseExecutor",
+      "configSource": "<custom-config>",
+      "provider": "muse"
+    },
     "muse-spark-web": {
       "className": "MuseSparkWebExecutor",
       "configSource": "<custom-config>",
       "provider": "muse-spark-web"
+    },
+    "muse-web": {
+      "className": "MuseWebExecutor",
+      "configSource": "<custom-config>",
+      "provider": "muse-web"
     },
     "nlpcloud": {
       "className": "NlpCloudExecutor",
@@ -696,6 +731,6 @@
       "provider": "zai-web"
     }
   },
-  "keyCount": 139,
+  "keyCount": 146,
   "sharedInstances": []
 }
