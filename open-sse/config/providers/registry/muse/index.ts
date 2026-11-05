@@ -156,7 +156,8 @@ export const muse_spark_webProvider: RegistryEntry = {
 export const muse_webProvider: RegistryEntry = {
   ...museProvider,
   id: "muse-web",
-  alias: "muse-spark-web",
+  // No alias: "muse-spark-web" is its own provider with its own executor, and an
+  // alias here rewrote that provider's routes onto this executor.
   executor: "muse-web",
 };
 
