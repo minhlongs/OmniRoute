@@ -600,6 +600,9 @@ Built-in credentials for **localhost development**. For remote deployments, regi
 | `RAYCAST_DEVICE_ID`               | Raycast Pro              | Optional manual override for the Raycast device ID used to sign requests.                                                                                                                        |
 | `RAYCAST_AID`                     | Raycast Pro              | Optional manual override for the Raycast account/app ID; falls back to the device ID when unset.                                                                                                 |
 | `RAYCAST_SIG_SECRET`              | Raycast Pro              | Optional override for the request-signing HMAC secret. Defaults to a community-extracted value in `open-sse/services/raycast.ts`.                                                                |
+| `MUSE_API_BASE`                  | Muse (official API)     | Override the `api.meta.ai/v1` base URL (self-hosted gateway, tests). Defaults to `https://api.meta.ai/v1`. |
+| `MUSE_WEB_GRAPHQL_URL`           | Muse Web                | Override the `www.meta.ai/api/graphql` endpoint used by `MuseWebExecutor`. Defaults to the public URL. |
+| `MUSE_WEB_REST_URL`              | Muse Web                | Override the REST chat-completions fallback used by `MuseWebExecutor`. Defaults to `https://api.meta.ai/v1/chat/completions`. |
 
 > [!WARNING]
 >

@@ -1,7 +1,7 @@
 import { BaseExecutor, mergeUpstreamExtraHeaders, type ExecuteInput } from "./base.ts";
 import { sanitizeErrorMessage } from "../utils/error.ts";
 
-const META_MUSE_API_BASE = "https://api.meta.ai/v1";
+const META_MUSE_API_BASE = process.env.MUSE_API_BASE?.trim() || "https://api.meta.ai/v1";
 
 export type MuseExecuteResult = {
   response: Response;
