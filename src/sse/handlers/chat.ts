@@ -656,6 +656,13 @@ async function handleChatImplementation(
     );
   }
 
+  // Operator-defined model→combo mappings must also match the RAW requested id.
+  // A custom compatible alias (e.g. "zunef/…") is rewritten to its canonical
+  // provider id before combo resolution, so a mapping written against the alias —
+  // the form operators actually configure — used to be ignored for exactly the
+  // models that most need a fallback list behind them.
+  const rawModelMappedCombo: any = await getComboForModel(modelStr);
+
   // T04: client-provided external session header has priority over generated fingerprint.
   const externalSessionId = extractExternalSessionId(request.headers);
   const sessionId = externalSessionId || generateStableSessionId(body);
@@ -957,7 +964,7 @@ async function handleChatImplementation(
 
   // Check if model is a combo (has multiple models with fallback)
   telemetry.startPhase("resolve");
-  let combo: any = await getComboForModel(resolvedModelStr);
+  let combo: any = rawModelMappedCombo ?? (await getComboForModel(resolvedModelStr));
   if (reasoningDecision?.targetCombo) combo = reasoningDecision.targetCombo;
 
   // "auto" prefix fuzzy matching: "auto/fast" → "auto/best-fast", etc.
@@ -1013,7 +1020,15 @@ async function handleChatImplementation(
       if (isComboLiveTest) return true;
       // #12886: combo-name allow-list must not skip inner targets (#9057 still
       // checks auto/* / disableNonPublic via comboTargetPassesKeyModelPolicy).
-      if (!(await comboTargetPassesKeyModelPolicy({ apiKey, apiKeyInfo, requestedModelStr: resolvedModelStr, targetModelStr: modelString, isModelAllowedForKey }))) {
+      if (
+        !(await comboTargetPassesKeyModelPolicy({
+          apiKey,
+          apiKeyInfo,
+          requestedModelStr: resolvedModelStr,
+          targetModelStr: modelString,
+          isModelAllowedForKey,
+        }))
+      ) {
         return false;
       }
 
