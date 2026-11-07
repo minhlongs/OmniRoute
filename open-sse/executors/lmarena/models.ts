@@ -3,6 +3,7 @@
  */
 
 export const LMARENA_API_BASE = "https://arena.ai";
+export const LMARENA_DIRECT_URL = `${LMARENA_API_BASE}/text/direct`;
 export const LMARENA_STREAM_URL = `${LMARENA_API_BASE}/nextjs-api/stream/create-evaluation`;
 /**
  * Current Chrome stable UA (header surface).
@@ -15,22 +16,45 @@ export const LMARENA_USER_AGENT =
 export const LMARENA_MODEL_ID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
+function deriveClientHintsFromUserAgent(userAgent: string): {
+  secChUa?: string;
+  secChUaPlatform?: string;
+} {
+  const hints: { secChUa?: string; secChUaPlatform?: string } = {};
+  if (/Macintosh|Mac OS X/i.test(userAgent)) {
+    hints.secChUaPlatform = '"macOS"';
+  } else if (/X11;\s*(?:Ubuntu;\s*)?Linux/i.test(userAgent)) {
+    hints.secChUaPlatform = '"Linux"';
+  } else if (/Windows NT/i.test(userAgent)) {
+    hints.secChUaPlatform = '"Windows"';
+  }
+  const chromeMatch = userAgent.match(/Chrome\/(\d+)/i);
+  if (chromeMatch?.[1]) {
+    const major = chromeMatch[1];
+    hints.secChUa = `"Chromium";v="${major}", "Google Chrome";v="${major}", "Not-A.Brand";v="24"`;
+  }
+  return hints;
+}
+
 /** Browser-like CORS headers for arena.ai same-origin API calls. */
 export function buildLmarenaBrowserHeaders(extra?: Record<string, string>): Record<string, string> {
+  const effectiveUa = extra?.["User-Agent"] || LMARENA_USER_AGENT;
+  const derivedHints = deriveClientHintsFromUserAgent(effectiveUa);
   return {
     Accept: "text/event-stream, application/json, text/plain, */*",
     "Accept-Language": "en-US,en;q=0.9",
     "Cache-Control": "no-cache",
     Pragma: "no-cache",
     Origin: LMARENA_API_BASE,
-    Referer: `${LMARENA_API_BASE}/`,
-    "Sec-Ch-Ua": '"Chromium";v="150", "Google Chrome";v="150", "Not-A.Brand";v="24"',
+    Referer: LMARENA_DIRECT_URL,
+    "Sec-Ch-Ua":
+      derivedHints.secChUa || '"Chromium";v="150", "Google Chrome";v="150", "Not-A.Brand";v="24"',
     "Sec-Ch-Ua-Mobile": "?0",
-    "Sec-Ch-Ua-Platform": '"Windows"',
+    "Sec-Ch-Ua-Platform": derivedHints.secChUaPlatform || '"Windows"',
     "Sec-Fetch-Dest": "empty",
     "Sec-Fetch-Mode": "cors",
     "Sec-Fetch-Site": "same-origin",
-    "User-Agent": LMARENA_USER_AGENT,
+    "User-Agent": effectiveUa,
     ...extra,
   };
 }
@@ -262,7 +286,11 @@ export async function getLMArenaModels(log?: LogFn): Promise<LMArenaModelMetadat
     await import("../../config/providers/registry/lmarena/directModels.ts");
   // Chat path only — Image rows live in IMAGE_PROVIDERS (imageRegistry).
   const models: LMArenaModelMetadata[] = LMARENA_DIRECT_MODEL_ENTRIES.filter(
-    (m) => m.category === "Text" || m.category === "Search"
+    (m) =>
+      (m.category === "Text" || m.category === "Search") &&
+      !isMarkedDead(m.arenaId) &&
+      !isMarkedDead(m.catalogId) &&
+      !isMarkedDead(m.publicName)
   ).map((m) => ({
     id: m.arenaId,
     publicName: m.catalogId,

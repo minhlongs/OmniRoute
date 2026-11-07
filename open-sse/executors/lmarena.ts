@@ -1,17 +1,26 @@
 /**
  * LMArenaExecutor — Arena (formerly LMArena) web-session provider.
  *
- * Routes requests through arena.ai create-evaluation with session cookies.
- * Upstream sits behind Cloudflare; traffic goes through tls-client-node Chrome
- * impersonation (see services/lmarenaTlsClient.ts).
+ * Routes requests through arena.ai create-evaluation with session cookies
+ * (supporting both raw Cookie headers and DevTools "Copy as cURL" inputs from
+ * https://arena.ai/text/direct). Upstream sits behind Cloudflare; traffic goes
+ * through tls-client-node Chrome impersonation first (see services/lmarenaTlsClient.ts),
+ * with an opt-in fallback to `browserPool.ts` when `OMNIROUTE_BROWSER_POOL=on`.
  *
- * Helpers: open-sse/executors/lmarena/{cookie,models,stream,response}.ts
+ * Helpers: open-sse/executors/lmarena/{cookie,models,stream,response,browserTransport}.ts
  */
 import { v7 as uuidv7 } from "uuid";
 import { BaseExecutor, type ExecuteInput } from "./base.ts";
 import { tlsFetchLMArena, TlsClientUnavailableError } from "../services/lmarenaTlsClient.ts";
-import { readLMArenaCookie, reconstructLMArenaCookie } from "./lmarena/cookie.ts";
 import {
+  parseLMArenaCredentialInput,
+  readLMArenaCookie,
+  readLMArenaSession,
+  reconstructLMArenaCookie,
+  type ParsedLMArenaSession,
+} from "./lmarena/cookie.ts";
+import {
+  LMARENA_DIRECT_URL,
   LMARENA_STREAM_URL,
   LMARENA_USER_AGENT,
   buildLmarenaBrowserHeaders,
@@ -32,26 +41,37 @@ import {
   mapTlsUnavailable,
   missingCookieResult,
 } from "./lmarena/response.ts";
+import {
+  __setLMArenaBrowserFallbackOverrideForTesting,
+  fetchLMArenaViaBrowserPool,
+  isLMArenaBrowserFallbackEnabled,
+} from "./lmarena/browserTransport.ts";
 
 export {
   reconstructLMArenaCookie,
+  parseLMArenaCredentialInput,
+  readLMArenaSession,
   normalizeLMArenaModelsForCatalog,
   parseLMArenaInitialModels,
   pickLMArenaModelId,
   parseArenaSSE,
   markLMArenaCatalogModelDead,
   LMARENA_USER_AGENT,
+  LMARENA_DIRECT_URL,
+  __setLMArenaBrowserFallbackOverrideForTesting,
 };
 export { clearLMArenaDeadCatalogModels } from "./lmarena/models.ts";
-export type { LMArenaModelMetadata };
+export type { LMArenaModelMetadata, ParsedLMArenaSession };
 
 interface OpenAIMessage {
   role?: string;
   content?: unknown;
 }
 
-/** Optional browser-issued reCAPTCHA v3 token (operator-supplied). */
+/** Optional browser-issued reCAPTCHA v3 token (operator-supplied or extracted from cURL). */
 function readRecaptchaToken(credentials: unknown, body: unknown): string | null {
+  const session = readLMArenaSession(credentials);
+  if (session.recaptchaV3Token) return session.recaptchaV3Token;
   const fromObj = (v: unknown): string | null => {
     if (!v || typeof v !== "object") return null;
     const rec = v as Record<string, unknown>;
@@ -66,6 +86,18 @@ function readRecaptchaToken(credentials: unknown, body: unknown): string | null 
     return null;
   };
   return fromObj(credentials) ?? fromObj(body);
+}
+
+function readEvaluationMode(credentials: unknown, body: unknown): string {
+  const session = readLMArenaSession(credentials);
+  if (session.mode) return session.mode;
+  if (body && typeof body === "object") {
+    const b = body as Record<string, unknown>;
+    if (typeof b.arenaMode === "string" && b.arenaMode.trim()) {
+      return b.arenaMode.trim();
+    }
+  }
+  return "direct-battle";
 }
 
 export class LMArenaExecutor extends BaseExecutor {
@@ -84,12 +116,13 @@ export class LMArenaExecutor extends BaseExecutor {
     credentials: unknown,
     _body: unknown
   ): Record<string, string> {
-    const cookie = readLMArenaCookie(credentials);
+    const session = readLMArenaSession(credentials);
     const headers = buildLmarenaBrowserHeaders({
       "Content-Type": "application/json",
       Accept: "text/event-stream",
+      ...session.headers,
     });
-    if (cookie) headers.Cookie = cookie;
+    if (session.cookie) headers.Cookie = session.cookie;
     return headers;
   }
 
@@ -100,7 +133,7 @@ export class LMArenaExecutor extends BaseExecutor {
       : [];
     return {
       id: uuidv7(),
-      mode: "direct-battle",
+      mode: readEvaluationMode(credentials, body),
       modelAId: model,
       userMessageId: uuidv7(),
       modelAMessageId: uuidv7(),
@@ -142,6 +175,8 @@ export class LMArenaExecutor extends BaseExecutor {
         model,
         arenaModelId,
         stream: !!stream,
+        credentials,
+        cookie,
         signal,
         log,
       });
@@ -164,18 +199,40 @@ export class LMArenaExecutor extends BaseExecutor {
       model: string;
       arenaModelId: string;
       stream: boolean;
+      credentials?: unknown;
+      cookie: string;
       signal?: AbortSignal;
       log?: ExecuteInput["log"];
     }
   ) {
-    const tlsResult = await tlsFetchLMArena(url, {
+    const serializedBody = JSON.stringify(transformedBody);
+    let tlsResult = await tlsFetchLMArena(url, {
       method: "POST",
       headers,
-      body: JSON.stringify(transformedBody),
+      body: serializedBody,
       signal: ctx.signal,
       stream: ctx.stream,
       streamEofSymbol: "__OMNIROUTE_LMARENA_EOF_NEVER__",
     });
+
+    if (tlsResult.status === 403 && isLMArenaBrowserFallbackEnabled(ctx.credentials)) {
+      try {
+        ctx.log?.info?.(
+          "LMArenaExecutor",
+          "Direct TLS returned 403; attempting browser-pool fallback on arena.ai/text/direct"
+        );
+        tlsResult = await fetchLMArenaViaBrowserPool({
+          url,
+          cookieString: ctx.cookie,
+          headers,
+          body: serializedBody,
+          signal: ctx.signal,
+        });
+      } catch (browserErr) {
+        const msg = browserErr instanceof Error ? browserErr.message : String(browserErr);
+        ctx.log?.warn?.("LMArenaExecutor", `Browser fallback failed: ${msg}`);
+      }
+    }
 
     const failed = mapFailedTlsResult({
       status: tlsResult.status,

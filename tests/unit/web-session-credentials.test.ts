@@ -127,6 +127,19 @@ test("web session credential validator requires provider-specific non-empty valu
     webSessionCredentials.hasUsableWebSessionCredential("chatgpt-web", { unrelated: "value" }),
     false
   );
+  assert.equal(
+    webSessionCredentials.hasUsableWebSessionCredential("lmarena", {
+      cookie: "arena-auth-prod-v1.0=part0; arena-auth-prod-v1.1=part1",
+    }),
+    true
+  );
+  assert.equal(
+    webSessionCredentials.hasUsableWebSessionCredential(
+      "lmarena",
+      "curl 'https://arena.ai/nextjs-api/stream/create-evaluation' -b 'arena-auth-prod-v1.0=part0; arena-auth-prod-v1.1=part1'"
+    ),
+    true
+  );
 });
 
 test("no-auth web providers can be saved without an API key", () => {

@@ -187,7 +187,7 @@ export async function POST(request: Request) {
           /cloudflare|bot management|recaptcha|cf-chl|just a moment/i.test(entry.error)));
     if (botBlocked) {
       consecutiveBotBlocks += 1;
-    } else if (entry.status === "ok") {
+    } else {
       consecutiveBotBlocks = 0;
     }
 

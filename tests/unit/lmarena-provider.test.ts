@@ -14,6 +14,7 @@ import {
 } from "../../src/shared/providers/webSessionCredentials.ts";
 import {
   LMArenaExecutor,
+  __setLMArenaBrowserFallbackOverrideForTesting,
   markLMArenaCatalogModelDead,
   normalizeLMArenaModelsForCatalog,
   parseArenaSSE,
@@ -30,7 +31,11 @@ const UUID_V7_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9
 type LMArenaExecutorTestAccess = {
   provider: string;
   buildUrl: (model: string, credentials: unknown) => string;
-  buildRequestHeaders: (model: string, credentials: unknown, body: unknown) => Record<string, string>;
+  buildRequestHeaders: (
+    model: string,
+    credentials: unknown,
+    body: unknown
+  ) => Record<string, string>;
   transformRequest: (
     body: unknown,
     model: string,
@@ -159,7 +164,11 @@ describe("LMArena Executor", () => {
     assert.equal(headers.Cookie, "session=def");
 
     // providerSpecificData.cookie
-    headers = ex.buildRequestHeaders("gpt-4", { providerSpecificData: { cookie: "session=ghi" } }, {});
+    headers = ex.buildRequestHeaders(
+      "gpt-4",
+      { providerSpecificData: { cookie: "session=ghi" } },
+      {}
+    );
     assert.equal(headers.Cookie, "session=ghi");
 
     // Priority: direct > apiKey > providerSpecificData
@@ -628,6 +637,52 @@ describe("LMArena Executor", () => {
       assert.equal(err.error.code, "cloudflare_or_bot");
     } finally {
       __setTlsFetchOverrideForTesting(null);
+    }
+  });
+
+  it("falls back to browser pool on 403 when browser fallback is enabled", async () => {
+    const executor = new LMArenaExecutor();
+    let browserFallbackCalled = false;
+    __setTlsFetchOverrideForTesting(async () => ({
+      status: 403,
+      headers: new Headers({ "Content-Type": "text/html" }),
+      text: "<html>Just a moment...</html>",
+      body: null,
+    }));
+    __setLMArenaBrowserFallbackOverrideForTesting(async (input) => {
+      browserFallbackCalled = true;
+      assert.ok(input.cookieString.includes("session=test"));
+      const ssePayload = 'data: a0:{"text":"Fallback OK"}\n\ndata: ad:{}\n\n';
+      return {
+        status: 200,
+        headers: new Headers({ "Content-Type": "text/event-stream" }),
+        text: ssePayload,
+        body: new ReadableStream({
+          start(controller) {
+            controller.enqueue(new TextEncoder().encode(ssePayload));
+            controller.close();
+          },
+        }),
+      };
+    });
+
+    try {
+      const result = await executor.execute({
+        model: TEST_ARENA_MODEL_ID,
+        body: { messages: [{ role: "user", content: "Hello" }], stream: false },
+        credentials: { cookie: "session=test" },
+        signal: new AbortController().signal,
+        log: console,
+      });
+      assert.equal(browserFallbackCalled, true, "Should invoke Tier-2 browser fallback on 403");
+      assert.equal(result.response.status, 200);
+      const json = (await result.response.json()) as {
+        choices?: Array<{ message?: { content?: string } }>;
+      };
+      assert.equal(json.choices?.[0]?.message?.content, "Fallback OK");
+    } finally {
+      __setTlsFetchOverrideForTesting(null);
+      __setLMArenaBrowserFallbackOverrideForTesting(null);
     }
   });
 });

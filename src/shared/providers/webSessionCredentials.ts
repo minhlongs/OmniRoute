@@ -318,11 +318,12 @@ export const WEB_SESSION_CREDENTIAL_REQUIREMENTS = {
     //
     // #4271: LMArena migrated to Supabase SSR chunked cookies — the single
     // `arena-auth-prod-v1` cookie is now empty and the session is split across
-    // `arena-auth-prod-v1.0`, `arena-auth-prod-v1.1`, … Users must paste the FULL
-    // Cookie header so the executor can reconstruct the single cookie from chunks.
-    credentialName: "full Cookie header (arena-auth-prod-v1.0 + arena-auth-prod-v1.1)",
+    // `arena-auth-prod-v1.0`, `arena-auth-prod-v1.1`, … Users can paste either a
+    // DevTools "Copy as cURL" command or the full Cookie header.
+    credentialName:
+      "full Cookie header or Copy as cURL (arena-auth-prod-v1.0 + arena-auth-prod-v1.1)",
     placeholder:
-      "arena-auth-prod-v1.0=...; arena-auth-prod-v1.1=...; other=value (full Cookie header from arena.ai)",
+      "arena-auth-prod-v1.0=...; arena-auth-prod-v1.1=...; cf_clearance=... (full Cookie header or Copy as cURL from arena.ai/text/direct)",
     acceptsFullCookieHeader: true,
     storageKeys: [
       "cookie",
@@ -333,7 +334,7 @@ export const WEB_SESSION_CREDENTIAL_REQUIREMENTS = {
     ],
     hintKey: "lmarenaWebCookieHint",
     hintFallback:
-      "Open arena.ai, sign in, then copy the full Cookie header from a Network request. Include arena-auth-prod-v1.0 and arena-auth-prod-v1.1 (and further chunks if present), preferably with cf_clearance. Do not paste only the empty arena-auth-prod-v1 cookie. Optional: providerSpecificData.recaptchaV3Token if create-evaluation still returns 403.",
+      "Open arena.ai/text/direct, sign in, then paste a DevTools 'Copy as cURL' command or copy the full Cookie header from a Network request. Include arena-auth-prod-v1.0 and arena-auth-prod-v1.1 (and further chunks if present), preferably with cf_clearance. Do not paste only the empty arena-auth-prod-v1 cookie. Optional: providerSpecificData.recaptchaV3Token or OMNIROUTE_BROWSER_POOL=on if create-evaluation still returns 403.",
   },
   promptql: {
     kind: "token",

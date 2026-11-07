@@ -239,7 +239,14 @@ export function createOpenAIArenaStream(opts: {
             return;
           }
           const { done, value } = await reader.read();
-          if (done) break;
+          if (done) {
+            buffer += decoder.decode();
+            if (buffer.trim()) {
+              const trailing = buffer.startsWith("data: ") ? buffer.substring(6) : buffer;
+              if (handleArenaEventLine(trailing, model, controller)) return;
+            }
+            break;
+          }
 
           buffer += decoder.decode(value, { stream: true });
           const lines = buffer.split("\n");
@@ -256,6 +263,7 @@ export function createOpenAIArenaStream(opts: {
         log?.error?.("LMArenaExecutor", `Streaming error: ${message}`);
         controller.error(error);
       } finally {
+        await reader.cancel().catch(() => undefined);
         if (signal) signal.removeEventListener("abort", onAbort);
       }
     },

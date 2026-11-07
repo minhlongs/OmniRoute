@@ -17,9 +17,7 @@ describe("Arena AI stream readiness (#9306)", () => {
     const upstreamReader = new ReadableStream<Uint8Array>({
       start(controller) {
         controller.enqueue(new TextEncoder().encode('a0:{"text":"Hello"}\n'));
-        controller.enqueue(
-          new TextEncoder().encode('a0:{"text":", world!"}\nad:{}\n')
-        );
+        controller.enqueue(new TextEncoder().encode('a0:{"text":", world!"}\nad:{}\n'));
         controller.close();
       },
     }).getReader();
