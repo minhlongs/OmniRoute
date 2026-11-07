@@ -49,7 +49,7 @@ test("Alibaba registration preserves existing bare duplicate-model routing", () 
     model: "z-image-turbo",
   });
   assert.deepEqual(parseImageModel("qwen-image-2.0"), {
-    provider: "bailian-coding-plan",
+    provider: "lmarena",
     model: "qwen-image-2.0",
   });
   assert.deepEqual(parseImageModel("qwen-image-3.0-pro"), {

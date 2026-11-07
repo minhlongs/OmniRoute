@@ -199,6 +199,23 @@ export const WEB_COOKIE_PROVIDERS = {
       "Paste your __client cookie value from .clerk.agent.adapta.one (DevTools → Application → Cookies)",
     toolCalling: "emulated",
   },
+  lmarena: {
+    // Wire id stays `lmarena` for DB/combo/model-prefix back-compat.
+    // Product rebranded LMArena → Arena (arena.ai) in Jan 2026.
+    id: "lmarena",
+    alias: "lma",
+    name: "Arena (Free)",
+    icon: "auto_awesome",
+    color: "#FF6B6B",
+    textIcon: "AR",
+    website: "https://arena.ai",
+    hasFree: true,
+    freeNote:
+      "Free model comparison platform (formerly LMArena) at arena.ai/text/direct — Direct-chat catalog of chat models (GPT, Claude, Gemini, Llama, …). No subscription required.",
+    authHint:
+      "Open https://arena.ai/text/direct, sign in, and paste either a 'Copy as cURL' command or the full Cookie header from DevTools → Network. Include arena-auth-prod-v1.0/.1… and cf_clearance/__cf_bm when present. OmniRoute preserves raw chunks and matches your browser User-Agent/Sec-Ch-Ua headers (with optional browserPool fallback when OMNIROUTE_BROWSER_POOL=on).",
+    riskNoticeVariant: "webCookie",
+  },
   "yuanbao-web": {
     id: "yuanbao-web",
     alias: "ybw",

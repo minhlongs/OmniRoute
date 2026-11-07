@@ -43,17 +43,17 @@ test("arena provider is registered in open-sse REGISTRY and getRegistryEntry", (
   assert.equal(entry.id, "arena");
 });
 
-test("legacy lmarena provider is completely removed from provider registry", () => {
-  assert.equal(
-    (REGISTRY as Record<string, unknown>).lmarena,
-    undefined,
-    "lmarena must no longer exist in open-sse REGISTRY"
-  );
-  assert.equal(getRegistryEntry("lmarena"), null, "getRegistryEntry('lmarena') must return null");
-  assert.equal(
-    (WEB_COOKIE_PROVIDERS as Record<string, unknown>).lmarena,
-    undefined,
-    "lmarena must no longer be in WEB_COOKIE_PROVIDERS"
+test("lmarena web-cookie provider coexists alongside arena API-key provider without collision", () => {
+  const lmarenaEntry = getRegistryEntry("lmarena");
+  assert.ok(lmarenaEntry, "lmarena must exist in open-sse REGISTRY for web-cookie Direct chat");
+  assert.equal(lmarenaEntry.id, "lmarena");
+  assert.equal(lmarenaEntry.alias, "lma");
+  assert.equal(lmarenaEntry.authHeader, "cookie");
+  assert.notEqual(lmarenaEntry.id, arenaProvider.id);
+  assert.notEqual(lmarenaEntry.alias, arenaProvider.alias);
+  assert.ok(
+    WEB_COOKIE_PROVIDERS.lmarena,
+    "lmarena must be registered in WEB_COOKIE_PROVIDERS alongside APIKEY_PROVIDERS_GATEWAYS.arena"
   );
 });
 

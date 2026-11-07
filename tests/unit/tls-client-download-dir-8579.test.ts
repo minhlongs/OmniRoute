@@ -14,6 +14,7 @@ const TLS_CLIENT_MODULES = [
   "open-sse/services/chatgptTlsClient.ts",
   "open-sse/services/claudeTlsClient.ts",
   "open-sse/services/grokTlsClient.ts",
+  "open-sse/services/lmarenaTlsClient.ts",
   "open-sse/services/perplexityTlsClient.ts",
   "open-sse/services/notionTlsClient.ts",
 ] as const;
