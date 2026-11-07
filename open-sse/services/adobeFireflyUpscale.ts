@@ -156,9 +156,10 @@ export function resolveAdobeCreativityLevel(opts: {
     return clampLevel(normalizeExplicitCreativity(Number(explicit)));
   }
 
-  const percent = typeof opts.creativityPercent === "number" && Number.isFinite(opts.creativityPercent)
-    ? Math.max(0, Math.min(100, opts.creativityPercent))
-    : 0;
+  const percent =
+    typeof opts.creativityPercent === "number" && Number.isFinite(opts.creativityPercent)
+      ? Math.max(0, Math.min(100, opts.creativityPercent))
+      : 0;
   return clampLevel(percent / 100);
 }
 
@@ -265,11 +266,7 @@ export async function adobeFireflyUpscaleImage(opts: {
 
   const blobId = String(opts.blobId || "").trim();
   if (!blobId) {
-    throw new AdobeFireflyError(
-      "Adobe Firefly upscale requires a source image",
-      400,
-      "bad_image"
-    );
+    throw new AdobeFireflyError("Adobe Firefly upscale requires a source image", 400, "bad_image");
   }
 
   const factor = normalizeFactor(opts.upsamplerFactor, spec.factors);

@@ -204,8 +204,18 @@ export async function reconcileProvidersWithActiveSyncedCatalog(
 
   for (const { provider, catalog } of states) {
     const modelIsLive = catalog.models.some((model) => model.id === modelId);
+    // Cursor auto-router: always allow `auto` / router variants even if a stale live
+    // catalog omitted them (AvailableModels / agent list often returns wire id
+    // `default` only; listing injects `auto` + cost/balance/intelligence).
+    const cursorAutoAllow =
+      provider === "cursor" &&
+      (modelId === "auto" ||
+        modelId === "default" ||
+        modelId === "auto-cost" ||
+        modelId === "auto-balance" ||
+        modelId === "auto-intelligence");
 
-    if (!catalog.authoritative || modelIsLive) {
+    if (!catalog.authoritative || modelIsLive || cursorAutoAllow) {
       providers.push(provider);
     } else {
       excludedProviders.push(provider);

@@ -3,6 +3,9 @@
  * Intercepts image-bearing requests to non-vision models.
  * For individual non-vision models: reroutes to the fastest available vision-capable model.
  * For combos with non-vision targets: extracts descriptions via vision model and replaces images with text.
+ * For combos with ZERO vision-capable targets: falls back to whole-request reroute to a
+ * vision-capable model (same semantics as an individual text-only model), so image
+ * requests do not die in the combo capability filter when describing is impossible.
  */
 
 import { BaseGuardrail, type GuardrailContext, type GuardrailResult } from "./base";
@@ -13,7 +16,9 @@ import {
   callVisionModel as defaultCallVisionModel,
   composeVisionPrompt,
   replaceImageParts,
+  ensureBase64ImagesForClaudeWire,
 } from "./visionBridgeHelpers";
+import { fetch as undiciFetch } from "undici";
 import {
   getVisionBridgeConfig,
   isVisionBridgeForcedModel,
@@ -29,7 +34,7 @@ import {
 
 export { isProviderConnectionUsable, hasUsableCredentialsForModel };
 
-type ComboVisionBridgeDecision = "process" | "skip" | "not-combo";
+type ComboVisionBridgeDecision = "process" | "skip" | "not-combo" | "no-vision";
 
 export function resolveVisionComboName(mapping: Record<string, unknown>): string | null {
   const comboName = mapping.comboName ?? mapping.name ?? null;
@@ -38,10 +43,15 @@ export function resolveVisionComboName(mapping: Record<string, unknown>): string
 
 /// Check if a combo model should trigger vision bridge processing.
 /// Resolves combo targets and returns:
-/// - "process" if any target cannot be proven vision-capable
+/// - "process" if some (but not all) model targets lack proven vision support
 /// - "skip" if all model targets can handle images directly
+/// - "no-vision" when the combo has model targets but NONE can handle images —
+///   the combo behaves like a single text-only model, so the bridge may
+///   whole-request reroute to a vision-capable model (mirroring non-combos)
 /// - "not-combo" when the model is not a combo/mapping
-async function getComboVisionBridgeDecision(model: string): Promise<ComboVisionBridgeDecision> {
+export async function getComboVisionBridgeDecision(
+  model: string
+): Promise<ComboVisionBridgeDecision> {
   try {
     const { getComboByName } = await import("@/lib/localDb");
     const { resolveComboForModel } = await import("@/lib/db/modelComboMappings");
@@ -68,7 +78,10 @@ async function getComboVisionBridgeDecision(model: string): Promise<ComboVisionB
     // combo-ref → conservative (process images)
     // model step with no native vision → process images
     // all model steps with native vision → safe to skip
+    // zero vision-capable model steps → "no-vision" (reroute-eligible)
     let hasModelStep = false;
+    let hasVisionCapableStep = false;
+    let hasNonVisionStep = false;
     for (const step of rawModels) {
       const s = step as Record<string, unknown>;
       if (s.kind === "combo-ref") return "process";
@@ -77,8 +90,10 @@ async function getComboVisionBridgeDecision(model: string): Promise<ComboVisionB
         const targetModel = s.model;
         if (typeof targetModel === "string") {
           const caps = getResolvedModelCapabilities(targetModel);
-          if (caps.supportsVision !== true) {
-            return "process";
+          if (caps.supportsVision === true) {
+            hasVisionCapableStep = true;
+          } else {
+            hasNonVisionStep = true;
           }
         } else {
           return "process";
@@ -86,11 +101,15 @@ async function getComboVisionBridgeDecision(model: string): Promise<ComboVisionB
       }
     }
 
-    // All model steps support vision — safe to skip
-    if (hasModelStep) return "skip";
-
     // No recognizable steps — don't force bridge
-    return "not-combo";
+    if (!hasModelStep) return "not-combo";
+    // Every model step is proven vision-capable — safe to skip
+    if (hasVisionCapableStep && !hasNonVisionStep) return "skip";
+    // Mixed combo: some targets lack vision — describe so the combo still answers
+    if (hasVisionCapableStep) return "process";
+    // Combo exists but NO target can handle images: equivalent to a text-only
+    // model, so the whole request may be rerouted to a vision-capable model.
+    return "no-vision";
   } catch {
     // On error, try to process images (conservative)
     return "process";
@@ -112,7 +131,11 @@ function extractLastUserText(messages: unknown[]): string | undefined {
     if (Array.isArray(message.content)) {
       for (const part of message.content) {
         const p = part as { type?: unknown; text?: unknown } | null | undefined;
-        if (p?.type === "text" && typeof p.text === "string" && p.text.trim()) {
+        if (
+          (p?.type === "text" || p?.type === "input_text") &&
+          typeof p.text === "string" &&
+          p.text.trim()
+        ) {
           return p.text;
         }
       }
@@ -199,7 +222,8 @@ export class VisionBridgeGuardrail extends BaseGuardrail {
         // model-combo mapping routes this model through a combo where
         // some targets may NOT support vision. In that case, the vision
         // bridge must process images so combo targets can describe them.
-        if (comboVisionBridgeDecision !== "process") {
+        if (comboVisionBridgeDecision !== "process" && comboVisionBridgeDecision !== "no-vision") {
+          context.log?.debug?.("VISION_BRIDGE", "Skipping: target model supports vision natively");
           return { block: false };
         }
         // Combo mapping found — fall through to process images
@@ -209,10 +233,16 @@ export class VisionBridgeGuardrail extends BaseGuardrail {
     // remains undefined, which makes the reroute check on line ~189 treat it
     // like a non-combo model — exactly what we want: reroute to a vision model.
 
-    // 5. Get body and check for messages
+    // 5. Get body and normalize Chat Completions `messages` vs Responses `input`.
+    // Both containers carry role/content items and are supported by the shared
+    // media detector. Preserve the original wire container in modifiedPayload.
     const body = payload as Record<string, unknown>;
-    const messages = body?.messages;
-    if (!Array.isArray(messages) || messages.length === 0) {
+    const messages = Array.isArray(body?.messages)
+      ? body.messages
+      : Array.isArray(body?.input)
+        ? body.input
+        : null;
+    if (!messages || messages.length === 0) {
       return { block: false };
     }
 
@@ -256,8 +286,20 @@ export class VisionBridgeGuardrail extends BaseGuardrail {
     // request with model=auto would land on a text-only model (#7871). Keeping
     // "auto" is never the answer there, so the keep-credentialed-model skip
     // below does not apply to auto — only the reroute-target credential guard.
+    const rerouteTextOnly = settings.visionBridgeRerouteTextOnly === true;
+    // Reroute when the operator opted in to direct VLM routing for every text-only
+    // route (keeps image bytes instead of a lossy bridge description), or when the
+    // auto heuristic deems the request eligible. A named combo with ZERO
+    // vision-capable targets ("no-vision") is reroute-eligible too: it behaves
+    // exactly like a single text-only model, and without this fallback an image
+    // request would die in the combo capability filter (capability_mismatch)
+    // whenever the describe path cannot run.
     const rerouteEligible =
-      (comboVisionBridgeDecision === "not-combo" || isAuto) && !forceVisionBridge;
+      rerouteTextOnly ||
+      ((comboVisionBridgeDecision === "not-combo" ||
+        comboVisionBridgeDecision === "no-vision" ||
+        isAuto) &&
+        !forceVisionBridge);
     // Forced modes short-circuit BEFORE the auto heuristic (#6640/#7204 untouched):
     // - "describe" skips the whole reroute block → straight to the describe path.
     // - "reroute" skips only the keep-credentialed-model guard; the reroute-target
@@ -267,7 +309,7 @@ export class VisionBridgeGuardrail extends BaseGuardrail {
       const checkCreds = this.deps.hasUsableCredentials ?? hasUsableCredentialsForModel;
       const originalUsable = runtime.mode === "reroute" ? false : await checkCreds(model);
 
-      if (originalUsable === true && !isAuto) {
+      if (originalUsable === true && !isAuto && !rerouteTextOnly) {
         // Keep the credentialed model; describe images below if needed.
         context.log?.debug?.(
           "VISION_BRIDGE",
@@ -298,14 +340,27 @@ export class VisionBridgeGuardrail extends BaseGuardrail {
           const bestUsable = await checkCreds(bestModel);
           // Only block the reroute when we KNOW the target is unusable (false).
           // `null` (no DB / tests) fails open so existing unit tests keep working.
-          if (bestUsable === false) {
+          // `auto/*` ids (e.g. auto/best-vision) are VIRTUAL combos: credentials
+          // resolve through their member models at request time, so a missing
+          // "auto" provider row (hasUsableCredentialsForModel → false) must
+          // never block the reroute.
+          if (bestUsable === false && !bestModel.startsWith("auto/")) {
             context.log?.warn?.(
               "VISION_BRIDGE",
               `Vision reroute target ${bestModel} has no usable credentials; describing images instead of hijacking ${model}`
             );
           } else {
+            // Claude-wire backends (minimax, zai, …) reject remote image URLs
+            // (MiniMax 403 2013); resolve them to base64 before rerouting so
+            // the rerouted request can actually be processed upstream. Use
+            // undici fetch to bypass the runtime's hooked global fetch.
+            const rerouteBody = await ensureBase64ImagesForClaudeWire(
+              body as Parameters<typeof ensureBase64ImagesForClaudeWire>[0],
+              bestModel,
+              undiciFetch as unknown as typeof fetch
+            );
             const modifiedBody = {
-              ...(body as Record<string, unknown>),
+              ...(rerouteBody as Record<string, unknown>),
               model: bestModel,
             };
             return {
@@ -347,7 +402,14 @@ export class VisionBridgeGuardrail extends BaseGuardrail {
     // targets what the user actually asked instead of a generic caption.
     const lastUserText = extractLastUserText(messages);
     const composedPrompt = composeVisionPrompt(config.prompt, lastUserText, runtime.taskAware);
-    const describeConfig = { ...config, prompt: composedPrompt };
+    // Bypass the runtime's hooked global fetch (ProxyFetch) for the self-loop
+    // describe call — a dead local proxy (127.0.0.1:8317) would otherwise break
+    // every describe. Tests inject their own callVisionModel.
+    const describeConfig = {
+      ...config,
+      prompt: composedPrompt,
+      fetchImpl: undiciFetch as unknown as typeof fetch,
+    };
 
     // Shared describe cache (sha256 of contentRef+prompt+model): the same image
     // with the same prompt/model is described once per TTL. Failures are never
@@ -357,17 +419,34 @@ export class VisionBridgeGuardrail extends BaseGuardrail {
     // callVisionModel may fall back internally to another vision model, and
     // keying by attempt would fragment the cache and leak router state into the
     // key. Intentional and stable — do not "fix" this to key per attempt.
+    //
+    // The prompt component is the BASE prompt (`config.prompt`), deliberately
+    // NOT the task-aware composed prompt (`composedPrompt`): the composed
+    // prompt appends the LAST user text, which changes on every conversation
+    // turn. Zoo Code / Claude Code clients resend the FULL transcript each
+    // turn, so a text-only follow-up still carries the turn-1 image in the
+    // history — the bridge re-enters the describe path — but if the key
+    // changed with each new turn it would miss the cache and re-call the
+    // vision model (e.g. mimo-v2.5) for byte-identical images. Keying on the
+    // stable base prompt makes an unchanged history image reuse the cached
+    // description; a genuinely NEW image has a different contentRef and still
+    // misses. The task-aware prompt is what the vision model actually receives
+    // on the first describe, so no description quality is lost.
     const cache = runtime.cacheEnabled ? getSharedBridgeCacheFor(runtime) : null;
 
     // Process all images in parallel using Promise.allSettled for fail-partial behavior
     const results = await Promise.allSettled(
       limitedParts.map(async (imagePart, i) => {
-        const key = cache ? bridgeCacheKey(imagePart.imageUrl, composedPrompt, config.model) : null;
+        const key = cache ? bridgeCacheKey(imagePart.imageUrl, config.prompt, config.model) : null;
         const cached = key && cache ? cache.get(key) : undefined;
         const description = cached ?? (await callVision(imagePart.imageUrl, describeConfig));
         if (cached === undefined && key && cache) cache.set(key, description);
         recordBridgeUse("vision", { cacheHit: cached !== undefined });
-        return `[Image ${i + 1}]: ${description}`;
+        const capped =
+          runtime.maxChars > 0 && description.length > runtime.maxChars
+            ? description.slice(0, runtime.maxChars) + "…"
+            : description;
+        return `[Image ${i + 1}]: ${capped}`;
       })
     );
 
@@ -392,8 +471,15 @@ export class VisionBridgeGuardrail extends BaseGuardrail {
     // is safe here because the upstream can only handle text. The original #4012
     // preserve-raw behavior only applies to paths where the upstream might still
     // be vision-capable (reroute path / unknown capability).
+    // "no-vision" combos are included for the same reason: with ZERO
+    // vision-capable targets, the combo capability filter rejects raw images
+    // outright (capability_mismatch), so stub text is strictly better than
+    // preserving bytes no combo target can consume.
     const allNull = descriptions.every((d) => d === null);
-    if (allNull && comboVisionBridgeDecision === "process") {
+    if (
+      allNull &&
+      (comboVisionBridgeDecision === "process" || comboVisionBridgeDecision === "no-vision")
+    ) {
       for (let i = 0; i < descriptions.length; i++) {
         descriptions[i] = `[Image ${i + 1}]: (unavailable — no vision-capable provider connected)`;
       }

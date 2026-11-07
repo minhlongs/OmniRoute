@@ -6,6 +6,7 @@
 import { getResolvedModelCapabilities } from "@/lib/modelCapabilities";
 import { PROVIDER_MODELS, PROVIDER_ID_TO_ALIAS } from "@omniroute/open-sse/config/providerModels";
 import { hasUsableCredentialsForModel } from "./visionBridgeCredentials";
+import { isVisionBridgeForcedModel } from "@/shared/constants/visionBridgeDefaults";
 
 export interface VisionModelCandidate {
   modelId: string;
@@ -133,7 +134,7 @@ async function getVisionCapableModels(
       const fullModelId = `${providerAlias}/${model.id}`;
       const caps = getResolvedModelCapabilities(fullModelId);
 
-      if (caps.supportsVision === true) {
+      if (caps.supportsVision === true && !isVisionBridgeForcedModel(fullModelId)) {
         checks.push(
           checkCreds(fullModelId).then((usable) => {
             // Only a confirmed `false` excludes a candidate — `null` (indeterminate,

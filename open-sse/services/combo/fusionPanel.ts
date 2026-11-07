@@ -51,9 +51,9 @@ export function extractFusionPanelSpec(
       panel.push(step.comboName);
       return;
     }
-    // #8894 widened ComboStep with ComboProviderWildcardStep, which carries a
-    // modelPattern instead of a model. getComboModelString() already resolves any
-    // step shape (and returns null for the ones with no concrete model id).
+    // Provider-wildcard steps have no concrete model to dispatch — fusion is a
+    // fixed-size panel of literal models/combo-refs, not a wildcard-expanding
+    // strategy (see file header). Skip rather than push an undefined model.
     const modelStr = getComboModelString(step);
     if (modelStr) panel.push(modelStr);
   });

@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import {
   buildSyncedModelIdsByCanonicalProvider,
   shouldSuppressStaticModelBySyncedCoverage,
+  shouldSuppressStaticModelForExclusiveListing,
 } from "../../src/app/api/v1/models/catalogSyncedCoverage.ts";
 import type { SyncedAvailableModel } from "../../src/lib/db/models/synced.ts";
 
@@ -74,4 +75,58 @@ test("buildSyncedModelIdsByCanonicalProvider groups synced ids by canonical prov
   const ds = byCanonical.get("deepseek");
   assert.ok(ds);
   assert.ok(ds.has("deepseek-v4-flash"));
+});
+
+test("exclusive listing: any static row suppressed when provider has synced catalog", () => {
+  assert.equal(
+    shouldSuppressStaticModelForExclusiveListing({
+      exclusiveListing: true,
+      providerHasSynced: true,
+      staticModelId: "claude-4.6-sonnet-high",
+      syncedModelIds: ["claude-4.6-sonnet", "composer-2.5"],
+    }),
+    true
+  );
+  assert.equal(
+    shouldSuppressStaticModelForExclusiveListing({
+      exclusiveListing: true,
+      providerHasSynced: true,
+      staticModelId: "composer-2.5",
+      syncedModelIds: ["claude-4.6-sonnet", "composer-2.5"],
+    }),
+    true
+  );
+});
+
+test("exclusive listing: does not suppress when synced is empty", () => {
+  assert.equal(
+    shouldSuppressStaticModelForExclusiveListing({
+      exclusiveListing: true,
+      providerHasSynced: false,
+      staticModelId: "claude-4.6-sonnet-high",
+      syncedModelIds: [],
+    }),
+    false
+  );
+});
+
+test("exclusive listing: non-exclusive providers keep coverage behavior", () => {
+  assert.equal(
+    shouldSuppressStaticModelForExclusiveListing({
+      exclusiveListing: false,
+      providerHasSynced: true,
+      staticModelId: "deepseek/deepseek-v4-flash",
+      syncedModelIds: ["gpt-5.6-luna"],
+    }),
+    false
+  );
+  assert.equal(
+    shouldSuppressStaticModelForExclusiveListing({
+      exclusiveListing: false,
+      providerHasSynced: true,
+      staticModelId: "gpt-5.6-luna",
+      syncedModelIds: ["gpt-5.6-luna"],
+    }),
+    true
+  );
 });

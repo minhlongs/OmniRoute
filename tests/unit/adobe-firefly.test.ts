@@ -223,10 +223,7 @@ test("buildAdobeImagePayload attaches referenceBlobs like live adobe_atach_image
   assert.deepEqual(gpt.referenceBlobs, [
     { id: "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee", usage: "subject" },
   ]);
-  assert.equal(
-    (gpt.generationMetadata as Record<string, unknown>).module,
-    "image2image"
-  );
+  assert.equal((gpt.generationMetadata as Record<string, unknown>).module, "image2image");
 });
 
 test("extractAdobeSourceImageSources reads Media page image fields", () => {
@@ -507,6 +504,7 @@ test("parseAdobeModelsDiscovery extracts image/video versions", () => {
             outputModality: ["image"],
             modelDisplayName: "Gemini 3.0 (Nano Banana Pro)",
             healthStatus: "HEALTHY",
+            requestSchema: { properties: { prompt: { type: "string" } } },
           },
         },
       },
@@ -517,6 +515,7 @@ test("parseAdobeModelsDiscovery extracts image/video versions", () => {
             enabled: true,
             outputModality: ["video"],
             modelDisplayName: "Sora 2",
+            requestSchema: { properties: { prompt: { type: "string" } } },
           },
         },
       },
@@ -526,8 +525,8 @@ test("parseAdobeModelsDiscovery extracts image/video versions", () => {
   assert.equal(rows[0].modality, "image");
   assert.equal(rows[1].modality, "video");
   const catalog = mapDiscoveredToCatalog(rows);
-  assert.ok(catalog.some((m) => m.id === "nano-banana-pro"));
-  assert.ok(catalog.some((m) => m.id === "sora-2"));
+  assert.ok(catalog.some((m) => m.id === "gemini-flash-nano-banana-2"));
+  assert.ok(catalog.some((m) => m.id === "sora-sora-2"));
 });
 
 test("fallback catalog has image and video entries from get_models capture", () => {

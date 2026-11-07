@@ -14,11 +14,15 @@ describe("CommandCodeExecutor", () => {
     assert.ok(executor);
   });
 
-  it("buildUrl returns a string", () => {
+  it("buildUrl targets the documented /provider/v1/chat/completions endpoint (#10265)", () => {
     const executor = new mod.CommandCodeExecutor();
     const url = executor.buildUrl();
     assert.ok(typeof url === "string");
-    assert.ok(url.includes("generate") && url.includes("commandcode"));
+    assert.ok(
+      url.includes("/provider/v1/chat/completions"),
+      `expected the documented provider API endpoint, got: ${url}`
+    );
+    assert.ok(url.includes("commandcode"));
   });
 
   it("execute throws when no API key", async () => {
@@ -57,7 +61,7 @@ describe("CommandCodeExecutor", () => {
     }
   });
 
-  it("assistant tool-call conversion always emits a valid required arguments field (#regression input[N] missing required field arguments)", async () => {
+  it("posts a flat OpenAI chat.completions body (no CLI envelope) to /provider/v1/chat/completions (#10265)", async () => {
     const calls: Array<{ url: string; init: RequestInit; body: unknown }> = [];
     const originalFetch = globalThis.fetch;
     globalThis.fetch = (async (url: string | URL | Request, init?: RequestInit) => {
@@ -70,91 +74,130 @@ describe("CommandCodeExecutor", () => {
     }) as typeof fetch;
 
     const executor = new mod.CommandCodeExecutor();
-    const pairedId = "call_paired";
     const body = {
+      model: "gpt-5.4",
       messages: [
         { role: "user", content: "hi" },
         {
           role: "assistant",
           content: "",
           tool_calls: [
-            // Missing arguments entirely -> must still get a valid arguments field
-            { id: "call_missing", type: "function", function: { name: "lookup" } },
-            // Empty string arguments -> "{}"
             {
-              id: "call_empty",
+              id: "call_1",
               type: "function",
-              function: { name: "lookup", arguments: "" },
+              function: { name: "lookup", arguments: '{"q":"docs"}' },
             },
-            // Valid object arguments -> round-trips as JSON string
-            {
-              id: pairedId,
-              type: "function",
-              function: { name: "lookup", arguments: { q: "docs" } },
-            },
-            // Valid string arguments -> preserved as-is
-            {
-              id: "call_string",
-              type: "function",
-              function: { name: "lookup", arguments: '{"q":"string"}' },
-            },
+            // Missing arguments entirely stays missing — passthrough, no CLI
+            // envelope injection of a synthetic `arguments` field.
+            { id: "call_2", type: "function", function: { name: "search" } },
           ],
         },
-        { role: "tool", tool_call_id: "call_missing", content: "r1" },
-        { role: "tool", tool_call_id: "call_empty", content: "r2" },
-        { role: "tool", tool_call_id: pairedId, content: "r3" },
-        { role: "tool", tool_call_id: "call_string", content: "r4" },
+        { role: "tool", tool_call_id: "call_1", content: "r1" },
+        { role: "tool", tool_call_id: "call_2", content: "r2" },
+      ],
+      tools: [
+        {
+          type: "function",
+          function: {
+            name: "lookup",
+            description: "lookup",
+            parameters: { type: "object", properties: { q: { type: "string" } } },
+          },
+        },
       ],
     };
 
     try {
       await executor.execute({
-        model: "test",
+        model: "gpt-5.4",
         body,
         stream: false,
         credentials: { apiKey: "fake-key" },
         signal: null,
       });
-      assert.fail("Expected fetch to reject (no real network)");
-    } catch {
-      // Fetch rejection is expected; inspect the captured body
     } finally {
       globalThis.fetch = originalFetch;
     }
 
     assert.equal(calls.length, 1, "exactly one upstream call");
-    const sentBody = calls[0].body as {
-      params: { messages: Array<{ role: string; content: unknown }> };
-    };
-    const assistant = sentBody.params.messages.find((m) => m.role === "assistant");
+    assert.ok(
+      calls[0].url.includes("/provider/v1/chat/completions"),
+      `expected documented provider endpoint, got: ${calls[0].url}`
+    );
+    const sent = calls[0].body as Record<string, unknown>;
+    // No CLI envelope.
+    assert.equal(sent.config, undefined, "CLI envelope `config` must not be sent");
+    assert.equal(sent.params, undefined, "CLI envelope `params` wrapper must not be sent");
+    assert.equal(sent.model, "gpt-5.4", "flat OpenAI model at top level");
+    assert.equal((sent.messages as Array<{ role: string }>)[0].role, "user");
+    // Assistant tool_calls pass through unchanged (no CLI tool-call/tool-result parts).
+    const assistant = (sent.messages as Array<Record<string, unknown>>).find(
+      (m) => m.role === "assistant"
+    );
     assert.ok(assistant, "assistant turn present");
-    const parts = assistant.content as Array<Record<string, unknown>>;
-    const toolCalls = parts.filter((p) => p.type === "tool-call");
-    assert.equal(toolCalls.length, 4, "all four paired tool calls converted");
+    const toolCalls = assistant?.tool_calls as Array<{
+      id: string;
+      function: { name: string; arguments?: string };
+    }>;
+    assert.equal(toolCalls.length, 2, "both tool calls pass through untouched");
+    assert.equal(toolCalls[0].function.name, "lookup");
+    assert.equal(toolCalls[0].function.arguments, '{"q":"docs"}');
+    assert.equal(toolCalls[1].function.arguments, undefined, "missing arguments stays missing (no injection)");
+    // Tool role message (OpenAI flat) preserved.
+    const toolMsg = (sent.messages as Array<Record<string, unknown>>).find(
+      (m) => m.role === "tool"
+    );
+    assert.equal(toolMsg?.tool_call_id, "call_1");
+    assert.equal(
+      (sent.tools as Array<{ function: { name: string } }>)[0].function.name,
+      "lookup",
+      "tool definitions pass through in OpenAI shape (no rename)"
+    );
+  });
 
-    for (const call of toolCalls) {
-      assert.equal(
-        typeof call.arguments,
-        "string",
-        `tool-call ${String(call.toolCallId)} must carry a string arguments field`
-      );
-      const parsed = JSON.parse(call.arguments as string);
-      assert.equal(typeof parsed, "object");
-      assert.ok(!Array.isArray(parsed), "arguments must parse to a JSON object");
+  it("passes through the upstream OpenAI response and drops CLI-impersonation headers (#10265)", async () => {
+    const calls: Array<{ url: string; init: RequestInit }> = [];
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async (url: string | URL | Request, init?: RequestInit) => {
+      calls.push({ url: String(url), init: init || {} });
+      const chunk =
+        'data: {"id":"c1","object":"chat.completion.chunk","model":"gpt-5.4",' +
+        '"choices":[{"index":0,"delta":{"content":"hi"}}]}\n\n' +
+        'data: {"id":"c1","object":"chat.completion.chunk","model":"gpt-5.4",' +
+        '"choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":' +
+        '{"prompt_tokens":2,"completion_tokens":1,"total_tokens":3}}\n\n' +
+        "data: [DONE]\n\n";
+      return new Response(chunk, {
+        status: 200,
+        headers: { "Content-Type": "text/event-stream" },
+      });
+    }) as typeof fetch;
+
+    const executor = new mod.CommandCodeExecutor();
+    let result: { response: Response; headers: Record<string, string> } | null = null;
+    try {
+      result = await executor.execute({
+        model: "gpt-5.4",
+        body: { messages: [{ role: "user", content: "hi" }] },
+        stream: true,
+        credentials: { apiKey: "fake-key" },
+        signal: null,
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
     }
 
-    const byId = new Map(toolCalls.map((c) => [String(c.toolCallId), c]));
-    assert.equal(byId.get("call_missing").arguments, "{}", "missing arguments -> empty object");
-    assert.equal(byId.get("call_empty").arguments, "{}", "empty string arguments -> empty object");
-    assert.equal(
-      byId.get(pairedId).arguments,
-      '{"q":"docs"}',
-      "object arguments round-trip as JSON string"
-    );
-    assert.equal(
-      byId.get("call_string").arguments,
-      '{"q":"string"}',
-      "valid string arguments preserved as-is"
-    );
+    assert.ok(result, "execute returned a result");
+    const headers = result.headers;
+    assert.equal(headers["x-command-code-version"], undefined, "CLI-impersonation header dropped");
+    assert.equal(headers["x-cli-environment"], undefined, "CLI-impersonation header dropped");
+    assert.equal(headers.Authorization, "Bearer fake-key");
+
+    // The upstream OpenAI SSE passes through untouched (no CLI re-parsing).
+    const text = await result.response.text();
+    assert.ok(text.includes("chat.completion.chunk"), "OpenAI-format SSE passed through");
+    assert.ok(text.includes('"content":"hi"'), "delta content preserved");
+    assert.ok(text.includes("[DONE]"), "stream terminator preserved");
+    assert.ok(text.includes('"prompt_tokens":2'), "OpenAI usage block passed through");
   });
 });

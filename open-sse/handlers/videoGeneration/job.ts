@@ -104,10 +104,10 @@ const VIDEO_JOB_PRESETS: Record<string, VideoJobPreset> = {
   "agnes-video-job": {
     id: "agnes-video-job",
     displayName: "Agnes Video V2.0",
-    authHeaderName: "x-api-key",
-    authScheme: "raw",
-    // Real default, matching the Agnes Video V2.0 reference: POST /v1/videos with
-    // x-api-key auth; GET /v1/videos/{task_id} returns status/progress/metadata.
+    authHeaderName: "Authorization",
+    authScheme: "bearer",
+    // Official Agnes flow: POST /v1/videos returns video_id, then the recommended
+    // status endpoint GET /agnesapi?video_id=… exposes status and metadata.url.
     baseUrlFallback: "https://apihub.agnes-ai.com",
     submit: {
       method: "POST",
@@ -120,8 +120,8 @@ const VIDEO_JOB_PRESETS: Record<string, VideoJobPreset> = {
         ...extras,
       }),
     },
-    taskIdPath: "task_id",
-    poll: { pathTemplate: "/v1/videos/{taskId}" },
+    taskIdPath: "video_id",
+    poll: { pathTemplate: "/agnesapi?video_id={taskId}" },
     statusPath: "status",
     statusDone: ["completed"],
     statusFailed: ["failed"],
@@ -254,7 +254,7 @@ export async function handleVideoJobGeneration({
     body: JSON.stringify(bodyForPreset),
     log,
   });
-  if (!submitResult.ok) {
+  if (submitResult.ok === false) {
     return { success: false, status: submitResult.status, error: submitResult.error };
   }
 
@@ -279,7 +279,7 @@ export async function handleVideoJobGeneration({
       headers: buildJobHeaders(preset, credentials),
       log,
     });
-    if (!pollResult.ok) {
+    if (pollResult.ok === false) {
       return { success: false, status: pollResult.status, error: pollResult.error };
     }
 

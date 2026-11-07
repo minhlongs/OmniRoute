@@ -12,7 +12,12 @@ import {
 } from "../../services/geminiThoughtSignatureStore.ts";
 import { capMaxOutputTokens, capThinkingBudget } from "../../../src/lib/modelCapabilities.ts";
 import { getModelSpec } from "../../../src/shared/constants/modelSpecs.ts";
-import { buildHistoricalToolResultContext } from "./openai-to-gemini/helpers.ts";
+import {
+  buildChangedToolNameMap,
+  buildHistoricalToolResultContext,
+  mergeConsecutiveSameRoleContents,
+  type GeminiContent,
+} from "./openai-to-gemini/helpers.ts";
 
 /**
  * Direct Claude → Gemini request translator.
@@ -42,7 +47,7 @@ export function claudeToGeminiRequest(model, body, stream, credentials = null) {
       : null;
   const result: {
     model: string;
-    contents: Array<Record<string, unknown>>;
+    contents: GeminiContent[];
     generationConfig: Record<string, unknown>;
     safetySettings: unknown;
     systemInstruction?: { role: string; parts: Array<{ text: string }> };
@@ -302,14 +307,19 @@ export function claudeToGeminiRequest(model, body, stream, credentials = null) {
     }
   }
 
-  const changedToolNameMap = new Map(
-    [...toolNameMap.entries()].filter(
-      ([sanitizedName, originalName]) => sanitizedName !== originalName
-    )
-  );
-  if (changedToolNameMap.size > 0) {
+  // Gemini lowercases tool names in its functionCall responses, so identity
+  // entries (Read → Read) still need a lowercase alias ("read" → "Read") for
+  // gemini-to-claude to restore the casing Claude Code registered (#9568 parity
+  // — that fix landed on the openai-to-gemini path only).
+  const changedToolNameMap = buildChangedToolNameMap(toolNameMap);
+  if (changedToolNameMap) {
     result._toolNameMap = changedToolNameMap;
   }
+
+  // Gemini strictly rejects requests containing consecutive messages with the same role
+  // (400 INVALID_ARGUMENT: "Request contains consecutive messages with the same role").
+  // Normalize adjacent same-role messages by concatenating their parts.
+  result.contents = mergeConsecutiveSameRoleContents(result.contents);
 
   return result;
 }

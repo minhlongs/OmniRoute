@@ -8,6 +8,7 @@ import {
 } from "../../src/lib/oauth/providers/openference.ts";
 import { OPENFERENCE_CONFIG } from "../../src/lib/oauth/constants/oauth.ts";
 import { getExecutor, hasSpecializedExecutor } from "../../open-sse/executors/index.ts";
+import { OAUTH_ENDPOINTS } from "../../open-sse/config/constants.ts";
 import { openferenceProvider } from "../../open-sse/config/providers/registry/openference/index.ts";
 import { refreshOpenferenceToken } from "../../open-sse/services/tokenRefresh/providers/openference.ts";
 import { OAUTH_TEST_CONFIG } from "../../src/app/api/providers/[id]/test/oauthTestConfig.ts";
@@ -117,6 +118,10 @@ test("Openference is registered as an OAuth gateway with default executor", () =
 
   assert.equal(openferenceProvider.authType, "oauth");
   assert.equal(openferenceProvider.executor, "default");
+  assert.equal(openferenceProvider.oauth?.clientIdDefault, OPENFERENCE_CONFIG.clientId);
+  assert.equal(OAUTH_ENDPOINTS.openference.clientId, OPENFERENCE_CONFIG.clientId);
+  assert.match(OPENFERENCE_CONFIG.clientId, /^[a-z]+$/);
+  assert.equal(OPENFERENCE_CONFIG.clientId.length, 9);
   assert.equal(openferenceProvider.baseUrl, "https://api.openference.com/v1/chat/completions");
   assert.deepEqual(
     openferenceProvider.models?.map((model) => model.id),

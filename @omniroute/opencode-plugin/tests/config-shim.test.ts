@@ -33,6 +33,7 @@ import {
   createOmniRouteProviderHook,
   OmniRoutePlugin,
   resolveOmniRoutePluginOptions,
+  _resetInflightRefresh,
   type OmniRouteCombosFetcher,
   type OmniRouteEnrichmentEntry,
   type OmniRouteEnrichmentFetcher,
@@ -46,6 +47,16 @@ import {
   type OmniRouteReadAuthJson,
   type OmniRouteStaticProviderEntry,
 } from "../src/index.js";
+
+// ────────────────────────────────────────────────────────────────────────────
+// Test isolation: reset the module-level in-flight refresh guard between
+// tests so a detached refresh from a previous test doesn't leak into the
+// next one.
+// ────────────────────────────────────────────────────────────────────────────
+
+test.beforeEach(() => {
+  _resetInflightRefresh();
+});
 
 // ────────────────────────────────────────────────────────────────────────────
 // Fixtures
@@ -752,6 +763,37 @@ test("buildStaticProviderEntry: hidden combos are excluded", () => {
   assert.ok(block.models["claude-sonnet-4-6"]);
 });
 
+test("buildStaticProviderEntry: expected raw auto twin does not warn and auto combo wins", () => {
+  const resolved = resolveOmniRoutePluginOptions({ providerId: "omniroute" });
+  const warnings: string[] = [];
+  const originalWarn = console.warn;
+  console.warn = (...args: unknown[]) => warnings.push(args.map(String).join(" "));
+
+  let block: OmniRouteStaticProviderEntry;
+  try {
+    block = buildStaticProviderEntry(
+      [{ id: "auto/coding" }],
+      [],
+      resolved,
+      "https://or.example/v1",
+      "sk-test",
+      undefined,
+      undefined,
+      undefined,
+      [{ id: "auto/coding", name: "Auto Coding", variant: "coding", candidateCount: 5 }]
+    );
+  } finally {
+    console.warn = originalWarn;
+  }
+
+  assert.equal(Object.keys(block.models).filter((key) => key === "auto/coding").length, 1);
+  assert.equal(block.models["auto/coding"].tool_call, true, "auto-combo entry wins over raw twin");
+  assert.deepEqual(
+    warnings.filter((warning) => warning.includes("collides with an existing model")),
+    []
+  );
+});
+
 // ────────────────────────────────────────────────────────────────────────────
 // Schema parity (modalities / cost / release_date / limit cleanup)
 // ────────────────────────────────────────────────────────────────────────────
@@ -1239,7 +1281,10 @@ test("config: diskCache hydrates stale snapshot when /v1/models throws", async (
   );
   assert.equal(writes, 0, "disk write skipped when live fetch failed");
   assert.ok(
-    logger.entries.some((e) => String(e[0]).includes("using stale disk cache")),
+    logger.entries.some((e) =>
+      String(e[0]).includes("using stale disk cache") ||
+      String(e[0]).includes("warm startup from disk snapshot")
+    ),
     "disk-cache hydration breadcrumb emitted"
   );
 });

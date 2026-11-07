@@ -164,7 +164,7 @@ export async function cleanupCompressionAnalytics(): Promise<CleanupResult> {
 }
 
 /**
- * Clean up old mcp_audit_log based on retention settings.
+ * Clean up old mcp_tool_audit based on retention settings.
  */
 export async function cleanupMcpAudit(): Promise<CleanupResult> {
   const db = getDbInstance();
@@ -178,15 +178,15 @@ export async function cleanupMcpAudit(): Promise<CleanupResult> {
   const result: CleanupResult = { deleted: 0, errors: 0 };
 
   try {
-    const stmt = db.prepare("DELETE FROM mcp_tool_audit WHERE timestamp < ?");
+    const stmt = db.prepare("DELETE FROM mcp_tool_audit WHERE created_at < ?");
     const runResult = stmt.run(cutoffISO);
     result.deleted = runResult.changes;
 
     console.log(
-      `[Cleanup] Deleted ${result.deleted} mcp_audit_log older than ${retentionDays} days`
+      `[Cleanup] Deleted ${result.deleted} mcp_tool_audit older than ${retentionDays} days`
     );
   } catch (err: unknown) {
-    console.error("[Cleanup] Error cleaning mcp_audit_log:", err);
+    console.error("[Cleanup] Error cleaning mcp_tool_audit:", err);
     result.errors++;
   }
 
@@ -194,7 +194,32 @@ export async function cleanupMcpAudit(): Promise<CleanupResult> {
 }
 
 /**
- * Clean up old a2a_events based on retention settings.
+ * Clean up old config_audit_log based on retention settings.
+ */
+export async function cleanupConfigAudit(retentionDays = getRetentionSettings().configAudit): Promise<CleanupResult> {
+  const db = getDbInstance();
+  const result: CleanupResult = { deleted: 0, errors: 0 };
+
+  try {
+    const stmt = db.prepare(
+      "DELETE FROM config_audit_log WHERE datetime(timestamp) < datetime('now', '-' || ? || ' days')"
+    );
+    const runResult = stmt.run(String(retentionDays));
+    result.deleted = runResult.changes;
+
+    console.log(
+      `[Cleanup] Deleted ${result.deleted} config_audit_log older than ${retentionDays} days`
+    );
+  } catch (err: unknown) {
+    console.error("[Cleanup] Error cleaning config_audit_log:", err);
+    result.errors++;
+  }
+
+  return result;
+}
+
+/**
+ * Clean up old a2a_task_events based on retention settings.
  */
 export async function cleanupA2aEvents(): Promise<CleanupResult> {
   const db = getDbInstance();
@@ -208,13 +233,13 @@ export async function cleanupA2aEvents(): Promise<CleanupResult> {
   const result: CleanupResult = { deleted: 0, errors: 0 };
 
   try {
-    const stmt = db.prepare("DELETE FROM a2a_task_events WHERE timestamp < ?");
+    const stmt = db.prepare("DELETE FROM a2a_task_events WHERE created_at < ?");
     const runResult = stmt.run(cutoffISO);
     result.deleted = runResult.changes;
 
-    console.log(`[Cleanup] Deleted ${result.deleted} a2a_events older than ${retentionDays} days`);
+    console.log(`[Cleanup] Deleted ${result.deleted} a2a_task_events older than ${retentionDays} days`);
   } catch (err: unknown) {
-    console.error("[Cleanup] Error cleaning a2a_events:", err);
+    console.error("[Cleanup] Error cleaning a2a_task_events:", err);
     result.errors++;
   }
 
@@ -344,14 +369,16 @@ export async function cleanupXpAuditLog(): Promise<CleanupResult> {
 
 /**
  * Clean up old compression_run_telemetry based on retention settings. (#6848)
- * Uses unix-epoch `timestamp` column (INTEGER).
+ * The `timestamp` column stores epoch milliseconds (recordCompressionRun stamps
+ * Date.now()), so the cutoff must be in milliseconds to match. Same unit bug as
+ * domain_cost_history (#9625), which this function was missed by.
  */
 export async function cleanupCompressionRunTelemetry(): Promise<CleanupResult> {
   const db = getDbInstance();
   const retention = getRetentionSettings();
 
   const retentionDays = retention.compressionRunTelemetry;
-  const cutoffEpoch = Math.floor(Date.now() / 1000) - retentionDays * 86_400;
+  const cutoffEpoch = Date.now() - retentionDays * 86_400_000;
 
   const result: CleanupResult = { deleted: 0, errors: 0 };
 
@@ -418,6 +445,7 @@ export async function runAutoCleanup(): Promise<{
     usageHistory: await cleanupUsageHistory(),
     compressionAnalytics: await cleanupCompressionAnalytics(),
     mcpAudit: await cleanupMcpAudit(),
+    configAudit: await cleanupConfigAudit(),
     a2aEvents: await cleanupA2aEvents(),
     memoryEntries: await cleanupMemoryEntries(),
     domainCostHistory: await cleanupDomainCostHistory(),

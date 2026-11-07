@@ -8,14 +8,14 @@
 import { LMARENA_DIRECT_IMAGE_MODELS } from "./providers/registry/lmarena/directModels.ts";
 import { SEGMIND_IMAGE_PROVIDER } from "./providers/registry/segmind/imageModels.ts";
 import { KIE_IMAGE_MODELS } from "./providers/registry/kie/imageModels.ts";
-import { FREEPIK_IMAGE_PROVIDER } from "./providers/registry/freepik/index.ts";
+import { MAGNIFIC_IMAGE_PROVIDER } from "./providers/registry/magnific/index.ts";
 import { STABILITY_AI_IMAGE_MODELS } from "./providers/registry/stability-ai/imageModels.ts";
-import { GEMINI_IMAGEN_PROVIDER } from "./providers/registry/gemini/imageModels.ts";
 import { CHEAPERINFERENCE_IMAGE_PROVIDER } from "./providers/registry/cheaperinference/imageModels.ts";
 import {
   ADOBE_FIREFLY_IMAGE_ROUTING_ALIASES,
   toRegistryImageModels,
 } from "../services/adobeFireflyModels.ts";
+import { AI_HORDE_IMAGE_PROVIDER } from "./providers/registry/aihorde/imageModels.ts";
 
 interface ImageModelEntry {
   id: string;
@@ -172,6 +172,17 @@ function resolveImageModelAlias(modelStr) {
   return alias ? { provider: alias.provider, model: alias.model } : null;
 }
 
+// A bare alias may only rewrite a provider-prefixed model when it stays on the
+// SAME provider (e.g. `antigravity/gemini-3.1-flash-image-preview` →
+// antigravity's callable `gemini-3.1-flash-image`). A cross-provider bare alias
+// must NOT override an explicit prefix — #9982 removed the unconditional bare
+// fallback because `fal-ai/flux-2-max` was being hijacked to black-forest-labs
+// by the bare `flux-2-max` alias.
+function resolveSameProviderBareAlias(providerId, model) {
+  const aliased = resolveImageModelAlias(model);
+  return aliased && aliased.provider === providerId ? aliased : null;
+}
+
 function findImageModelConfig(providerId, modelId) {
   const provider = IMAGE_PROVIDERS[providerId];
   if (!provider) return null;
@@ -186,6 +197,23 @@ function resolveAliasImageRequired(alias, modelConfig) {
 }
 
 export const IMAGE_PROVIDERS: Record<string, ImageProviderConfig> = {
+  agnes: {
+    id: "agnes",
+    baseUrl: "https://apihub.agnes-ai.com/v1/images/generations",
+    authType: "apikey",
+    authHeader: "bearer",
+    format: "agnes-image",
+    models: [
+      {
+        id: "agnes-image-2.1-flash",
+        name: "Agnes Image 2.1 Flash",
+        inputModalities: ["text", "image"],
+        description: "Agnes text-to-image, image-to-image, and multi-image composition model",
+      },
+    ],
+    supportedSizes: ["1K", "2K", "3K", "4K"],
+  },
+
   "qwen-cloud-token-plan": {
     id: "qwen-cloud-token-plan",
     alias: "qct",
@@ -218,6 +246,7 @@ export const IMAGE_PROVIDERS: Record<string, ImageProviderConfig> = {
     authHeader: "bearer",
     format: "openai", // native OpenAI format
     models: [
+      { id: "dall-e-3", name: "DALL·E 3" },
       { id: "gpt-image-2", name: "GPT Image 2" },
       { id: "gpt-image-1.5", name: "GPT Image 1.5" },
       { id: "gpt-image-1-mini", name: "GPT Image 1 Mini" },
@@ -253,6 +282,45 @@ export const IMAGE_PROVIDERS: Record<string, ImageProviderConfig> = {
     format: "chatgpt-web",
     models: [{ id: "gpt-5.5", name: "GPT-5.5 Instant (ChatGPT Web Image)" }],
     supportedSizes: ["1024x1024", "1024x1536", "1536x1024"],
+  },
+
+  // #10466: Gemini Web session image generation (Nano Banana). Same
+  // web-cookie transport as the gemini-web chat provider — the handler
+  // drives the session executor in image mode and extracts the generated
+  // asset URLs from the StreamGenerate frames.
+  "gemini-web": {
+    id: "gemini-web",
+    alias: "gweb",
+    baseUrl: "https://gemini.google.com/app",
+    authType: "apikey",
+    authHeader: "cookie",
+    format: "gemini-web",
+    // `-web` suffix on purpose: the bare `nano-banana` id is owned by
+    // adobe-firefly (operator decision 2026-07-31, pinned by the
+    // cheaperinference-image-models guard). parseImageModel's bare-model scan
+    // walks providers in insertion order, so a bare `nano-banana` here would
+    // steal that resolution. Keep this id distinct.
+    models: [{ id: "nano-banana-web", name: "Nano Banana (Gemini Web Image)" }],
+    supportedSizes: ["1024x1024", "1024x1536", "1536x1024"],
+  },
+
+  // Cursor plan image generation via the Agent CLI native `generateImage` tool.
+  // Reuses the same OAuth/API-key connection as chat (`provider: "cursor"`).
+  // Requires the `agent` binary (CURSOR_AGENT_BIN) — see cursorAgentImage handler.
+  cursor: {
+    id: "cursor",
+    alias: "cu",
+    // Sentinel: execution is local Agent CLI, not an HTTP image API.
+    baseUrl: "agent://cursor-agent",
+    authType: "oauth",
+    authHeader: "bearer",
+    format: "cursor-agent-image",
+    models: [
+      { id: "auto", name: "Cursor Auto (Image)" },
+      { id: "composer-2", name: "Composer 2 (Image)" },
+      { id: "composer-2.5", name: "Composer 2.5 (Image)" },
+    ],
+    supportedSizes: ["1024x1024", "1024x1792", "1792x1024", "1024x1536", "1536x1024"],
   },
 
   "microsoft-designer-web": {
@@ -371,10 +439,6 @@ export const IMAGE_PROVIDERS: Record<string, ImageProviderConfig> = {
     supportedSizes: ["1024x1024", "1280x720", "720x1280", "1536x1024", "1024x1536"],
   },
 
-  // Google AI Studio Imagen family — dedicated :predict endpoint, not generateContent.
-  // See providers/registry/gemini/imageModels.ts for the full rationale.
-  gemini: GEMINI_IMAGEN_PROVIDER,
-
   //Curruntly no models serving
   nebius: {
     id: "nebius",
@@ -473,7 +537,7 @@ export const IMAGE_PROVIDERS: Record<string, ImageProviderConfig> = {
     ],
     supportedSizes: ["1024x1024", "1024x1792", "1792x1024"],
   },
-  freepik: FREEPIK_IMAGE_PROVIDER,
+  magnific: MAGNIFIC_IMAGE_PROVIDER,
   sdwebui: {
     id: "sdwebui",
     baseUrl: "http://localhost:7860/sdapi/v1/txt2img",
@@ -545,18 +609,21 @@ export const IMAGE_PROVIDERS: Record<string, ImageProviderConfig> = {
     authHeader: "key",
     format: "fal-ai",
     models: [
-      { id: "fal-ai/flux-2-max", name: "FLUX.2 Max" },
-      { id: "fal-ai/flux-2-pro", name: "FLUX.2 Pro" },
-      { id: "fal-ai/flux-2-flex", name: "FLUX.2 Flex" },
+      { id: "flux-2-max", name: "FLUX.2 Max" },
+      { id: "flux-2-pro", name: "FLUX.2 Pro" },
+      { id: "flux-2-flex", name: "FLUX.2 Flex" },
       { id: "bria/text-to-image/3.2", name: "Bria 3.2" },
-      { id: "fal-ai/bytedance/seedream/v4.5/text-to-image", name: "SeeDream V4.5" },
-      { id: "fal-ai/bytedance/dreamina/v3.1/text-to-image", name: "Dreamina V3.1" },
-      { id: "fal-ai/ideogram/v3", name: "Ideogram V3" },
+      { id: "bytedance/seedream/v4.5/text-to-image", name: "SeeDream V4.5" },
+      { id: "bytedance/dreamina/v3.1/text-to-image", name: "Dreamina V3.1" },
+      { id: "ideogram/v3", name: "Ideogram V3" },
+      // Prefix-only on purpose: adobe-firefly owns the bare nano-banana ids
+      // (operator decision 2026-07-31, pinned by cheaperinference-image-models
+      // guard). The dispatch path tolerates the fal-ai/ prefix (fal.ts).
       { id: "fal-ai/nano-banana-pro", name: "Nano Banana Pro" },
       { id: "fal-ai/nano-banana-2", name: "Nano Banana 2" },
-      { id: "fal-ai/recraft/v4/pro/text-to-image", name: "Recraft V4 Pro via Fal" },
-      { id: "fal-ai/recraft/v4/text-to-image", name: "Recraft V4 via Fal" },
-      { id: "fal-ai/stable-diffusion-v35-medium", name: "Stable Diffusion v3.5 Medium" },
+      { id: "recraft/v4/pro/text-to-image", name: "Recraft V4 Pro via Fal" },
+      { id: "recraft/v4/text-to-image", name: "Recraft V4 via Fal" },
+      { id: "stable-diffusion-v35-medium", name: "Stable Diffusion v3.5 Medium" },
     ],
     supportedSizes: ["1024x1024", "1024x1280", "1280x1024"],
   },
@@ -852,13 +919,19 @@ export const IMAGE_PROVIDERS: Record<string, ImageProviderConfig> = {
     // still pass supported 4K dimensions through the permissive request schema.
     supportedSizes: ["1024x1024", "2048x2048"],
   },
+  aihorde: AI_HORDE_IMAGE_PROVIDER,
 };
 
 /**
  * Get image provider config by ID
  */
 export function getImageProvider(providerId) {
-  return IMAGE_PROVIDERS[providerId] || null;
+  if (IMAGE_PROVIDERS[providerId]) return IMAGE_PROVIDERS[providerId];
+  if (!providerId) return null;
+  for (const config of Object.values(IMAGE_PROVIDERS)) {
+    if (config.alias === providerId) return config;
+  }
+  return null;
 }
 
 /**
@@ -878,21 +951,23 @@ export function parseImageModel(modelStr) {
     if (modelStr.startsWith(providerId + "/")) {
       const model = modelStr.slice(providerId.length + 1);
       const aliased =
-        resolveImageModelAlias(`${providerId}/${model}`) || resolveImageModelAlias(model);
+        resolveImageModelAlias(`${providerId}/${model}`) ||
+        resolveSameProviderBareAlias(providerId, model);
       return aliased || { provider: providerId, model };
     }
     // Check alias if available
     if (config.alias && modelStr.startsWith(config.alias + "/")) {
       const model = modelStr.slice(config.alias.length + 1);
       const aliased =
-        resolveImageModelAlias(`${providerId}/${model}`) || resolveImageModelAlias(model);
+        resolveImageModelAlias(`${providerId}/${model}`) ||
+        resolveSameProviderBareAlias(providerId, model);
       return aliased || { provider: providerId, model };
     }
   }
 
-  // No provider prefix — try to find the model in every provider
+  // No provider prefix — try to find the model in every provider, excluding cookie-auth (web) bridges
   for (const [providerId, config] of Object.entries(IMAGE_PROVIDERS)) {
-    if (config.routingAliases?.includes(modelStr) || config.models.some((m) => m.id === modelStr)) {
+    if (config.authHeader !== "cookie" && (config.routingAliases?.includes(modelStr) || config.models.some((m) => m.id === modelStr))) {
       return { provider: providerId, model: modelStr };
     }
   }
@@ -993,12 +1068,7 @@ export function getImageModelEntry(modelStr) {
   };
 }
 
-/**
- * An image input is only MANDATORY for edit-only models — those whose modalities
- * are `["image"]` with no `"text"`. Models listing both `["text", "image"]` accept
- * an image but can also run pure text-to-image, so they must NOT be gated on an
- * image input (that gate previously blocked 41 dual-modality t2i models).
- */
+/** Image input is mandatory only for edit-only models (`["image"]`, no `"text"`). Dual-modality models also accept pure t2i. */
 export function modalitiesRequireImageInput(inputModalities) {
   const list = Array.isArray(inputModalities) ? inputModalities : ["text"];
   return list.includes("image") && !list.includes("text");

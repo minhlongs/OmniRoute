@@ -262,6 +262,11 @@ export const liteEngine: CompressionEngine = {
   },
   apply(body, options) {
     const adapter = adaptBodyForCompression(body);
+    // stepConfig is Record<string, unknown>, so its compressToolResults is `unknown`.
+    // Only an explicit boolean counts as a step override — anything else falls through
+    // to global config.lite, then the default (keeps the type `boolean`, and a malformed
+    // step value can no longer leak through the `??` chain as `{}`).
+    const stepCompressToolResults = options?.stepConfig?.compressToolResults;
     const result = applyLiteCompression(adapter.body, {
       ...options,
       preserveSystemPrompt: options?.config?.preserveSystemPrompt !== false,
@@ -269,9 +274,9 @@ export const liteEngine: CompressionEngine = {
       // (step wins) into stepConfig, so consume that single effective value instead of
       // AND-ing root and step values — an explicit step `true` must override a global `false`.
       compressToolResults:
-        options?.stepConfig?.compressToolResults ??
-        options?.config?.lite?.compressToolResults ??
-        true,
+        typeof stepCompressToolResults === "boolean"
+          ? stepCompressToolResults
+          : (options?.config?.lite?.compressToolResults ?? true),
     });
     return adapter.adapted ? { ...result, body: adapter.restore(result.body) } : result;
   },

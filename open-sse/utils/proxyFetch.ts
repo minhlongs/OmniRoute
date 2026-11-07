@@ -13,12 +13,17 @@ import {
   proxyConfigToUrl,
   proxyUrlForLogs,
 } from "./proxyDispatcher.ts";
-import tlsClient from "./tlsClient.ts";
+import tlsClient, { type TlsFetchOptions } from "./tlsClient.ts";
 import { isProxyReachable } from "@/lib/proxyHealth";
 import {
   isControlPlaneProxyDirectFallbackEnabled,
   isFeatureFlagEnabled,
 } from "@/shared/utils/featureFlags";
+import {
+  directFetchWithBoundedResponseStart,
+  isDirectResponseStartTimeout,
+  resolveDirectHeadersTimeoutMs,
+} from "./directResponseStartTimeout.ts";
 
 // #9100: relay egress (Vercel / Deno / Cloudflare edge functions) used to go
 // through bare `originalFetch` — NO connection pooling, NO timeout, NO retry.
@@ -79,6 +84,32 @@ function isTlsFingerprintEnabled() {
   return process.env.ENABLE_TLS_FINGERPRINT === "true";
 }
 
+function tlsFingerprintProviderAllowed(
+  provider: string | null | undefined,
+  proxied: boolean
+): boolean {
+  const configured = process.env.TLS_FINGERPRINT_PROVIDERS?.trim();
+  // Preserve the legacy direct-only opt-in. The new proxied transport requires
+  // an explicit allowlist so enabling TLS cannot silently change proxy traffic.
+  if (!configured) return !proxied;
+  if (!provider) return false;
+  const normalizedProvider = provider.trim().toLowerCase();
+  return configured
+    .split(",")
+    .some((candidate) => candidate.trim().toLowerCase() === normalizedProvider);
+}
+
+type TlsClientLike = {
+  available: boolean;
+  fetch: (url: string, options?: TlsFetchOptions) => Promise<Response>;
+};
+let activeTlsClient: TlsClientLike = tlsClient;
+
+/** Test seam for exercising wreq selection without replacing the module loader. */
+export function setTlsClientForTest(client: TlsClientLike | null): void {
+  activeTlsClient = client ?? tlsClient;
+}
+
 // #8376: transport-level connect-failure codes that mean "the configured upstream
 // proxy (or the target itself, for direct egress) is unreachable" — as opposed to an
 // ordinary upstream HTTP error. Read `.code` first (stable across undici/node
@@ -122,10 +153,12 @@ function tagProxyUnreachable<T>(err: T): T {
   return err;
 }
 
-/** Per-request tracking of whether TLS fingerprint was used */
-type TlsFingerprintStore = { used: boolean };
-const tlsFingerprintContext = new AsyncLocalStorage<TlsFingerprintStore>();
-
+/** Per-request TLS identity and success telemetry. */
+type TlsFingerprintStore = {
+  used: boolean;
+  provider?: string | null;
+  sessionScope?: string;
+};
 /**
  * #5217 (Gap-secondary): a mutable sink that records the proxy actually applied
  * by `runWithProxyContext` for the in-flight request. Executors that pin their
@@ -227,20 +260,123 @@ function requestHasNonReplayableBody(
   return false;
 }
 
+const TLS_ALLOWED_OPTION_KEYS: Record<string, true> = {
+  body: true,
+  headers: true,
+  method: true,
+  redirect: true,
+  signal: true,
+};
+
+function isWreqBodySupported(body: unknown): boolean {
+  if (body == null || typeof body === "string") return true;
+  if (body instanceof ArrayBuffer || ArrayBuffer.isView(body)) return true;
+  if (body instanceof URLSearchParams) return true;
+  if (typeof Blob !== "undefined" && body instanceof Blob) return true;
+  if (typeof FormData !== "undefined" && body instanceof FormData) return true;
+  return false;
+}
+
+function isTlsRequestEligible(
+  input: RequestInfo | URL,
+  options: FetchWithDispatcherOptions
+): boolean {
+  if (typeof Request !== "undefined" && input instanceof Request) return false;
+  if (!isWreqBodySupported(options.body)) return false;
+  return Object.keys(options).every((key) => TLS_ALLOWED_OPTION_KEYS[key] === true);
+}
+
+function isTlsFallbackReplaySafe(
+  input: RequestInfo | URL,
+  options: FetchWithDispatcherOptions
+): boolean {
+  const method = (
+    options.method ??
+    (typeof Request !== "undefined" && input instanceof Request ? input.method : "GET")
+  ).toUpperCase();
+  return (
+    (method === "GET" || method === "HEAD" || method === "OPTIONS") &&
+    !requestHasNonReplayableBody(input, options)
+  );
+}
+
+function getEffectiveSignal(
+  input: RequestInfo | URL,
+  options: FetchWithDispatcherOptions
+): AbortSignal | null | undefined {
+  return (
+    options.signal ??
+    (typeof Request !== "undefined" && input instanceof Request ? input.signal : undefined)
+  );
+}
+
+function isWreqProxySupported(proxyUrl: string): boolean {
+  try {
+    const parsed = new URL(proxyUrl);
+    return (
+      (parsed.protocol === "http:" || parsed.protocol === "https:") &&
+      parsed.searchParams.get("family") === null
+    );
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Redact proxy URLs (and any bare `user:pass@host` credential tokens) from an
+ * upstream transport-error message before it is surfaced. #10032 keeps the
+ * underlying failure reason in the propagated error for diagnosability, but
+ * the raw message can embed the full proxy URL — including userinfo
+ * credentials — which must never bubble into response bodies (#9837, Hard
+ * Rule #12).
+ */
+function redactProxyDetailsInMessage(message: string): string {
+  return message
+    .replace(/\b(?:https?|socks[45][ah]?|socks):\/\/\S+/gi, "[redacted-proxy]")
+    .replace(/\b[^\s:@/]+:[^\s@/]*@\S+/g, "[redacted-proxy]");
+}
+
+function sanitizeTransportError(
+  error: unknown,
+  message: string,
+  fallbackCode: string
+): Error & { code: string; errorCode?: string; statusCode?: number } {
+  const source = error && typeof error === "object" ? (error as Record<string, unknown>) : {};
+  const sanitized = new Error(message) as Error & {
+    code: string;
+    errorCode?: string;
+    statusCode?: number;
+  };
+  sanitized.code =
+    typeof source.code === "string" && /^[A-Z0-9_:-]{1,64}$/.test(source.code)
+      ? source.code
+      : fallbackCode;
+  if (typeof source.errorCode === "string" && /^[a-zA-Z0-9_:-]{1,64}$/.test(source.errorCode)) {
+    sanitized.errorCode = source.errorCode;
+  }
+  if (typeof source.statusCode === "number" && Number.isFinite(source.statusCode)) {
+    sanitized.statusCode = source.statusCode;
+  }
+  return sanitized;
+}
+
 /** Injectable dependencies for testability (Approach B DI). */
 export type ProxyFetchDeps = {
   undiciFetch?: FetchWithDispatcher;
   nativeFetch?: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
+  findWorkingProxy?: (hostname: string, targetUrl: string) => Promise<string | null>;
 };
 
 type PatchState = {
   originalFetch: typeof globalThis.fetch;
   proxyContext: AsyncLocalStorage<unknown>;
+  tlsFingerprintContext?: AsyncLocalStorage<TlsFingerprintStore>;
   isPatched: boolean;
 };
 
 const isCloud = typeof caches !== "undefined" && typeof caches === "object";
 const PATCH_STATE_KEY = Symbol.for("omniroute.proxyFetch.state");
+const DIRECT_PROXY_CONTEXT = Symbol.for("omniroute.proxyFetch.direct-context");
 
 function getPatchState(): PatchState {
   const scopedGlobal = globalThis as typeof globalThis & {
@@ -251,6 +387,7 @@ function getPatchState(): PatchState {
     scopedGlobal[PATCH_STATE_KEY] = {
       originalFetch: globalThis.fetch,
       proxyContext: new AsyncLocalStorage(),
+      tlsFingerprintContext: new AsyncLocalStorage(),
       isPatched: false,
     };
   }
@@ -258,9 +395,11 @@ function getPatchState(): PatchState {
 }
 
 const patchState = getPatchState();
+patchState.tlsFingerprintContext ??= new AsyncLocalStorage<TlsFingerprintStore>();
 const originalFetch = patchState.originalFetch;
 const originalFetchWithDispatcher = originalFetch as FetchWithDispatcher;
 const proxyContext = patchState.proxyContext;
+const tlsFingerprintContext = patchState.tlsFingerprintContext;
 
 function noProxyMatch(targetUrl) {
   const noProxy = process.env.NO_PROXY || process.env.no_proxy;
@@ -381,6 +520,9 @@ export function resolveProxyForRequest(targetUrl) {
   }
 
   const contextProxy = proxyContext.getStore();
+  if (contextProxy === DIRECT_PROXY_CONTEXT) {
+    return { source: "direct", proxyUrl: null };
+  }
   if (contextProxy) {
     // #9551: NO_PROXY must bypass context-proxy too
     if (target && noProxyMatch(targetUrl)) {
@@ -398,16 +540,12 @@ export function resolveProxyForRequest(targetUrl) {
 }
 
 /**
- * A caller-initiated abort/timeout is not a proxy transport failure — it must
- * not be misreported as one. Prefer `signal.aborted` because
- * `AbortController.abort(reason)` may surface a custom Error rather than a
- * standard AbortError/TimeoutError name.
- * Ported from decolua/9router#2589 (`isCallerAbort`).
+ * A caller-initiated abort is identified only by the caller's effective signal.
+ * Dependency-internal TimeoutError/AbortError values are transport failures and
+ * retain the normal safe-method fallback behavior.
  */
-function isCallerAbort(error: unknown, signal: AbortSignal | null | undefined): boolean {
-  if (signal?.aborted === true) return true;
-  const name = (error as { name?: unknown } | null)?.name;
-  return name === "AbortError" || name === "TimeoutError";
+function isCallerAbort(_error: unknown, signal: AbortSignal | null | undefined): boolean {
+  return signal?.aborted === true;
 }
 
 function getTargetUrl(input) {
@@ -425,9 +563,12 @@ export async function runWithProxyContext(
     throw new TypeError("runWithProxyContext requires a callback function");
   }
 
-  // Inherit existing context if no specific proxyConfig is provided
+  // Inherit existing context if no specific proxyConfig is provided. A direct
+  // sentinel must remain direct without being mistaken for a proxy config.
   const currentContext = proxyContext.getStore();
-  const effectiveProxyConfig = proxyConfig || currentContext || null;
+  const inheritsDirect = currentContext === DIRECT_PROXY_CONTEXT && !proxyConfig;
+  const effectiveProxyConfig = proxyConfig || (inheritsDirect ? null : currentContext) || null;
+  const contextValue = inheritsDirect ? DIRECT_PROXY_CONTEXT : effectiveProxyConfig;
 
   const resolvedProxyUrl = effectiveProxyConfig ? proxyConfigToUrl(effectiveProxyConfig) : null;
 
@@ -435,8 +576,9 @@ export async function runWithProxyContext(
   // This fallback changes egress IP, so upgrades must not silently turn it on.
   const directFallbackOnUnreachable =
     opts?.directFallbackOnUnreachable === true && isControlPlaneProxyDirectFallbackEnabled();
-  // Run fn with the proxy context cleared so the request egresses directly.
-  const runDirect = () => proxyContext.run(null, fn);
+  // Keep an explicit direct sentinel so resolveProxyForRequest cannot re-read
+  // HTTPS_PROXY/HTTP_PROXY after the control-plane route decision.
+  const runDirect = () => proxyContext.run(DIRECT_PROXY_CONTEXT, fn);
 
   // T14: Proxy Fast-Fail (non-blocking, #9100)
   // Perform a short TCP reachability check BEFORE issuing upstream requests.
@@ -502,7 +644,7 @@ export async function runWithProxyContext(
     }
   }
 
-  return proxyContext.run(effectiveProxyConfig, async () => {
+  return proxyContext.run(contextValue, async () => {
     if (resolvedProxyUrl && effectiveProxyConfig !== currentContext) {
       // #9158: this fires on EVERY proxied request (innermost context wins).
       // Gate it behind the same env flag as the relay routing log so request
@@ -562,6 +704,11 @@ export async function runWithProxyContext(
   });
 }
 
+/** Run a request with an explicit direct-egress sentinel, bypassing proxy env/context lookup. */
+export function runWithDirectFetchContext<T>(fn: () => T): T {
+  return proxyContext.run(DIRECT_PROXY_CONTEXT, fn);
+}
+
 /**
  * Like {@link runWithProxyContext}, but if the assigned proxy is unreachable or fails
  * its pre-checks the request can degrade to a DIRECT connection instead of throwing.
@@ -583,6 +730,12 @@ async function patchedFetch(
   options: FetchWithDispatcherOptions = {},
   deps: ProxyFetchDeps = {}
 ) {
+  // Explicit direct contexts must win even when a caller supplied a stale
+  // dispatcher. Native fetch preserves direct streaming semantics.
+  if (proxyContext.getStore() === DIRECT_PROXY_CONTEXT) {
+    return originalFetch(input, options);
+  }
+
   if (options?.dispatcher) {
     // When a dispatcher is present, we MUST use the undici library fetch
     // to ensure version compatibility. Node 22 built-in fetch (undici v6)
@@ -604,34 +757,60 @@ async function patchedFetch(
   const { source, proxyUrl } = resolved;
 
   if (!proxyUrl) {
-    // TLS fingerprint spoofing for direct connections (no proxy configured)
-    if (isTlsFingerprintEnabled() && tlsClient.available) {
+    // TLS fingerprint spoofing for an already-resolved direct route. Explicit
+    // proxy:null prevents wreq from re-reading a global environment proxy.
+    const tlsStore = tlsFingerprintContext.getStore();
+    let tlsDirectFallback = false;
+    if (
+      isTlsFingerprintEnabled() &&
+      activeTlsClient.available &&
+      tlsFingerprintProviderAllowed(tlsStore?.provider, false) &&
+      isTlsRequestEligible(input, options)
+    ) {
       try {
-        const store = tlsFingerprintContext.getStore();
-        if (store) store.used = true;
-        return await tlsClient.fetch(targetUrl, {
-          ...options,
+        const response = await activeTlsClient.fetch(targetUrl, {
+          method: options.method,
           headers: options.headers,
-          signal: options.signal ?? undefined,
+          body: options.body as TlsFetchOptions["body"],
+          redirect: options.redirect,
+          signal: getEffectiveSignal(input, options),
+          proxy: null,
+          sessionScope: tlsStore?.sessionScope,
         });
+        if (tlsStore) tlsStore.used = true;
+        return response;
       } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        console.warn(
-          `[ProxyFetch] TLS fingerprint failed, falling back to native fetch: ${message}`
-        );
-        const store = tlsFingerprintContext.getStore();
-        if (store) store.used = false;
+        if (isCallerAbort(error, getEffectiveSignal(input, options))) throw error;
+        const sessionHadCookies =
+          !!error &&
+          typeof error === "object" &&
+          "sessionHadCookies" in error &&
+          error.sessionHadCookies === true;
+        if (!isTlsFallbackReplaySafe(input, options) || sessionHadCookies) {
+          throw sanitizeTransportError(
+            error,
+            sessionHadCookies
+              ? "TLS fingerprint request failed; stateful session cannot be replayed"
+              : "TLS fingerprint request failed; request is not safe to replay",
+            "TLS_FINGERPRINT_FAILED"
+          );
+        }
+        console.warn("[ProxyFetch] TLS fingerprint transport failed; using direct dispatcher");
+        if (tlsStore) tlsStore.used = false;
+        tlsDirectFallback = true;
       }
     }
-    // Direct connection (no proxy) — use undici with custom dispatcher for timeout control.
-    // Falls back to original native fetch if dispatcher initialization fails (#1054).
-    // Retries once on transient dispatcher errors before falling back (fix: proxyfetch-undici-retry).
-    //
-    // Non-replayable body guard: if the body is stream-like (ReadableStream/Blob)
-    // or the input is a Request that carries a body, the first dispatcher attempt
-    // owns that body. Retrying or falling back to native fetch would replay a
-    // consumed/locked body and can mask the original transport error with
-    // "Response body object should not be disturbed or locked".
+    // Bun already provides a native fetch implementation with connection and
+    // stream handling. The custom undici dispatcher path is Node-oriented and
+    // can leave Bun server responses pending even though the upstream request
+    // itself succeeds. Preserve the dispatcher path for Node and TLS-fingerprint
+    // requests, but use Bun's native fetch for ordinary direct egress.
+    if (process.versions.bun) {
+      const _nativeFetch =
+        (deps.nativeFetch as FetchWithDispatcher | undefined) ?? originalFetchWithDispatcher;
+      return _nativeFetch(input, options);
+    }
+    // Direct undici path: bound response-start, fresh-socket retry, and body guard.
     const hasNonReplayableBody = requestHasNonReplayableBody(input, options);
     const maxAttempts = hasNonReplayableBody ? 1 : 2;
     const _undiciDirect =
@@ -639,46 +818,61 @@ async function patchedFetch(
     const _nativeFallback =
       (deps.nativeFetch as FetchWithDispatcher | undefined) ?? originalFetchWithDispatcher;
     let lastDispatcherError: unknown = null;
+    const directHeadersTimeoutMs = resolveDirectHeadersTimeoutMs();
+    let targetHostForLogs = "";
+    try {
+      targetHostForLogs = new URL(targetUrl).host;
+    } catch {
+      // ignore — logging is best-effort
+    }
     for (let attempt = 0; attempt < maxAttempts; attempt++) {
       try {
-        return await _undiciDirect(input, {
-          ...options,
-          // #4252: first attempt uses the pooled keep-alive dispatcher; a retry
-          // (after a transient socket error) uses the no-keep-alive dispatcher so
-          // it opens a FRESH socket instead of grabbing another stale pooled one
-          // — the burst pattern was the retry re-hitting a dead pooled socket and
-          // then falling through to native fetch (which also pools) → 502.
-          dispatcher: attempt === 0 ? getDefaultDispatcher() : getRetryDispatcher(),
-        });
+        return await directFetchWithBoundedResponseStart(
+          input,
+          {
+            ...options,
+            dispatcher: attempt === 0 ? getDefaultDispatcher() : getRetryDispatcher(),
+          },
+          _undiciDirect,
+          directHeadersTimeoutMs
+        );
       } catch (dispatcherError) {
+        if (isDirectResponseStartTimeout(dispatcherError)) {
+          if (attempt === 0 && maxAttempts > 1) {
+            console.warn(
+              `[ProxyFetch] Direct response-start timeout (${directHeadersTimeoutMs}ms) on pooled dispatcher — retrying on fresh no-keep-alive dispatcher: ${targetHostForLogs}`
+            );
+            lastDispatcherError = dispatcherError;
+            continue;
+          }
+          throw dispatcherError;
+        }
         const msg =
           dispatcherError instanceof Error ? dispatcherError.message : String(dispatcherError);
-        // CAUTION: Do NOT fallback to native fetch if the error is a version mismatch (invalid onRequestStart)
-        // because the native fetch will definitely fail with the undici v8 dispatcher.
         if (msg.includes("onRequestStart")) {
           console.error(
             `[ProxyFetch] Fatal version mismatch: Dispatcher (v8) vs Fetch (v6/native). Hardware upgrade or SOCKS5 config isolation required. Error: ${msg}`
           );
           throw dispatcherError;
         }
-        // Only retry/fallback for connection/dispatcher errors, not HTTP errors.
-        // Prefer the .code property when available (more stable across undici
-        // versions than message-string matching); fall back to substring match
-        // for errors that lack a structured code.
+        // Retry/fallback only for connection errors, never HTTP errors.
         tagProxyUnreachable(dispatcherError);
         const errCode = (dispatcherError as { code?: unknown })?.code;
         if (
           msg.includes("fetch failed") ||
           errCode === "ECONNREFUSED" ||
           msg.includes("ECONNREFUSED") ||
+          errCode === "EAI_AGAIN" ||
+          msg.includes("EAI_AGAIN") ||
+          errCode === "ENOTFOUND" ||
+          msg.includes("ENOTFOUND") ||
+          errCode === "ETIMEDOUT" ||
+          msg.includes("ETIMEDOUT") ||
           (typeof errCode === "string" && errCode.startsWith("UND_ERR")) ||
           msg.includes("UND_ERR")
         ) {
           if (attempt === 0 && maxAttempts > 1) {
-            // First failure — retry once after a short backoff before giving up.
-            // Delay is OMNIROUTE_RETRY_BACKOFF_MS (default 10ms): a fixed backoff
-            // beats random jitter here because the retry opens a fresh socket, so
-            // jitter was pure added latency with no herd benefit.
+            // Retry after a short fixed backoff on a fresh socket.
             lastDispatcherError = dispatcherError;
             await new Promise((r) => setTimeout(r, RETRY_BACKOFF_MS));
             continue;
@@ -694,8 +888,12 @@ async function patchedFetch(
             throw tagProxyUnreachable(dispatcherError);
           }
 
-          // All attempts exhausted — try proxy fallback before native fetch
-          if (source === "direct" && isFeatureFlagEnabled("PROXY_AUTO_SELECT_ENABLED")) {
+          // Exhausted attempts: try proxy fallback before native fetch.
+          if (
+            !tlsDirectFallback &&
+            source === "direct" &&
+            isFeatureFlagEnabled("PROXY_AUTO_SELECT_ENABLED")
+          ) {
             let targetHostname = "";
             try {
               targetHostname = new URL(targetUrl).hostname;
@@ -703,7 +901,8 @@ async function patchedFetch(
               // ignore
             }
             if (targetHostname) {
-              const { findWorkingProxy } = await import("./proxyFallback.ts");
+              const findWorkingProxy =
+                deps.findWorkingProxy ?? (await import("./proxyFallback.ts")).findWorkingProxy;
               const fallbackProxyUrl = await findWorkingProxy(targetHostname, targetUrl);
               if (fallbackProxyUrl) {
                 try {
@@ -715,20 +914,14 @@ async function patchedFetch(
               }
             }
           }
-          // Preserve original phrase intact for monitoring: "Undici dispatcher failed, falling back to native fetch"
-          // #4252: append the flattened err.cause (code/syscall/errno/address) — the bare
-          // "fetch failed" message hides what actually broke, making bursts undiagnosable.
+          // Preserve the original monitoring phrase and append the transport cause.
           console.warn(
             `[ProxyFetch] Undici dispatcher failed, falling back to native fetch (after retry): ${describeFetchCause(dispatcherError)}`
           );
           try {
             return await _nativeFallback(input, options);
           } catch (nativeError) {
-            // #4252: both the undici dispatcher AND native fetch failed. Surface BOTH
-            // causes (server log) and tag the propagated error so the combo executor sees
-            // a diagnosable failure IMMEDIATELY instead of a bare "fetch failed" — the
-            // latter left jobs sitting until the 30s semaphore queue timeout, which then
-            // tripped the circuit breaker.
+            // Surface both dispatcher and native causes immediately.
             const detail = `dispatcher=[${describeFetchCause(dispatcherError)}] native=[${describeFetchCause(nativeError)}]`;
             console.warn(`[ProxyFetch] native fetch fallback ALSO failed: ${detail}`);
             if (nativeError instanceof Error) {
@@ -854,6 +1047,51 @@ async function patchedFetch(
     throw lastRelayError;
   }
 
+  // The proxied TLS overlay is deliberately narrow: approved provider, exact
+  // http(s) proxy, no relay/family pinning, and only options wreq can preserve.
+  const tlsStore = tlsFingerprintContext.getStore();
+  if (
+    isTlsFingerprintEnabled() &&
+    typeof tlsStore?.sessionScope === "string" &&
+    tlsStore.sessionScope.trim().length > 0 &&
+    activeTlsClient.available &&
+    tlsFingerprintProviderAllowed(tlsStore?.provider, true) &&
+    isTlsRequestEligible(input, options) &&
+    isWreqProxySupported(proxyUrl)
+  ) {
+    try {
+      const response = await activeTlsClient.fetch(targetUrl, {
+        method: options.method,
+        headers: options.headers,
+        body: options.body as TlsFetchOptions["body"],
+        redirect: options.redirect,
+        signal: getEffectiveSignal(input, options),
+        proxy: proxyUrl,
+        sessionScope: tlsStore?.sessionScope,
+      });
+      if (tlsStore) tlsStore.used = true;
+      return response;
+    } catch (error) {
+      if (isCallerAbort(error, getEffectiveSignal(input, options))) throw error;
+      const sessionHadCookies =
+        !!error &&
+        typeof error === "object" &&
+        "sessionHadCookies" in error &&
+        error.sessionHadCookies === true;
+      if (!isTlsFallbackReplaySafe(input, options) || sessionHadCookies) {
+        throw sanitizeTransportError(
+          error,
+          sessionHadCookies
+            ? "TLS fingerprint request failed; stateful session cannot be replayed"
+            : "TLS fingerprint request failed; request is not safe to replay",
+          "TLS_FINGERPRINT_FAILED"
+        );
+      }
+      console.warn("[ProxyFetch] TLS fingerprint transport failed; using proxy dispatcher");
+      if (tlsStore) tlsStore.used = false;
+    }
+  }
+
   // #9100: proxy path — attempt 0 uses the pooled keep-alive dispatcher
   // (pipelining 4, ONE reused TCP connection per proxy host). A transient
   // socket error on a stale pooled socket is retried ONCE on a fresh
@@ -872,6 +1110,7 @@ async function patchedFetch(
           attempt === 0 ? createProxyDispatcher(proxyUrl) : getProxyRetryDispatcher(proxyUrl),
       });
     } catch (error) {
+      if (isCallerAbort(error, getEffectiveSignal(input, options))) throw error;
       const msg = error instanceof Error ? error.message : String(error);
       const errCode = (error as { code?: unknown })?.code;
       const isTransportFailure =
@@ -889,13 +1128,22 @@ async function patchedFetch(
         await new Promise((r) => setTimeout(r, RETRY_BACKOFF_MS));
         continue;
       }
-      // A caller abort/timeout must propagate unchanged and without a noisy
-      // "Proxy request failed" log — it's not a proxy transport failure.
-      if (!isCallerAbort(error, options?.signal)) {
-        const message = error instanceof Error ? error.message : String(error);
-        console.error(`[ProxyFetch] Proxy request failed (${source}, fail-closed): ${message}`);
-      }
-      throw error;
+      tagProxyUnreachable(error);
+      // #10032: keep the underlying reason for diagnosability, but redact any
+      // proxy URL / credential tokens first — this error can bubble into
+      // response bodies (#9837, Hard Rule #12).
+      const originalMsg = redactProxyDetailsInMessage(
+        error instanceof Error ? error.message : String(error)
+      );
+      const sanitized = sanitizeTransportError(
+        error,
+        originalMsg ? `Proxy request failed: ${originalMsg}` : "Proxy request failed",
+        "PROXY_REQUEST_FAILED"
+      );
+      console.error(
+        `[ProxyFetch] Proxy request failed (${source}, fail-closed; code=${sanitized.code})`
+      );
+      throw sanitized;
     }
   }
   throw lastProxyError;
@@ -919,19 +1167,59 @@ if (!isCloud && !patchState.isPatched) {
   patchState.isPatched = true;
 }
 
+export type TlsTrackingIdentity = {
+  provider?: string | null;
+  sessionScope?: string;
+};
+
 /**
- * Run a function with TLS fingerprint tracking context.
- * After fn completes, returns { result, tlsFingerprintUsed }.
+ * Run a function with account-scoped TLS fingerprint tracking.
+ * Both historical forms remain valid: runWithTlsTracking(fn) and
+ * runWithTlsTracking(provider, fn).
  */
-export async function runWithTlsTracking(fn) {
-  const store = { used: false };
-  const result = await tlsFingerprintContext.run(store, fn);
+export async function runWithTlsTracking<T>(
+  fn: () => T
+): Promise<{ result: Awaited<T>; tlsFingerprintUsed: boolean }>;
+export async function runWithTlsTracking<T>(
+  provider: string | null | undefined,
+  fn: () => T
+): Promise<{ result: Awaited<T>; tlsFingerprintUsed: boolean }>;
+export async function runWithTlsTracking<T>(
+  identity: TlsTrackingIdentity,
+  fn: () => T
+): Promise<{ result: Awaited<T>; tlsFingerprintUsed: boolean }>;
+export async function runWithTlsTracking<T>(
+  providerOrIdentityOrFn: string | null | undefined | TlsTrackingIdentity | (() => T),
+  maybeFn?: () => T
+): Promise<{ result: Awaited<T>; tlsFingerprintUsed: boolean }> {
+  const legacyFn = typeof providerOrIdentityOrFn === "function" ? providerOrIdentityOrFn : maybeFn;
+  if (typeof legacyFn !== "function") {
+    throw new TypeError("runWithTlsTracking requires a callback function");
+  }
+  const identity: TlsTrackingIdentity =
+    providerOrIdentityOrFn &&
+    typeof providerOrIdentityOrFn === "object" &&
+    typeof providerOrIdentityOrFn !== "function"
+      ? providerOrIdentityOrFn
+      : {
+          provider: typeof providerOrIdentityOrFn === "string" ? providerOrIdentityOrFn : undefined,
+        };
+  const store: TlsFingerprintStore = {
+    used: false,
+    provider: identity.provider,
+    sessionScope: identity.sessionScope,
+  };
+  const result = await tlsFingerprintContext.run(store, legacyFn);
   return { result, tlsFingerprintUsed: store.used };
 }
 
-/** Check if TLS fingerprint is enabled and available */
-export function isTlsFingerprintActive() {
-  return isTlsFingerprintEnabled() && tlsClient.available;
+/** Check whether TLS fingerprint transport is enabled for this route identity. */
+export function isTlsFingerprintActive(provider?: string | null, proxied = false): boolean {
+  return (
+    isTlsFingerprintEnabled() &&
+    activeTlsClient.available &&
+    tlsFingerprintProviderAllowed(provider, proxied)
+  );
 }
 
 /**

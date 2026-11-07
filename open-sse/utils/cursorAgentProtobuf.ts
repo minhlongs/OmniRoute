@@ -285,6 +285,12 @@ const CURSOR_MODEL_ALIASES: Record<string, string> = {
   "composer-2-5-fast": "composer-2.5-fast",
   "composer-2.5-sdk-fast": "composer-2.5-fast",
   "composer-latest-fast": "composer-2.5-fast",
+  "grok-4.5-medium": "cursor-grok-4.5-medium",
+  "grok-4.5-fast-medium": "cursor-grok-4.5-medium-fast",
+  "grok-4.5-high": "cursor-grok-4.5-high",
+  "grok-4.5-fast-high": "cursor-grok-4.5-high-fast",
+  "grok-4.5-xhigh": "cursor-grok-4.5-xhigh",
+  "grok-4.5-fast-xhigh": "cursor-grok-4.5-xhigh-fast",
 };
 
 export function normalizeCursorModelId(modelId: string): string {
@@ -301,6 +307,10 @@ export function normalizeCursorModelId(modelId: string): string {
 // {id:"reasoning", value:<suffix>}. "-fast"/"-thinking" are separate toggles
 // (already handled elsewhere / not covered by this suffix set) and must not
 // be misread as an effort value.
+//
+// Grok (`cursor-grok-*` / legacy `grok-*`) follows the Claude-style `effort`
+// parameter. Without the split, ids like `cursor-grok-4.5-high` return empty
+// turns (same symptom as #7289). Combined `-high-fast` is supported.
 const CURSOR_EFFORT_SUFFIXES = ["low", "medium", "high", "xhigh", "max"] as const;
 
 /**
@@ -330,25 +340,101 @@ function splitCursorEffortSuffix(
 }
 
 /**
+ * Grok family: strip optional `-fast`, then effort suffix → ModelParameters.
+ * Prefer `cursor-grok-` over bare `grok-` so `cursor-grok-*` is not mis-matched.
+ */
+function resolveGrokRequestedModel(
+  normalized: string
+): { modelId: string; parameters: Array<{ id: string; value: string }> } | null {
+  const prefix = normalized.startsWith("cursor-grok-")
+    ? "cursor-grok-"
+    : normalized.startsWith("grok-")
+      ? "grok-"
+      : null;
+  if (!prefix) return null;
+
+  let id = normalized;
+  const extraParams: Array<{ id: string; value: string }> = [];
+  if (id.endsWith("-fast") && id.length > prefix.length + "-fast".length) {
+    id = id.slice(0, -"-fast".length);
+    extraParams.push({ id: "fast", value: "true" });
+  }
+
+  const effortSplit = splitCursorEffortSuffix(id, prefix, "effort");
+  if (effortSplit) {
+    return {
+      modelId: effortSplit.modelId,
+      parameters: [...effortSplit.parameters, ...extraParams],
+    };
+  }
+  if (extraParams.length > 0) {
+    return { modelId: id, parameters: extraParams };
+  }
+  return null;
+}
+
+/**
  * cursor-agent rewrites model ids before putting them on the wire:
  *   "auto"                 → RequestedModel { model_id: "default" }
+ *   "auto-cost"            → RequestedModel { model_id: "default",
+ *                                             parameters: [{id: "optimization", value: "cost"}] }
  *   "composer-2-fast"      → RequestedModel { model_id: "composer-2",
  *                                             parameters: [{id: "fast", value: "true"}] }
  *   "claude-opus-4-8-high" → RequestedModel { model_id: "claude-opus-4-8",
  *                                             parameters: [{id: "effort", value: "high"}] }
  *   "gpt-5.5-high"         → RequestedModel { model_id: "gpt-5.5",
  *                                             parameters: [{id: "reasoning", value: "high"}] }
+ *   "cursor-grok-4.5-high" → RequestedModel { model_id: "cursor-grok-4.5",
+ *                                             parameters: [{id: "effort", value: "high"}] }
  *
  * Other ids are passed through verbatim after spelling-variant normalization
  * (see normalizeCursorModelId).
  */
-export function resolveRequestedModel(modelId: string): {
+/** Cursor Router optimization levels (OpenCodex `CURSOR_ROUTING_LEVELS`). */
+export const CURSOR_ROUTING_LEVELS = ["cost", "balance", "intelligence"] as const;
+export type CursorRoutingLevel = (typeof CURSOR_ROUTING_LEVELS)[number];
+
+/**
+ * ModelParameter id for Cursor's Cost/Balance/Intelligence control on wire model
+ * `default` (OpenCodex `CURSOR_ROUTING_LEVEL_PARAMETER_ID`).
+ */
+export const CURSOR_ROUTING_LEVEL_PARAMETER_ID = "optimization";
+
+export type ResolveRequestedModelOptions = {
+  /**
+   * When set and containing the normalized client model id, send that id
+   * verbatim on AgentRun (skip composer-fast / Claude / GPT splits).
+   * Live AvailableModels returns flattened effort-suffixed ids; stripping them
+   * to a missing base causes Cursor `AI Model Not Found`. Auto / auto-* still
+   * map to wire `default` (+ optimization) even when present in this set.
+   */
+  liveCatalogIds?: ReadonlySet<string>;
+};
+
+export function resolveRequestedModel(
+  modelId: string,
+  opts?: ResolveRequestedModelOptions
+): {
   modelId: string;
   parameters: Array<{ id: string; value: string }>;
 } {
   const normalized = normalizeCursorModelId(modelId);
   if (normalized === "auto") {
     return { modelId: "default", parameters: [] };
+  }
+  // OpenCodex-style router variants: auto-cost / auto-balance / auto-intelligence
+  // → wire `default` + ModelParameter { id: "optimization", value: <level> }.
+  for (const level of CURSOR_ROUTING_LEVELS) {
+    if (normalized === `auto-${level}`) {
+      return {
+        modelId: "default",
+        parameters: [{ id: CURSOR_ROUTING_LEVEL_PARAMETER_ID, value: level }],
+      };
+    }
+  }
+  // Live catalog is authoritative for exact ids (flattened effort variants).
+  if (opts?.liveCatalogIds?.has(normalized)) {
+    return { modelId: normalized, parameters: [] };
   }
   // Strip the "-fast" suffix and surface it as a parameter — only the composer
   // family observably needs this split today, but the protocol field is generic.
@@ -357,6 +443,10 @@ export function resolveRequestedModel(modelId: string): {
       modelId: normalized.slice(0, -"-fast".length),
       parameters: [{ id: "fast", value: "true" }],
     };
+  }
+  const grokSplit = resolveGrokRequestedModel(normalized);
+  if (grokSplit) {
+    return grokSplit;
   }
   const claudeSplit = splitCursorEffortSuffix(normalized, "claude-", "effort");
   if (claudeSplit) {
@@ -406,6 +496,8 @@ export type AgentRunInput = {
   // encodeSelectedImageBody). Empty / undefined keeps the request
   // byte-identical to the text-only path.
   images?: EncodedImage[];
+  /** Exact live AvailableModels ids — see resolveRequestedModel liveCatalogIds. */
+  liveCatalogIds?: ReadonlySet<string>;
 };
 
 export { cursorImageAttachmentPath, encodeSelectedImageBody };
@@ -433,7 +525,9 @@ export function openAIToolsToMcpDefs(tools: OpenAITool[]): McpToolDefinition[] {
 export function encodeAgentRunRequest(input: AgentRunInput): Buffer {
   const conversationId = input.conversationId || crypto.randomUUID();
   const messageId = input.messageId || crypto.randomUUID();
-  const { modelId, parameters } = resolveRequestedModel(input.modelId);
+  const { modelId, parameters } = resolveRequestedModel(input.modelId, {
+    liveCatalogIds: input.liveCatalogIds,
+  });
 
   // UserMessage { text, message_id, selected_context, mode=1 }.
   // selected_context is normally an empty placeholder (required by the server

@@ -23,13 +23,21 @@
 import crypto from "node:crypto";
 import dns from "node:dns";
 import { isIP } from "node:net";
-import sharp from "sharp";
 import {
   parseAndValidatePublicUrl,
   isPrivateHost,
   OutboundUrlGuardError,
 } from "@/shared/network/outboundUrlGuard";
 import type { EncodedImage } from "./cursorAgentProtobuf.ts";
+
+type SharpFactory = (typeof import("sharp"))["default"];
+
+let sharpFactoryPromise: Promise<SharpFactory> | undefined;
+
+function loadSharp(): Promise<SharpFactory> {
+  sharpFactoryPromise ??= import("sharp").then((module) => module.default);
+  return sharpFactoryPromise;
+}
 
 /** Final per-image byte cap after prep (composer-api / wire bound). */
 export const MAX_CURSOR_IMAGE_BYTES = 1024 * 1024;
@@ -503,6 +511,7 @@ export async function prepareCursorImageForWire(input: {
   mimeType: string;
   detail?: string;
 }): Promise<PreparedImage> {
+  const sharp = await loadSharp();
   const mime = input.mimeType.toLowerCase();
   const softMax = softMaxBytesForDetail(input.detail);
   const qualities = jpegQualitiesForDetail(input.detail);
@@ -648,8 +657,13 @@ export async function prepareCursorImageForWire(input: {
  */
 export async function resolveCursorImages(
   imageUrls: string[],
-  options?: { detail?: string }
+  options?: { detail?: string; prepareForWire?: boolean }
 ): Promise<EncodedImage[]> {
+  // Cursor's SelectedImage wire format needs the JPEG soft-cap prep (#9840).
+  // Browser-upload callers (zai-web, conol-web) upload the ORIGINAL bytes to
+  // their own web UIs, so they opt out and keep the pre-#9840 decode+validate
+  // behavior: raw data + declared mimeType, capped at MAX_CURSOR_IMAGE_BYTES.
+  const prepareForWire = options?.prepareForWire !== false;
   if (imageUrls.length > MAX_CURSOR_IMAGES) {
     throw new CursorImageError(`Too many images in one request (max ${MAX_CURSOR_IMAGES}).`);
   }
@@ -668,6 +682,14 @@ export async function resolveCursorImages(
     }
     if (data.length > MAX_CURSOR_IMAGE_DECODE_BYTES) {
       throw new CursorImageError("Image input is too large to process safely.");
+    }
+
+    if (!prepareForWire) {
+      if (data.length > MAX_CURSOR_IMAGE_BYTES) {
+        throw new CursorImageError("Image input is too large (max 1 MiB). Resize and retry.");
+      }
+      out.push({ data, mimeType, uuid: crypto.randomUUID() });
+      continue;
     }
 
     const prepared = await prepareCursorImageForWire({

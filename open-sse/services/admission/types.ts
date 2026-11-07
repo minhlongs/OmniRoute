@@ -33,6 +33,7 @@ export type AdmissionRejectCode =
   | "ADMISSION_QUEUE_FULL"
   | "ADMISSION_DEADLINE"
   | "ADMISSION_ABORTED"
+  | "ADMISSION_LANE_EVICTED"
   | "ADMISSION_SHUTDOWN"
   | "ADMISSION_UNAVAILABLE";
 
@@ -79,6 +80,8 @@ export interface AdaptiveAdmissionConfig {
   maxIncreasePerWindow?: number;
   /** Optional cost quanta override used only when callers pass features instead of cost. */
   cost?: Partial<AdmissionCostConfig>;
+  /** Per-tenant virtual admission lanes (#9654). Default: false. */
+  virtualLanes?: boolean;
 }
 
 export interface AdmissionRequest {
@@ -91,6 +94,21 @@ export interface AdmissionRequest {
   signal?: AbortSignal;
   pressure?: AdmissionPressure;
 }
+
+/**
+ * #9654 Wave 2: per-target fan-out admission probe used by combo / fusion
+ * dispatchers. Returns true when the target may be dispatched, false when its
+ * tenant's virtual lane is full and the target should be skipped.
+ *
+ * Contract: strictly non-blocking (maxWaitMs 0 — skip, never queue), a no-op
+ * when virtual lanes are off (the parent request already holds the shared-queue
+ * lease), and keyed to the parent's tenantKey so it gates the same lane.
+ */
+export type PerTargetAdmissionHook = (target: {
+  modelStr: string;
+  executionKey: string;
+  body: unknown;
+}) => Promise<boolean>;
 
 export interface AdmissionReleaseMeta {
   latencyMs?: number;
@@ -137,6 +155,18 @@ export interface AdmissionSnapshot {
   virtualActiveCount: number;
   virtualQueuedCost: number;
   virtualQueuedCount: number;
+  /** True when per-tenant virtual lanes are enabled (#9654). */
+  virtualLanes: boolean;
+  /** Per-tenant virtual lane metrics (#9654). */
+  laneCount: number;
+  laneQueuedCost: number;
+  laneQueuedCount: number;
+  /** Per-tenant queue breakdown (opaque keys, never raw API keys). */
+  laneTenants: ReadonlyArray<{
+    tenantKey: string;
+    queuedCount: number;
+    queuedCost: number;
+  }>;
   admittedCount: number;
   rejectedCount: number;
   wouldAdmitCount: number;

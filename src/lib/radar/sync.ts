@@ -121,6 +121,15 @@ export function compareVersions(a: string, b: string): number {
   return 0;
 }
 
+function cachedSchemaVersion(cache: RadarCacheEntry): 1 | 2 | null {
+  try {
+    const parsed = RadarFeedSchema.safeParse(JSON.parse(cache.payload) as unknown);
+    return parsed.success ? parsed.data.schemaVersion : null;
+  } catch {
+    return null;
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Scheduling helper (exported for UI/route wiring later)
 // ---------------------------------------------------------------------------
@@ -187,7 +196,7 @@ export async function syncRadar(deps: SyncDeps = {}): Promise<SyncStatus> {
     const baseUrl = (process.env.RADAR_FEED_URL || DEFAULT_FEED_BASE_URL).replace(/\/+$/, "");
     const url = `${baseUrl}/v1/catalog/latest`;
 
-    const headers: Record<string, string> = {};
+    const headers: Record<string, string> = { "x-omniroute-radar-schema": "2" };
     if (settings.supporterKey) {
       headers["Authorization"] = `Bearer ${settings.supporterKey}`;
     }
@@ -266,7 +275,14 @@ export async function syncRadar(deps: SyncDeps = {}): Promise<SyncStatus> {
       return { status: "invalid_schema" };
     }
 
-    // Step 7: Version floor
+    // Step 7: Resolve the served tier before the version floor. A single-use
+    // supporter key deliberately transitions from live to community after its
+    // first catalog pull, and the community snapshot can be older.
+    const servedTier = parseServedTierHeader(res.headers.get("x-omniroute-feed-tier")) ?? feed.tier;
+
+    // Step 8: Version floor. Same/older versions are rejected within a tier,
+    // but a verified live -> community transition must replace the privileged
+    // cache even when the community snapshot is older.
     let existingCache: RadarCacheEntry | null = null;
     if (getCacheFn) {
       existingCache = getCacheFn();
@@ -275,16 +291,24 @@ export async function syncRadar(deps: SyncDeps = {}): Promise<SyncStatus> {
       existingCache = mod.getRadarCache();
     }
 
-    if (existingCache && compareVersions(feed.version, existingCache.version) <= 0) {
+    const isEntitlementDowngrade = existingCache?.tier === "live" && servedTier === "community";
+    const versionComparison = existingCache
+      ? compareVersions(feed.version, existingCache.version)
+      : 1;
+    const isSameVersionSchemaUpgrade =
+      existingCache !== null &&
+      existingCache.tier === servedTier &&
+      versionComparison === 0 &&
+      feed.schemaVersion === 2 &&
+      cachedSchemaVersion(existingCache) === 1;
+    if (
+      existingCache &&
+      !isEntitlementDowngrade &&
+      !isSameVersionSchemaUpgrade &&
+      versionComparison <= 0
+    ) {
       return { status: "stale" };
     }
-
-    // Step 8: Resolve the served tier.
-    // The `x-omniroute-feed-tier` header reflects the tier ACTUALLY served
-    // (see `parseServedTierHeader`); fall back to the signed body's `tier`
-    // field only when the header is absent or unrecognized — never trust an
-    // arbitrary header value into the cache/UI.
-    const servedTier = parseServedTierHeader(res.headers.get("x-omniroute-feed-tier")) ?? feed.tier;
 
     // Step 9: Cache the result
     const cacheEntry: RadarCacheEntry = {

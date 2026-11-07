@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback, useRef } from "react";
+import { useTranslations } from "next-intl";
 
 export interface ProviderModel {
   id: string;
@@ -31,6 +32,7 @@ interface UseProviderModelsResult {
  * `providerId` changes).
  */
 export function useProviderModels(providerId: string): UseProviderModelsResult {
+  const t = useTranslations("providers");
   const [models, setModels] = useState<ProviderModel[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
@@ -50,7 +52,7 @@ export function useProviderModels(providerId: string): UseProviderModelsResult {
           const body = (await res.json().catch(() => null)) as {
             error?: { message?: string };
           } | null;
-          const msg = body?.error?.message ?? `HTTP ${res.status}`;
+          const msg = body?.error?.message ?? `${t("providerTestFailed")} (HTTP ${res.status})`;
           if (!cancelled) setError(msg);
           return;
         }
@@ -67,14 +69,19 @@ export function useProviderModels(providerId: string): UseProviderModelsResult {
               const connRes = await fetch("/api/providers");
               if (!connRes.ok || cancelled) return;
               const connData = (await connRes.json()) as {
-                connections?: Array<{ id: string; provider: string; isActive?: boolean }>;
+                connections?: Array<{
+                  id: string;
+                  provider: string;
+                  isActive?: boolean;
+                  providerSpecificData?: { autoFetchModels?: boolean };
+                }>;
               };
               if (cancelled) return;
               const providerConn = connData.connections?.find(
                 (c) => (c.provider === providerId || c.id === providerId) && c.isActive !== false
               );
 
-              if (providerConn && !cancelled) {
+              if (providerConn?.providerSpecificData?.autoFetchModels === true && !cancelled) {
                 const syncRes = await fetch(
                   `/api/providers/${encodeURIComponent(providerConn.id)}/sync-models?mode=sync`,
                   { method: "POST" }
@@ -116,7 +123,7 @@ export function useProviderModels(providerId: string): UseProviderModelsResult {
     };
     cleanupRef.current = cleanup;
     return cleanup;
-  }, [providerId]);
+  }, [providerId, t]);
 
   useEffect(() => {
     if (!providerId) {

@@ -63,6 +63,7 @@ export async function handleResponsesCore({
     connectionId,
     userAgent: null,
     comboName: null,
+    onStreamFailure: null,
   });
 
   // handleChatCore's union includes a bare Response (early returns that never

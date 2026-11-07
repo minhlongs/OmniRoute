@@ -348,6 +348,7 @@ describe("ConnectionsTable", () => {
         <Table connections={[conn]} receivedAt={Date.now()} degraded={[]} />
       ) as HTMLDivElement;
     });
+    const root = containers[containers.length - 1].root;
     const row = el!.querySelector("tbody tr") as HTMLTableRowElement;
     act(() => {
       row.click();
@@ -355,10 +356,10 @@ describe("ConnectionsTable", () => {
     await waitFor(() => el!.textContent?.includes("detail.title"));
     // Re-render with the connection removed.
     act(() => {
-      render(<Table connections={[]} receivedAt={Date.now()} degraded={[]} />) as HTMLDivElement;
+      root.render(<Table connections={[]} receivedAt={Date.now()} degraded={[]} />);
     });
-    // No crash; the unmount of the old tree is handled by createRoot reuse here.
-    expect(true).toBe(true);
+    await waitFor(() => !el!.textContent?.includes("detail.title"));
+    expect(el!.textContent).not.toContain("detail.title");
   });
 });
 

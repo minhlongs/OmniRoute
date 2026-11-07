@@ -11,6 +11,7 @@
 import { getDbInstance } from "../core";
 import { backupDbFile } from "../backup";
 import { cleanupComboConnectionRefs } from "../combos";
+import { deleteLKGPByConnectionIds } from "../settings/lkgp";
 import {
   removeConnectionHealth,
   removeConnectionIndex,
@@ -65,6 +66,17 @@ async function _cleanupDeletedComboConnectionRefs(connectionIds: string | string
   }
 }
 
+async function _cleanupDeletedLKGPConnectionRefs(connectionIds: string | string[]): Promise<void> {
+  const ids = Array.isArray(connectionIds) ? connectionIds : [connectionIds];
+  if (ids.length === 0) return;
+
+  try {
+    await deleteLKGPByConnectionIds(ids);
+  } catch (error) {
+    console.error("Failed to clean up LKGP refs for deleted connections:", error);
+  }
+}
+
 export async function deleteProviderConnection(id: string) {
   const db = getDbInstance() as unknown as DbLike;
   const existing = db.prepare("SELECT provider FROM provider_connections WHERE id = ?").get(id);
@@ -77,6 +89,10 @@ export async function deleteProviderConnection(id: string) {
   })();
 
   await _cleanupDeletedComboConnectionRefs(id);
+  await _cleanupDeletedLKGPConnectionRefs(id);
+  void import("@omniroute/open-sse/services/combo/nativeCodexTurnPin.ts")
+    .then((module) => module.revokeNativeCodexTurnPinsForConnection(id))
+    .catch(() => {});
 
   removeConnectionHealth(id);
   removeConnectionIndex(id);
@@ -114,10 +130,14 @@ export async function deleteProviderConnections(ids: string[]): Promise<number> 
   })();
 
   await _cleanupDeletedComboConnectionRefs(existingIds);
+  await _cleanupDeletedLKGPConnectionRefs(existingIds);
 
   for (const id of ids) {
     removeConnectionHealth(id);
     removeConnectionIndex(id);
+    void import("@omniroute/open-sse/services/combo/nativeCodexTurnPin.ts")
+      .then((module) => module.revokeNativeCodexTurnPinsForConnection(id))
+      .catch(() => {});
   }
 
   backupDbFile("pre-write");
@@ -150,10 +170,14 @@ export async function deleteProviderConnectionsByProvider(providerId: string) {
   })();
 
   await _cleanupDeletedComboConnectionRefs(connectionIds);
+  await _cleanupDeletedLKGPConnectionRefs(connectionIds);
 
   for (const connectionId of connectionIds) {
     removeConnectionHealth(connectionId);
     removeConnectionIndex(connectionId);
+    void import("@omniroute/open-sse/services/combo/nativeCodexTurnPin.ts")
+      .then((module) => module.revokeNativeCodexTurnPinsForConnection(connectionId))
+      .catch(() => {});
   }
   backupDbFile("pre-write");
   invalidateDbCache("connections");

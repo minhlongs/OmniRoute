@@ -18,14 +18,14 @@ export interface ComboModelStep {
   /**
    * Account allowlist (#3266): scope this step's round-robin/weighted selection
    * to a subset of the provider's connections. Empty/absent = whole active pool.
+   * Reuses the `allowedConnectionIds` plumbing tag routing already populates.
    */
   allowedConnectionIds?: string[] | null;
   weight: number;
   label?: string;
   prompt?: string | null;
   tags?: string[];
-  /** Per-target timeout override (ms) — overrides combo-level targetTimeoutMs. */
-  timeoutMs?: number;
+  fallbackOnlyOnQuotaExhaustion?: boolean;
 }
 
 export interface ComboRefStep {
@@ -34,6 +34,7 @@ export interface ComboRefStep {
   comboName: string;
   weight: number;
   label?: string;
+  fallbackOnlyOnQuotaExhaustion?: boolean;
 }
 
 export interface ComboProviderWildcardStep {
@@ -288,6 +289,7 @@ export function normalizeComboStep(
   const weight = toWeight(value.weight);
   const label = toTrimmedString(value.label);
   const prompt = toTrimmedString(value.prompt);
+  const fallbackOnlyOnQuotaExhaustion = value.fallbackOnlyOnQuotaExhaustion === true;
 
   if (value.kind === "combo-ref") {
     const comboRefName = toTrimmedString(value.comboName);
@@ -298,6 +300,7 @@ export function normalizeComboStep(
       comboName: comboRefName,
       weight,
       ...(label ? { label } : {}),
+      ...(fallbackOnlyOnQuotaExhaustion ? { fallbackOnlyOnQuotaExhaustion: true } : {}),
     };
   }
 
@@ -396,8 +399,6 @@ export function normalizeComboStep(
         .map((connId) => toTrimmedString(connId))
         .filter((connId): connId is string => !!connId)
     : undefined;
-  const timeoutMs =
-    typeof value.timeoutMs === "number" && value.timeoutMs > 0 ? value.timeoutMs : undefined;
 
   return {
     id:
@@ -412,7 +413,7 @@ export function normalizeComboStep(
     ...(prompt ? { prompt } : {}),
     ...(tags && tags.length > 0 ? { tags } : {}),
     ...(allowedConnectionIds && allowedConnectionIds.length > 0 ? { allowedConnectionIds } : {}),
-    ...(timeoutMs !== undefined ? { timeoutMs } : {}),
+    ...(fallbackOnlyOnQuotaExhaustion ? { fallbackOnlyOnQuotaExhaustion: true } : {}),
   };
 }
 

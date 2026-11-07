@@ -34,6 +34,29 @@ export function shouldSuppressStaticModelBySyncedCoverage(opts: {
 }
 
 /**
+ * Exclusive live-catalog listing (Cursor): when the provider opts in and has a
+ * non-empty synced catalog, suppress EVERY static registry row — including
+ * effort-suffixed variants the coverage helper would otherwise preserve.
+ *
+ * Non-exclusive providers fall through to exact-id coverage suppression.
+ */
+export function shouldSuppressStaticModelForExclusiveListing(opts: {
+  exclusiveListing: boolean;
+  providerHasSynced: boolean;
+  staticModelId: string;
+  syncedModelIds: string[];
+}): boolean {
+  if (opts.exclusiveListing) {
+    return opts.providerHasSynced && opts.syncedModelIds.length > 0;
+  }
+  return shouldSuppressStaticModelBySyncedCoverage({
+    providerHasSynced: opts.providerHasSynced,
+    staticModelId: opts.staticModelId,
+    syncedModelIds: opts.syncedModelIds,
+  });
+}
+
+/**
  * Build a Map of canonical provider id -> set of synced display-model ids, so the
  * static loop can decide which static models a provider's synced discovery list
  * actually covers (and which static models it must preserve). Keyed by canonical

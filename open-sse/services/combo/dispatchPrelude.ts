@@ -16,13 +16,24 @@ import { getCachedProviderConnections } from "../../../src/lib/db/readCache";
 import { getCircuitBreaker } from "../../../src/shared/utils/circuitBreaker";
 import { fisherYatesShuffle, getNextFromDeck } from "../../../src/shared/utils/shuffleDeck";
 import { handleFusionChat, type FusionTuning } from "../fusion.ts";
+import { getResolvedModelCapabilities } from "../modelCapabilities.ts";
+import { errorResponseWithComboDiagnostics } from "../../utils/error.ts";
 import { parseModel } from "../model.ts";
 import { handlePipelineChat, type PipelineStep } from "../pipeline.ts";
 import type { resolveComboSetupConfig } from "../comboConfig.ts";
-import { clampComboDepth, MAX_GLOBAL_ATTEMPTS, resolveDelayMs } from "./comboPredicates.ts";
-import { resolveComboRuntimeUnits, resolveComboTargets } from "./comboStructure.ts";
+import { clampComboDepth, clampGlobalAttempts, resolveDelayMs } from "./comboPredicates.ts";
+import {
+  deriveRequestCompatibilityRequirements,
+  isVisionIncompatibleTarget,
+  resolveComboRuntimeUnits,
+  resolveComboTargets,
+} from "./comboStructure.ts";
 import { isComboModelVisible } from "./comboVisibility.ts";
 import { buildFusionHandleSingleModel, extractFusionPanelSpec } from "./fusionPanel.ts";
+import {
+  expandComboSystemPromptIfPresent,
+  resolveTargetFingerprint,
+} from "../comboAgentMiddleware.ts";
 import {
   clampStickyWeightedTargetLimit,
   getStickyRoundRobinStartIndex,
@@ -51,6 +62,7 @@ import type {
   ResolvedComboUnit,
   SingleModelTarget,
 } from "./types.ts";
+import type { PerTargetAdmissionHook } from "../admission/types.ts";
 
 type ComboSetupConfig = ReturnType<typeof resolveComboSetupConfig>;
 type RunCombo = (options: HandleComboChatOptions) => Promise<Response>;
@@ -60,6 +72,7 @@ type RunCombo = (options: HandleComboChatOptions) => Promise<Response>;
  * hand back to it when it dispatches a nested combo-ref.
  */
 type PreludeBaseOptionArgs = {
+  invocationId?: string;
   body: Record<string, unknown>;
   combo: ComboLike;
   handleSingleModel: HandleSingleModel;
@@ -71,6 +84,17 @@ type PreludeBaseOptionArgs = {
   signal?: AbortSignal | null;
   apiKeyAllowedConnections?: string[] | null;
   hiddenModelsByProvider?: HiddenModelsByProvider;
+  clientManagedResponsesContext?: boolean;
+  /** #9654 Wave 2: per-target lane-aware admission probe (see HandleComboChatOptions). */
+  perTargetAdmission?: PerTargetAdmissionHook | null;
+  /** #10225 — defer the hard context-overflow preflight when compression is enabled. */
+  deferContextOverflowWhenCompressible?: boolean;
+  /** Server-side compression exclusions (#8034). */
+  compressionExclusions?: import("../compression/exclusions.ts").CompressionExclusions;
+  /** #10503 — request-shape facts for the target-aware deferral check (see knownContextOverflow.ts). */
+  sourceFormat?: string | null;
+  endpointPath?: string | null;
+  requestHeaders?: Headers | Record<string, unknown> | null;
 };
 
 /** Rebuild handleComboChat's option bag verbatim for a recursive dispatch. */
@@ -87,6 +111,14 @@ function buildBaseOptions(a: PreludeBaseOptionArgs): HandleComboChatOptions {
     signal: a.signal,
     apiKeyAllowedConnections: a.apiKeyAllowedConnections,
     hiddenModelsByProvider: a.hiddenModelsByProvider,
+    invocationId: a.invocationId,
+    clientManagedResponsesContext: a.clientManagedResponsesContext,
+    perTargetAdmission: a.perTargetAdmission,
+    deferContextOverflowWhenCompressible: a.deferContextOverflowWhenCompressible,
+    compressionExclusions: a.compressionExclusions,
+    sourceFormat: a.sourceFormat,
+    endpointPath: a.endpointPath,
+    requestHeaders: a.requestHeaders,
   };
 }
 
@@ -160,7 +192,7 @@ export function normalizeNestedComboMode(value: unknown): NestedComboMode {
   return value === "execute" ? "execute" : "flatten";
 }
 
-function buildDefaultNesting(
+export function buildDefaultNesting(
   nesting: ComboNestingContext | null | undefined,
   comboName: string,
   config: ComboSetupConfig
@@ -171,7 +203,9 @@ function buildDefaultNesting(
       maxDepth: clampComboDepth(config.maxComboDepth),
       visitedComboNames: [comboName],
       rootComboName: comboName,
-      attemptBudget: { count: 0, limit: MAX_GLOBAL_ATTEMPTS },
+      // #11134: honor the operator-configured shared budget (clamped to the
+      // hard cap) instead of the hardcoded MAX_GLOBAL_ATTEMPTS.
+      attemptBudget: { count: 0, limit: clampGlobalAttempts(config.maxGlobalAttempts) },
     }
   );
 }
@@ -260,12 +294,20 @@ export async function tryPinnedModelDispatch(args: {
   // when allCombos is authoritative (non-empty) so we can resolve combo-refs;
   // the auto-combo redirect path passes an empty list and keeps prior behavior.
   const haveFullCombos = Array.isArray(allCombos) ? allCombos.length > 0 : !!allCombos;
-  const pinInCombo = resolveComboTargets(
+  // Eagerly resolve the combo's targets once (used for the pin-validity check AND
+  // #5501 template expansion). A non-authoritative allCombos (empty/missing)
+  // resolves to the combo's direct targets only — same semantics as the original
+  // `!haveFullCombos ||` short-circuit, without feeding `[]` to the nested resolver.
+  // #5501 also needs these targets eagerly for the combo system_message expansion;
+  // the release refactor threads `hiddenModelsByProvider` through the resolver so
+  // hidden models stay filtered on both the pin-validity and expansion paths.
+  const comboTargets = resolveComboTargets(
     combo,
-    haveFullCombos ? allCombos : null,
+    haveFullCombos ? allCombos : undefined,
     clampComboDepth(config.maxComboDepth),
     hiddenModelsByProvider
-  ).some((target) => target.modelStr === pinnedModel);
+  );
+  const pinInCombo = !haveFullCombos || comboTargets.some((t) => t.modelStr === pinnedModel);
   // Honor the pin only if it is still a combo target AND its provider is not
   // DURABLY down. Without the health gate a pin keeps routing a session to a
   // dead/credits-exhausted/throttled account forever (strategy bypassed, no
@@ -280,7 +322,22 @@ export async function tryPinnedModelDispatch(args: {
     );
     let pinnedResult: Response | null = null;
     try {
-      pinnedResult = await handleSingleModelWithTimeout(body, pinnedModel, {
+      // #5501: the combo system_message also expands on the pinned context path —
+      // a session pin bypasses the main loop, so without this the template would
+      // go literal from the second in-session request on. Target context comes
+      // from the pinned model's resolved combo target when available.
+      const pinnedTarget = comboTargets.find((t) => t.modelStr === pinnedModel);
+      const pinnedBody = expandComboSystemPromptIfPresent(body, combo, {
+        modelId: pinnedModel,
+        providerId:
+          pinnedTarget && pinnedTarget.provider !== "unknown" ? pinnedTarget.provider : "",
+        account:
+          typeof pinnedTarget?.label === "string" && pinnedTarget.label.trim().length > 0
+            ? pinnedTarget.label.trim()
+            : "",
+        fingerprint: pinnedTarget ? (resolveTargetFingerprint(pinnedTarget) ?? "") : "",
+      });
+      pinnedResult = await handleSingleModelWithTimeout(pinnedBody, pinnedModel, {
         modelPinned: true,
       } as SingleModelTarget);
     } catch (pinErr) {
@@ -338,18 +395,37 @@ export async function tryFusionDispatch(args: {
   signal?: AbortSignal | null;
   apiKeyAllowedConnections?: string[] | null;
   hiddenModelsByProvider?: HiddenModelsByProvider;
+  perTargetAdmission?: PerTargetAdmissionHook | null;
+  deferContextOverflowWhenCompressible?: boolean;
+  compressionExclusions?: import("../compression/exclusions.ts").CompressionExclusions;
+  sourceFormat?: string | null;
+  endpointPath?: string | null;
+  requestHeaders?: Headers | Record<string, unknown> | null;
   runCombo: RunCombo;
 }): Promise<Response | null> {
   const { cfg, combo, config, strategy, log } = args;
   const configuredJudge = typeof cfg.judgeModel === "string" ? cfg.judgeModel : undefined;
+  const judgeFusionRequirements = deriveRequestCompatibilityRequirements(args.body);
+  // #3378: the judge stays in the original conversation (full history, including
+  // any image_url blocks) — a judge whose vision support cannot be confirmed is
+  // exactly as unsafe as an unconfirmed panel member (#8332). Drop it the same
+  // way an operator-hidden judge is dropped below, so fusion falls back to a
+  // (vision-confirmed) panel member instead of silently losing the image for
+  // the synthesis step.
+  const judgeLacksConfirmedVision =
+    judgeFusionRequirements.requiresVision &&
+    !!configuredJudge &&
+    getResolvedModelCapabilities(configuredJudge).supportsVision !== true;
   // The panel is filtered for hidden models by resolveComboTargets, but the
   // explicit judge is a bare string that never passes through it (#8878). Drop a
   // hidden judge so fusion falls back to a surviving panel member instead of
   // dispatching a model the operator hid.
   const judgeModel =
-    configuredJudge && !isComboModelVisible(configuredJudge, null, args.hiddenModelsByProvider)
-      ? undefined
-      : configuredJudge;
+    configuredJudge &&
+    !judgeLacksConfirmedVision &&
+    isComboModelVisible(configuredJudge, null, args.hiddenModelsByProvider)
+      ? configuredJudge
+      : undefined;
   const fusionTuning =
     cfg.fusionTuning && typeof cfg.fusionTuning === "object"
       ? (cfg.fusionTuning as FusionTuning)
@@ -362,12 +438,50 @@ export async function tryFusionDispatch(args: {
   }
   if (strategy !== "fusion") return null;
 
-  const resolvedFusionTargets = resolveComboTargets(
+  const allResolvedFusionTargets = resolveComboTargets(
     combo,
     args.allCombos,
     clampComboDepth(config.maxComboDepth),
     args.hiddenModelsByProvider
   );
+  // #3378 (ported from upstream decolua/9router): every non-fusion combo
+  // strategy runs candidates through filterTargetsByRequestCompatibility before
+  // dispatch, which excludes a target whose vision support cannot be *confirmed*
+  // `=== true` for an image-bearing request (#8332 — unknown is treated the same
+  // as unsupported, never silently forwarded). Fusion resolved its panel via the
+  // raw target list and skipped that filter entirely, so a panel member with an
+  // unrecognized model id (capability lookup misses -> supportsVision !== true)
+  // still received the unmodified image body while the panel silently lost a
+  // "confirmed vision" voice. Apply the same exclusion here so the fusion panel
+  // only fans an image request out to targets with confirmed vision support.
+  const fusionRequirements = judgeFusionRequirements;
+  const resolvedFusionTargets = fusionRequirements.requiresVision
+    ? allResolvedFusionTargets.filter(
+        (target) => !isVisionIncompatibleTarget(target, fusionRequirements)
+      )
+    : allResolvedFusionTargets;
+  if (fusionRequirements.requiresVision && resolvedFusionTargets.length === 0) {
+    log.warn(
+      "COMBO",
+      `Combo "${combo.name}" fusion panel has no target with confirmed vision support for this image request — every candidate was excluded (#3378)`
+    );
+    return errorResponseWithComboDiagnostics(
+      400,
+      `No target in combo ${combo.name} has confirmed vision support for this image request`,
+      {
+        poolSize: allResolvedFusionTargets.length,
+        attempted: 0,
+        excluded: allResolvedFusionTargets.map((target) => ({
+          provider: target.provider,
+          model: target.modelStr,
+          reason: "vision",
+        })),
+        attemptOrder: [],
+        terminalReason: "capability_mismatch",
+      },
+      { code: "capability_mismatch", type: "invalid_request_error" }
+    );
+  }
   // extractFusionPanelSpec only understands model strings / combo refs, so the
   // resolved targets have to be flattened before it runs. Keep them indexed so
   // the panel can be rehydrated below — dispatching the bare strings strips
@@ -407,6 +521,7 @@ export async function tryFusionDispatch(args: {
     handleSingleModel: fusionHandleSingleModel,
     log,
     comboName: combo.name,
+    perTargetAdmission: args.perTargetAdmission,
     judgeModel,
     tuning: fusionTuning,
   });
@@ -561,6 +676,12 @@ export async function tryRuntimeUnitDispatch(args: {
   signal?: AbortSignal | null;
   apiKeyAllowedConnections?: string[] | null;
   hiddenModelsByProvider?: HiddenModelsByProvider;
+  perTargetAdmission?: PerTargetAdmissionHook | null;
+  deferContextOverflowWhenCompressible?: boolean;
+  compressionExclusions?: import("../compression/exclusions.ts").CompressionExclusions;
+  sourceFormat?: string | null;
+  endpointPath?: string | null;
+  requestHeaders?: Headers | Record<string, unknown> | null;
   runCombo: RunCombo;
 }): Promise<Response | null> {
   const { body, combo, config, strategy, allCombos, log, settings } = args;

@@ -116,7 +116,7 @@ export function getCallLogsTableMaxRows(): number {
 }
 
 export function getCallLogPipelineCaptureStreamChunks(): boolean {
-  return parseBoolean(process.env.CALL_LOG_PIPELINE_CAPTURE_STREAM_CHUNKS, true);
+  return parseBoolean(process.env.CALL_LOG_PIPELINE_CAPTURE_STREAM_CHUNKS, false);
 }
 
 export function getCallLogPipelineMaxSizeBytes(): number {
@@ -179,10 +179,17 @@ export function getChatLogMaxObjectKeys(): number {
 }
 
 /**
- * Was a hardcoded/default 8KB — trivially exceeded by any real multi-turn
- * agentic conversation, meaning the dashboard's "Full Conversation" panel
- * could only ever show a placeholder instead of the actual messages for
- * nearly every logged row of any conversation with real substance.
+ * Cap for a single logged request/response body before it gets replaced by a
+ * bare {_truncated, _originalBytes, messageCount, ...} summary instead of the
+ * full clone (open-sse/handlers/chatCore/logTruncation.ts::truncateForLog()).
+ * Was a hardcoded 8KB — trivially exceeded by any real multi-turn agentic
+ * conversation, which meant the dashboard's "Full Conversation" transcript
+ * panel could only ever show a placeholder instead of the actual messages
+ * for nearly every logged row. Bumped 128x (to 1MB) by default and exposed
+ * as an operator override for anyone who needs it even larger (or smaller,
+ * on a memory-constrained box) — see the same "protect memory across many
+ * call sites per request" reasoning truncateForLog()'s own doc comment
+ * explains for why some cap must still exist.
  */
 export function getChatLogMaxBodyBytes(): number {
   return parsePositiveInt(process.env.CHAT_LOG_MAX_BODY_KB, 1024) * 1024;

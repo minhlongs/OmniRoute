@@ -72,12 +72,26 @@ function maskSensitiveHeaders(headers: HeaderInput): Record<string, unknown> {
       : { ...(headers as Record<string, unknown>) };
 
   const masked = { ...headerEntries };
-  const sensitiveKeys = ["authorization", "x-api-key", "cookie", "token"];
+  const sensitiveKeys = [
+    "authorization",
+    "x-api-key",
+    "cookie",
+    "token",
+    "runtimekey",
+    "storage-state",
+    "storagestate",
+    "capability",
+    "x-omniroute-lease-owner",
+  ];
 
   for (const key of Object.keys(masked)) {
     const lowerKey = key.toLowerCase();
     // Whitelist x-ratelimit- headers from redaction
     if (lowerKey.startsWith("x-ratelimit-")) {
+      continue;
+    }
+    if (lowerKey === "x-omniroute-lease-owner") {
+      masked[key] = "[REDACTED]";
       continue;
     }
     if (!sensitiveKeys.some((candidate) => lowerKey.includes(candidate))) {

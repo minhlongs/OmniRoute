@@ -21,6 +21,7 @@ import { extractChatMessage, sendTelegramMessage } from "@/lib/telegram/botApi";
 import { getTelegramBotToken, isTelegramEnabled } from "@/lib/telegram/config";
 import { verifyInitData, parseInitData } from "@/lib/telegram/initData";
 import { proxyChat } from "@/lib/telegram/chatProxy";
+import { formatTelegramGatewayError } from "@/lib/telegram/errorMessage";
 import { resolveOmniRouteBaseUrl } from "@/shared/utils/resolveOmniRouteBaseUrl";
 
 /**
@@ -151,7 +152,7 @@ async function handleAndReply(chatId: number, text: string, messageId?: number):
     try {
       await sendTelegramMessage({
         chat_id: chatId,
-        text: `⚠️ Gateway error: ${(err as Error)?.message || "unknown"}`,
+        text: formatTelegramGatewayError(err),
       });
     } catch {
       // Nothing more we can do — the reply channel is down.

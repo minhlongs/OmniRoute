@@ -18,6 +18,7 @@
  */
 
 import { createHash } from "node:crypto";
+import { splitClaudeEffortSuffix } from "../config/providerModels.ts";
 import { getResolvedModelCapabilities } from "./modelCapabilities.ts";
 import type { ResolvedComboTarget } from "./combo/types.ts";
 
@@ -64,7 +65,7 @@ const MAX_CONVERSATION_AFFINITY_ENTRIES = 1000;
  * Task routing is additive: other strategies are wholly unaffected.
  */
 export function isTaskRoutingStrategy(strategy: unknown): boolean {
-  return ["smart", "task", "task-aware", "task_aware", "auto"].includes(
+  return ["smart", "task", "task-aware", "task_aware"].includes(
     String(strategy ?? "").toLowerCase()
   );
 }
@@ -157,8 +158,54 @@ function getTaskText(body: Record<string, unknown>): string {
 }
 
 function normalizeEffort(body: Record<string, unknown>): string {
+  const rawModel = typeof body?.["model"] === "string" ? body["model"].trim() : "";
+  const lowerModel = rawModel.toLowerCase();
+  const { effort: suffixEffort } = splitClaudeEffortSuffix(rawModel);
+
+  // Auxiliary / subagent Haiku requests without an explicit -high/-medium model suffix
+  // always resolve to the low tier even when a session-wide output_config.effort is present.
+  if (/\bhaiku\b/.test(lowerModel) && !suffixEffort) {
+    return "low";
+  }
+  if (suffixEffort) {
+    return suffixEffort.toLowerCase();
+  }
+
+  const outputConfig = body?.["output_config"] as Record<string, unknown> | undefined;
   const reasoning = body?.["reasoning"] as Record<string, unknown> | undefined;
-  return String(body?.["reasoning_effort"] ?? reasoning?.["effort"] ?? "").toLowerCase();
+  const thinking = body?.["thinking"] as Record<string, unknown> | undefined;
+  const genConf = body?.["generationConfig"] as Record<string, unknown> | undefined;
+  const thinkingConf =
+    (body?.["thinkingConfig"] as Record<string, unknown> | undefined) ??
+    (genConf?.["thinkingConfig"] as Record<string, unknown> | undefined) ??
+    (genConf?.["thinking_config"] as Record<string, unknown> | undefined);
+
+  const explicit =
+    outputConfig?.["effort"] ??
+    body?.["reasoning_effort"] ??
+    body?.["reasoningEffort"] ??
+    reasoning?.["effort"] ??
+    body?.["effort"] ??
+    body?.["thinkingLevel"] ??
+    body?.["thinking_level"] ??
+    thinkingConf?.["thinkingLevel"] ??
+    thinking?.["effort"];
+
+  if (typeof explicit === "string" && explicit.trim().length > 0) {
+    return explicit.trim().toLowerCase();
+  }
+
+  const budgetTokens = Number(thinking?.["budget_tokens"] ?? thinkingConf?.["thinkingBudget"] ?? 0);
+  if (Number.isFinite(budgetTokens) && budgetTokens > 0) {
+    if (budgetTokens >= 16384) return "high";
+    if (budgetTokens >= 4096) return "medium";
+    return "low";
+  }
+
+  if (/\b(opus|fable)\b/.test(lowerModel)) return "high";
+  if (/\bsonnet\b/.test(lowerModel)) return "medium";
+  if (/\bhaiku\b/.test(lowerModel)) return "low";
+  return "";
 }
 
 // ── Task signals ──────────────────────────────────────────────────────────────
@@ -329,6 +376,74 @@ export function modelPowerScore(modelStr: string): number {
 // ResolvedModelCapabilities fields that correspond to hard-cap modalities.
 const HARD_CAP_CHECKS = new Set(["vision"]);
 
+type EffortTierKey = "low" | "medium" | "high";
+
+const RTK_OMNI_TIER_SCORES: Readonly<Record<EffortTierKey, Readonly<Record<string, number>>>> = {
+  low: {
+    "agy/claude-sonnet-5-5-low": 800,
+    "antigravity/claude-sonnet-5-5-low": 780,
+    "agy/claude-opus-5-5-low": 740,
+    "antigravity/claude-opus-5-5-low": 720,
+    "zunef/claude-sonnet-5-5": 600,
+    "zunef/claude-opus-5-5": 560,
+    "agy/gemini-4-argon-low": 400,
+    "antigravity/gemini-4-argon-low": 380,
+    "gemini-web/gemini-4-argon-low": 360,
+    "gemini-web/gemini-4-argon": 340,
+    "agy/gemini-4-argon-medium": 220,
+    "antigravity/gemini-4-argon-medium": 210,
+    "gemini-web/gemini-4-argon-medium": 200,
+    "agy/gemini-4-argon-high": 160,
+    "antigravity/gemini-4-argon-high": 150,
+    "gemini-web/gemini-4-argon-high": 140,
+  },
+  medium: {
+    "agy/claude-sonnet-5-5-medium": 800,
+    "antigravity/claude-sonnet-5-5-medium": 780,
+    "agy/claude-opus-5-5-medium": 740,
+    "antigravity/claude-opus-5-5-medium": 720,
+    "zunef/claude-sonnet-5-5": 600,
+    "zunef/claude-opus-5-5": 560,
+    "agy/gemini-4-argon-medium": 400,
+    "antigravity/gemini-4-argon-medium": 380,
+    "gemini-web/gemini-4-argon-medium": 360,
+    "gemini-web/gemini-4-argon": 340,
+    "agy/gemini-4-argon-high": 240,
+    "antigravity/gemini-4-argon-high": 230,
+    "gemini-web/gemini-4-argon-high": 220,
+    "agy/gemini-4-argon-low": 160,
+    "antigravity/gemini-4-argon-low": 150,
+    "gemini-web/gemini-4-argon-low": 140,
+  },
+  high: {
+    "agy/claude-opus-5-5-high": 800,
+    "antigravity/claude-opus-5-5-high": 780,
+    "agy/claude-sonnet-5-5-high": 740,
+    "antigravity/claude-sonnet-5-5-high": 720,
+    "zunef/claude-opus-5-5": 600,
+    "zunef/claude-sonnet-5-5": 560,
+    "zunef/claude-fable-5-1": 520,
+    "agy/gemini-4-argon-high": 400,
+    "antigravity/gemini-4-argon-high": 380,
+    "gemini-web/gemini-4-argon-high": 360,
+    "gemini-web/gemini-4-argon": 340,
+    "agy/gemini-4-argon-medium": 220,
+    "antigravity/gemini-4-argon-medium": 210,
+    "gemini-web/gemini-4-argon-medium": 200,
+    "agy/gemini-4-argon-low": 160,
+    "antigravity/gemini-4-argon-low": 150,
+    "gemini-web/gemini-4-argon-low": 140,
+  },
+};
+
+function resolveEffortTierKey(task: TaskClassification): EffortTierKey | null {
+  const e = (task.effort || "").toLowerCase();
+  if (/^(high|xhigh|max|maximum|hard|deep)$/.test(e)) return "high";
+  if (/^(medium|standard|normal|balanced)$/.test(e)) return "medium";
+  if (/^(low|minimal|light|fast)$/.test(e)) return "low";
+  return null;
+}
+
 /**
  * Score a single model for a given task + capability requirements.
  * Higher score = better fit. Negative score = capability hard-miss.
@@ -338,6 +453,19 @@ export function scoreModelForTask(
   task: TaskClassification = classifyTask({}),
   required: Set<string> = new Set()
 ): number {
+  const normalizedTarget = `${modelStr ?? ""}`.trim().toLowerCase();
+  const tierKey = resolveEffortTierKey(task);
+  const tierBonus = tierKey ? RTK_OMNI_TIER_SCORES[tierKey][normalizedTarget] : undefined;
+  if (tierBonus !== undefined) {
+    let score = 1000 + tierBonus;
+    const caps = getResolvedModelCapabilities(modelStr);
+    for (const cap of required) {
+      if (!HARD_CAP_CHECKS.has(cap)) continue;
+      if (cap === "vision" && caps.supportsVision !== true) score -= 10000;
+    }
+    return score;
+  }
+
   const caps = getResolvedModelCapabilities(modelStr);
   const target = TASK_TARGET_POWER[task.level];
   const power = modelPowerScore(modelStr);

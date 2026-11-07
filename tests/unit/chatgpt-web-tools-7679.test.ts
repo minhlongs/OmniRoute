@@ -1,23 +1,15 @@
-// Hardened tool contract serialization for chatgpt-web thinking models (#7679).
+// Tool contract serialization for ChatGPT Web performance models (#7679).
 //
-// GPT-5.6 Thinking via chatgpt-web ignores the injected `<tool>` pseudo-contract
+// GPT-5.6 Sol via chatgpt-web ignores the injected `<tool>` pseudo-contract
 // and replies in prose claiming tools are unavailable. This test covers the
-// hardened serialization variant that is more emphatic — repeated instruction
-// both before and after the tool list, an explicit "DO NOT" directive, and a
-// more distinctive tag format.
-//
-// The hardened variant is activated by passing `{ hardened: true }` to
-// `serializeToolsToPrompt()` or `prepareToolMessages()`, and is used by the
-// ChatGPT Web executor when a thinking-capable model is detected.
+// nonce-bound serialization that clearly describes client-side tools and places
+// the full contract at the tail of the effective message list.
 
 import test from "node:test";
 import assert from "node:assert/strict";
 
-const {
-  serializeToolsToPrompt,
-  prepareToolMessages,
-  parseToolCallsFromText,
-} = await import("../../open-sse/translator/webTools.ts");
+const { serializeToolsToPrompt, prepareToolMessages, parseToolCallsFromText } =
+  await import("../../open-sse/translator/webTools.ts");
 
 const WEATHER_TOOL = {
   type: "function",
@@ -49,117 +41,84 @@ const TOOLS = [WEATHER_TOOL, SEARCH_TOOL];
 
 // ─── serializeToolsToPrompt — hardened variant ───────────────────────────────
 
-test("serializeToolsToPrompt({ hardened: true }) contains 'DO NOT' directive (#7679)", () => {
-  const result = serializeToolsToPrompt(TOOLS, { hardened: true });
-  assert.match(result, /Do NOT say you cannot use tools/);
+test("serializeToolsToPrompt states that client tools are available (#7679)", () => {
+  const result = serializeToolsToPrompt(TOOLS);
+  assert.match(result, /never claim they are unavailable/);
 });
 
-test("serializeToolsToPrompt({ hardened: true }) contains 'CAN and MUST' directive (#7679)", () => {
-  const result = serializeToolsToPrompt(TOOLS, { hardened: true });
-  assert.match(result, /CAN and MUST use these tools/);
+test("serializeToolsToPrompt includes the nonce-bound invocation contract (#7679)", () => {
+  const result = serializeToolsToPrompt(TOOLS);
+  assert.match(result, /secret binding "_nonce"/);
 });
 
-test("serializeToolsToPrompt({ hardened: true }) contains tool names from the input (#7679)", () => {
-  const result = serializeToolsToPrompt(TOOLS, { hardened: true });
+test("serializeToolsToPrompt contains tool names from the input (#7679)", () => {
+  const result = serializeToolsToPrompt(TOOLS);
   assert.match(result, /get_weather/);
   assert.match(result, /search_web/);
 });
 
-test("serializeToolsToPrompt({ hardened: true }) contains the tag format example (#7679)", () => {
-  const result = serializeToolsToPrompt(TOOLS, { hardened: true });
+test("serializeToolsToPrompt contains the tag format example (#7679)", () => {
+  const result = serializeToolsToPrompt(TOOLS);
   assert.match(result, /<tool>\{"name": "<tool_name>"/);
 });
 
-test("serializeToolsToPrompt({ hardened: true }) contains the post-list instruction block (#7679)", () => {
-  const result = serializeToolsToPrompt(TOOLS, { hardened: true });
-
-  // The tool list comes before the post-list instruction.
-  // Confirm both are present in order: tools list then IMPORTANT.
-  const toolIdx = result.indexOf("get_weather");
-  const importantIdx = result.indexOf("IMPORTANT:");
-  assert.ok(toolIdx >= 0, "tool name appears in the output");
-  assert.ok(importantIdx >= 0, "IMPORTANT block appears in the output");
-  assert.ok(
-    importantIdx > toolIdx,
-    "IMPORTANT block appears AFTER the tool list"
-  );
+test("serializeToolsToPrompt returns empty string for empty tools (#7679)", () => {
+  assert.equal(serializeToolsToPrompt([]), "");
 });
 
-test("serializeToolsToPrompt({ hardened: true }) returns empty string for empty tools (#7679)", () => {
-  assert.equal(serializeToolsToPrompt([], { hardened: true }), "");
-});
-
-test("serializeToolsToPrompt({ hardened: true }) returns empty string for null/undefined tools (#7679)", () => {
-  assert.equal(serializeToolsToPrompt(null, { hardened: true }), "");
-  assert.equal(serializeToolsToPrompt(undefined, { hardened: true }), "");
+test("serializeToolsToPrompt returns empty string for null/undefined tools (#7679)", () => {
+  assert.equal(serializeToolsToPrompt(null), "");
+  assert.equal(serializeToolsToPrompt(undefined), "");
 });
 
 // ─── serializeToolsToPrompt — backward compatibility ─────────────────────────
 
-test("serializeToolsToPrompt({ hardened: false }) produces same output as no-options (#7679)", () => {
-  const withFalse = serializeToolsToPrompt(TOOLS, { hardened: false });
-  const withDefault = serializeToolsToPrompt(TOOLS);
-  assert.equal(withFalse, withDefault);
-});
-
-test("serializeToolsToPrompt() without options uses the standard contract (#7679)", () => {
+test("serializeToolsToPrompt uses the client-tool contract (#7679)", () => {
   const result = serializeToolsToPrompt(TOOLS);
-  assert.doesNotMatch(result, /Do NOT say you cannot use tools/);
-  assert.doesNotMatch(result, /CAN and MUST use these tools/);
-  assert.match(result, /You can call tools/);
+  assert.match(result, /client application provides tools/);
+  assert.match(result, /These client tools ARE available/);
 });
 
 // ─── prepareToolMessages — hardened variant ──────────────────────────────────
 
-test("prepareToolMessages with { hardened: true } prepends system message with hardened content (#7679)", () => {
+test("prepareToolMessages appends the full contract after client messages (#7679)", () => {
   const body = { tools: TOOLS };
   const messages = [{ role: "user", content: "What is the weather?" }];
-  const result = prepareToolMessages(body, messages, { hardened: true });
+  const result = prepareToolMessages(body, messages);
 
   assert.equal(result.hasTools, true);
   assert.ok(Array.isArray(result.effectiveMessages));
   assert.equal(result.effectiveMessages.length, 2);
 
-  const sysMsg = result.effectiveMessages[0];
+  const sysMsg = result.effectiveMessages[1];
   assert.equal(sysMsg.role, "system");
-  assert.match(
-    String(sysMsg.content),
-    /Do NOT say you cannot use tools/
-  );
-  assert.match(
-    String(sysMsg.content),
-    /CAN and MUST use these tools/
-  );
+  assert.match(String(sysMsg.content), /never claim they are unavailable/);
+  assert.match(String(sysMsg.content), /secret binding "_nonce"/);
 });
 
-test("prepareToolMessages without options uses standard contract (#7679)", () => {
+test("prepareToolMessages adds the client-tool contract (#7679)", () => {
   const body = { tools: TOOLS };
   const messages = [{ role: "user", content: "hi" }];
   const result = prepareToolMessages(body, messages);
 
   assert.equal(result.hasTools, true);
-  const sysMsg = result.effectiveMessages[0];
+  const sysMsg = result.effectiveMessages[1];
   assert.equal(sysMsg.role, "system");
-  assert.match(String(sysMsg.content), /You can call tools/);
-  assert.doesNotMatch(String(sysMsg.content), /Do NOT say you cannot use tools/);
+  assert.match(String(sysMsg.content), /These client tools ARE available/);
 });
 
-test("prepareToolMessages with { hardened: true } and no tools returns hasTools: false (#7679)", () => {
+test("prepareToolMessages with no tools returns hasTools: false (#7679)", () => {
   const body = {};
   const messages = [{ role: "user", content: "hi" }];
-  const result = prepareToolMessages(body, messages, { hardened: true });
+  const result = prepareToolMessages(body, messages);
   assert.equal(result.hasTools, false);
   assert.equal(result.effectiveMessages.length, 1);
 });
 
 // ─── parseToolCallsFromText — compatibility with hardened instruction text ───
 
-test("parseToolCallsFromText correctly extracts <tool> blocks from hardened instruction text (#7679)", () => {
-  const hardenedPrompt = serializeToolsToPrompt(TOOLS, { hardened: true });
-
+test("parseToolCallsFromText correctly extracts response <tool> blocks (#7679)", () => {
   const text = [
-    hardenedPrompt,
-    "",
     "Let me look up the weather in Tokyo.",
     '<tool>{"name":"get_weather","arguments":{"location":"Tokyo"}}</tool>',
     "",
@@ -183,22 +142,17 @@ test("parseToolCallsFromText correctly extracts <tool> blocks from hardened inst
   });
 
   // Assert the actual tool call <tool> blocks are stripped from the content.
-  // The tool names themselves remain in the content because they appear in the
-  // prompt's tool list (the "Available tools:" section) — only the `<tool>{json}</tool>`
-  // blocks that were parsed as tool calls are stripped.
+  // Only the response text remains; both tool-call blocks are stripped.
   assert.doesNotMatch(result.content, /<tool>\{"name":"get_weather"/);
   assert.doesNotMatch(result.content, /<tool>\{"name":"search_web"/);
   assert.match(result.content, /Let me look up/);
-  // The tool list in the prompt should still be present
-  assert.match(result.content, /get_weather/);
-  assert.match(result.content, /search_web/);
+  assert.doesNotMatch(result.content, /get_weather/);
+  assert.doesNotMatch(result.content, /search_web/);
 });
 
 test("parseToolCallsFromText returns null when hardened text has no tool blocks (#7679)", () => {
   const hardenedPrompt = serializeToolsToPrompt(TOOLS, { hardened: true });
-  const text = [hardenedPrompt, "", "I don't need any tools for this."].join(
-    "\n"
-  );
+  const text = [hardenedPrompt, "", "I don't need any tools for this."].join("\n");
 
   const result = parseToolCallsFromText(text, "call", TOOLS);
 
@@ -207,7 +161,7 @@ test("parseToolCallsFromText returns null when hardened text has no tool blocks 
 });
 
 test("parseToolCallsFromText handles <tool> blocks line-boundary crossing in hardened text (#7679)", () => {
-  // Some thinking models may emit the tool block adjacent to explanatory text
+  // Some high-performance lanes may emit the tool block adjacent to explanatory text
   // with no preceding newline
   const text = [
     'I will use the weather tool. <tool>{"name":"get_weather","arguments":{"location":"Paris"}}</tool>',

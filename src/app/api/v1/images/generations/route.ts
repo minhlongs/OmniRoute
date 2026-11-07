@@ -19,9 +19,14 @@ import { enforceApiKeyPolicy } from "@/shared/utils/apiKeyPolicy";
 import { v1ImageGenerationSchema } from "@/shared/validation/schemas";
 import { isValidationFailure, validateBody } from "@/shared/validation/helpers";
 
+import { getComboByName } from "@/lib/db/combos";
 import { getAllCustomModels } from "@/lib/db/models";
 import { resolveProxyForConnection } from "@/lib/db/settings";
 import { resolveImageRouteModel } from "@/lib/images/imageRouteModel";
+import {
+  resolveLocalSyncedEndpointRoute,
+  type LocalSyncedEndpointRoute,
+} from "@/lib/providerModels/syncedEndpointRouting";
 import { runWithProxyContext } from "@omniroute/open-sse/utils/proxyFetch.ts";
 import { attachOmniRouteMetaHeaders } from "@/domain/omnirouteResponseMeta";
 import { calculateModalCost } from "@/lib/usage/costCalculator";
@@ -30,6 +35,7 @@ import { getSpecialtyModelsResponse } from "@/app/api/v1/_shared/specialtyCatalo
 import { enforceClientApiRouteAuth } from "@/shared/utils/clientApiRouteAuth";
 import { runWithCallLogApiKeyContext } from "@/lib/usage/callLogApiKeyContext";
 import { executeImageWithCredentialFallback } from "@/sse/services/imageCredentialRetry";
+import { AUTHZ_HEADER_PEER_LOCALITY } from "@/server/authz/headers";
 
 export const dynamic = "force-dynamic";
 
@@ -116,6 +122,24 @@ async function postHandler(request, context) {
   const policy = await enforceApiKeyPolicy(request, body.model);
   if (policy.rejection) return policy.rejection;
 
+  // #9239: Detect combo name and divert to full image combo execution.
+  // Checks before resolveImageRouteModel so we skip single-target flattening.
+  if (body.model && typeof body.model === "string" && !body.model.includes("/")) {
+    const combo = await getComboByName(body.model as string);
+    if (combo) {
+      const { executeImageCombo } = await import(
+        "@omniroute/open-sse/services/imageCombo"
+      );
+      return executeImageCombo(
+        body.model as string,
+        body,
+        { request, policy },
+        startTime,
+        log
+      );
+    }
+  }
+
   // #3205/#3215: resolve a combo/alias name (`image`) or a user-prefixed custom image
   // model (`myImg/gpt-image-2`) to its internal `<nodeId>/<model>` form so the
   // custom-model lookup and handler's resolvedProvider extraction resolve correctly.
@@ -125,6 +149,16 @@ async function postHandler(request, context) {
   // Parse model to get provider
   let { provider, model: requestedModel } = parseImageModel(body.model);
   let isCustomModel = false;
+  let syncedEndpointRoute: LocalSyncedEndpointRoute | null = null;
+
+  if (!provider) {
+    syncedEndpointRoute = await resolveLocalSyncedEndpointRoute(body.model, "images");
+    if (syncedEndpointRoute) {
+      provider = syncedEndpointRoute.provider;
+      body.model = `${syncedEndpointRoute.provider}/${syncedEndpointRoute.model}`;
+      isCustomModel = true;
+    }
+  }
 
   // If not in built-in registry, check custom models tagged for images
   if (!provider) {
@@ -211,9 +245,8 @@ async function postHandler(request, context) {
     credentials = await getProviderCredentialsWithQuotaPreflight(
       provider,
       null,
-      null,
-      requestedModel
-    );
+      syncedEndpointRoute?.connectionIds ?? null,
+      requestedModel    );
     if (!credentials) {
       return errorResponse(
         HTTP_STATUS.BAD_REQUEST,
@@ -271,6 +304,12 @@ async function postHandler(request, context) {
               ...(isCustomModel && { resolvedProvider: provider }),
               signal: request.signal,
               clientHeaders: publicBaseUrlHeaders(request.headers),
+              // Trusted "loopback"|"lan"|"remote" verdict stamped by the authz
+              // pipeline from the real TCP peer (never the spoofable Host
+              // header). Only the spawn-capable cursor-agent-image provider
+              // consumes this (Hard Rules #15 + #17) — every other image
+              // provider ignores it.
+              peerLocality: request.headers.get(AUTHZ_HEADER_PEER_LOCALITY),
             })
         );
 
@@ -307,11 +346,14 @@ async function postHandler(request, context) {
     });
   }
 
-  const errorPayload = toJsonErrorPayload((result as any).error, "Image generation provider error");
-  return new Response(JSON.stringify(errorPayload), {
-    status: (result as any).status,
-    headers: { "Content-Type": "application/json" },
-  });
+  const errorPayload = toJsonErrorPayload((result as any).error, "Image generation provider error") as {
+    error?: { message?: string };
+  };
+  const message =
+    typeof errorPayload?.error?.message === "string"
+      ? errorPayload.error.message
+      : "Image generation provider error";
+  return errorResponse((result as any).status, message);
 }
 
 export const POST = withInjectionGuard(postHandler);

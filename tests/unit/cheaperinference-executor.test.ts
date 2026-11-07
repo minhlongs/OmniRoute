@@ -58,20 +58,19 @@ test("resolves the Responses URL only for Responses-tagged models", () => {
   );
 });
 
-test("REGRESSION: targetFormat lookup resolves the provider ALIAS, not the id", async () => {
+test("REGRESSION: targetFormat lookup resolves both the provider id and alias", async () => {
   // PROVIDER_MODELS is keyed by alias ("cinf"); PROVIDERS is keyed by id
   // ("cheaperinference"). Passing the raw provider id to getModelTargetFormat —
   // which is what executors/xai.ts does, safely, because there alias === id —
-  // returns null here, silently downgrading every Responses model to
-  // chat-completions and 400ing upstream. This asserts the two keyings really do
-  // differ, so the alias resolution in the executor is not accidental.
-  const { PROVIDER_MODELS, PROVIDER_ID_TO_ALIAS, getModelTargetFormat } = await import(
-    "@omniroute/open-sse/config/providerModels.ts"
-  );
+  // used to return null here, silently downgrading every Responses model to
+  // chat-completions and 400ing upstream. The lookup now resolves the id through
+  // the alias map while the underlying registry remains alias-keyed.
+  const { PROVIDER_MODELS, PROVIDER_ID_TO_ALIAS, getModelTargetFormat } =
+    await import("@omniroute/open-sse/config/providerModels.ts");
   assert.equal(PROVIDER_ID_TO_ALIAS.cheaperinference, "cinf");
   assert.ok(PROVIDER_MODELS.cinf, "PROVIDER_MODELS is keyed by alias");
   assert.equal(PROVIDER_MODELS.cheaperinference, undefined, "…and NOT by provider id");
-  assert.equal(getModelTargetFormat("cheaperinference", "gpt-5.5"), null);
+  assert.equal(getModelTargetFormat("cheaperinference", "gpt-5.5"), "openai-responses");
   assert.equal(getModelTargetFormat("cinf", "gpt-5.5"), "openai-responses");
 });
 

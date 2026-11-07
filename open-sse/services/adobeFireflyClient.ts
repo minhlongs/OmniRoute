@@ -24,6 +24,19 @@
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { resolvePublicCred } from "../utils/publicCreds.ts";
 import { sanitizeErrorMessage } from "../utils/error.ts";
+import {
+  decodeAdobeJwtPayload,
+  findAllAdobeJwts,
+  isExactAdobeJwt,
+  stripAdobeJwts,
+} from "./adobeFireflySecurity.ts";
+import {
+  parseAdobeModelsDiscovery as parseAdobeModelsDiscoveryContract,
+  type AdobeFireflyDiscoveredModel,
+} from "./adobeFireflyModels.ts";
+
+export { decodeAdobeJwtPayload } from "./adobeFireflySecurity.ts";
+export type { AdobeFireflyDiscoveredModel } from "./adobeFireflyModels.ts";
 
 export const ADOBE_FIREFLY_IMAGE_SUBMIT_URL =
   "https://firefly-3p.ff.adobe.io/v2/3p-images/generate-async";
@@ -330,26 +343,6 @@ export function adobeFireflyBalanceApiKey(): string {
 }
 
 /** Decode IMS JWT payload (no signature verification — client-side claim read only). */
-export function decodeAdobeJwtPayload(token: string): Record<string, unknown> | null {
-  try {
-    // Do not call extractAdobeCredentialToken here (would recurse via guest checks).
-    let raw = String(token || "")
-      .trim()
-      .replace(/^bearer\s+/i, "")
-      .trim();
-    // If a blob was passed, take the first JWT-shaped segment.
-    const m = raw.match(/eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/);
-    if (m) raw = m[0];
-    const part = raw.split(".")[1];
-    if (!part) return null;
-    const json = Buffer.from(part.replace(/-/g, "+").replace(/_/g, "/"), "base64").toString("utf8");
-    const obj = JSON.parse(json);
-    return obj && typeof obj === "object" ? (obj as Record<string, unknown>) : null;
-  } catch {
-    return null;
-  }
-}
-
 /** AdobeID subject for x-account-id on balance / account_cluster calls. */
 export function extractAdobeAccountIdFromToken(token: string): string {
   const payload = decodeAdobeJwtPayload(token);
@@ -441,7 +434,7 @@ export function extractAdobeCredentialToken(raw: string): string {
   if (authMatch?.[1] && looksLikeAdobeJwt(authMatch[1])) return authMatch[1];
 
   // Any eyJ… JWT in the blob (HAR / multi-line). Prefer user AdobeID tokens.
-  const jwtMatches = value.match(/eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/g);
+  const jwtMatches = findAllAdobeJwts(value);
   if (jwtMatches && jwtMatches.length > 0) {
     const sorted = [...jwtMatches].sort((a, b) => b.length - a.length);
     const user = sorted.find((t) => looksLikeAdobeJwt(t) && isAdobeUserAccessToken(t));
@@ -490,14 +483,13 @@ export function extractAdobeCookieHeader(raw: string): string {
       if (/^bearer\s+/i.test(line)) return false;
       if (looksLikeAdobeJwt(line)) return false;
       // Drop standalone eyJ… segments
-      if (/^eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/.test(line)) return false;
+      if (isExactAdobeJwt(line)) return false;
       return true;
     })
     .join("; ");
 
   // Also strip inline eyJ JWT tokens that may sit inside a cookie string
-  const noJwt = cleaned
-    .replace(/eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/g, "")
+  const noJwt = stripAdobeJwts(cleaned)
     .replace(/;\s*;/g, ";")
     .replace(/^;\s*|\s*;$/g, "")
     .trim();
@@ -1146,7 +1138,7 @@ export function extractAdobeArpSessionId(cookieOrBlob: string): string {
 
   // JWT + ARP joined by whitespace (single-line PasswordBox paste collapses \n → space)
   // Split on whitespace only — NOT on "=" — so we never treat "aux_sid=…" as a token.
-  const withoutJwt = raw.replace(/eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/g, " ");
+  const withoutJwt = stripAdobeJwts(raw, " ");
   for (const token of withoutJwt.split(/[\s,;"']+/)) {
     let t = token.trim();
     // If this chunk is name=value from a Cookie header, only keep the value when
@@ -1346,6 +1338,11 @@ export function buildAdobeUploadHeaders(
  * Supports: image_url, image, images[], image_urls[], input_image(s), reference_images,
  * provider_options.*, and prompt_image fields used by the WinUI Media page.
  */
+export {
+  extractAdobeSourceImageReferences,
+  normalizeAdobeReferenceBlobs,
+} from "./adobeFireflyReferences.ts";
+
 export function extractAdobeSourceImageSources(body: unknown, max = 4): string[] {
   if (!body || typeof body !== "object") return [];
   const b = body as Record<string, unknown>;
@@ -2009,7 +2006,7 @@ export async function exchangeAdobeCookieForAccessToken(
       guestAllowed: false,
       fetchImpl,
     });
-    if (authed.ok) {
+    if (authed.ok === true) {
       if (
         isAdobeGuestAccessToken(authed.token) ||
         authed.data.account_type === "guest" ||
@@ -2032,7 +2029,7 @@ export async function exchangeAdobeCookieForAccessToken(
       guestAllowed: true,
       fetchImpl,
     });
-    if (guest.ok) {
+    if (guest.ok === true) {
       if (
         guest.data.account_type === "guest" ||
         guest.data.guestId ||
@@ -2235,54 +2232,11 @@ export async function fetchAdobeCreditsBalance(
 
 // ── Models discovery ────────────────────────────────────────────────────────
 
-export interface AdobeFireflyDiscoveredModel {
-  modelId: string;
-  modelVersion: string;
-  displayName: string;
-  modality: "image" | "video" | "audio" | "unknown";
-  enabled: boolean;
-  healthStatus?: string;
-}
-
 /**
  * Parse POST /v2/models/discovery response into flat model/version rows.
  */
 export function parseAdobeModelsDiscovery(body: unknown): AdobeFireflyDiscoveredModel[] {
-  const root = body && typeof body === "object" ? (body as Record<string, unknown>) : {};
-  const models = Array.isArray(root.models) ? root.models : [];
-  const out: AdobeFireflyDiscoveredModel[] = [];
-
-  for (const m of models) {
-    if (!m || typeof m !== "object") continue;
-    const rec = m as Record<string, unknown>;
-    const modelId = String(rec.modelId || "").trim();
-    if (!modelId) continue;
-    const versions =
-      rec.modelVersions && typeof rec.modelVersions === "object"
-        ? (rec.modelVersions as Record<string, unknown>)
-        : {};
-    for (const [ver, spec] of Object.entries(versions)) {
-      if (!spec || typeof spec !== "object") continue;
-      const s = spec as Record<string, unknown>;
-      if (s.enabled === false) continue;
-      const mods = Array.isArray(s.outputModality)
-        ? s.outputModality.map((x) => String(x).toLowerCase())
-        : [];
-      let modality: AdobeFireflyDiscoveredModel["modality"] = "unknown";
-      if (mods.includes("image")) modality = "image";
-      else if (mods.includes("video")) modality = "video";
-      else if (mods.includes("audio")) modality = "audio";
-      out.push({
-        modelId,
-        modelVersion: ver,
-        displayName: String(s.modelDisplayName || s.modelCaiDisplayName || ver),
-        modality,
-        enabled: s.enabled !== false,
-        healthStatus: typeof s.healthStatus === "string" ? s.healthStatus : undefined,
-      });
-    }
-  }
-  return out;
+  return parseAdobeModelsDiscoveryContract(body);
 }
 
 export async function discoverAdobeFireflyModels(

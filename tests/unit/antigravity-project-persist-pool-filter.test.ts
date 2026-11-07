@@ -22,9 +22,10 @@ test("drops connections whose projectId is missing, blank or not a string", () =
     { id: "numeric", projectId: 42 },
     { id: "blank-psd", providerSpecificData: { projectId: "" } },
     { id: "null-psd", providerSpecificData: null },
+    { id: "valid", projectId: "projects/valid" },
   ]);
 
-  assert.deepEqual(kept, []);
+  assert.deepEqual(kept, [{ id: "valid", projectId: "projects/valid" }]);
 });
 
 test("returns an empty pool for an empty input instead of throwing", () => {

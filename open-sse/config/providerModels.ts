@@ -170,8 +170,14 @@ export function findModelName(aliasOrId: string, modelId: string): string {
 }
 
 export function getModelTargetFormat(aliasOrId: string, modelId: string): string | null {
-  const models = PROVIDER_MODELS[aliasOrId];
-  const found = models?.find((m) => m.id === modelId) || getGlobalModel(modelId);
+  // Accept either the public alias ("cmd") or the raw provider id ("command-code"),
+  // mirroring getProviderModels (same pattern as #2798/#3870).
+  const alias = PROVIDER_ID_TO_ALIAS[aliasOrId] || aliasOrId;
+  // Strip provider prefix if present: "openai/gpt-5.6-luna" → "gpt-5.6-luna"
+  const prefixes = [`${aliasOrId}/`, `${alias}/`];
+  const prefix = prefixes.find((value) => modelId.startsWith(value));
+  const bareModelId = prefix ? modelId.slice(prefix.length) : modelId;
+  const found = PROVIDER_MODELS[alias]?.find((m) => m.id === bareModelId);
   if (found?.targetFormat) return found.targetFormat;
   // #5842: OpenAI "*-pro" reasoning models (o1-pro, gpt-5.x-pro) are only served by
   // the native /v1/responses endpoint — /v1/chat/completions 404s ("only supported
@@ -179,10 +185,17 @@ export function getModelTargetFormat(aliasOrId: string, modelId: string): string
   // covers dynamically-synced ids that post-date the catalog (same spirit as the gh
   // executor's /codex/i routing, 9router#102). Scoped to the openai alias so other
   // providers shipping *-pro ids keep their own endpoint semantics.
-  if (aliasOrId === "openai" && /-pro$/i.test(modelId)) return "openai-responses";
+  if (alias === "openai" && /-pro$/i.test(bareModelId)) return "openai-responses";
+  // ponytail: Claude models on Vertex use rawPredict with Anthropic Messages format,
+  // not the Gemini generateContent format. Mirrors executor isClaudeModel() check.
+  if ((alias === "vertex" || alias === "vp") && /^claude-/i.test(bareModelId)) return "claude";
+  // Model-level targetFormat is provider-scoped: a catalog entry declares how THIS
+  // provider's endpoint serves the model — do NOT import another provider's tag.
+  // #9994 scoped this for providers WITH a catalog; #10072 extends it to catalogless
+  // providers (openai-compatible-chat-*), which previously inherited the declaring
+  // provider's endpoint semantics via the global fallback.
   return null;
 }
-
 export function getModelStripTypes(aliasOrId: string, modelId: string): string[] {
   const models = PROVIDER_MODELS[aliasOrId];
   if (!models)

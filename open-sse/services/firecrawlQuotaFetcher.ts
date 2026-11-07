@@ -121,10 +121,6 @@ export function getFirecrawlBaseUrl(connection?: Record<string, unknown>): strin
 export async function fetchFirecrawlQuota(
   connectionId: string,
   connection?: Record<string, unknown>
-  // FirecrawlQuota, not the base QuotaInfo: every return here is a full credit
-  // breakdown (remainingCredits / planCredits / extraCreditsInferred / overPlan),
-  // and the narrower annotation made the custom-base literal below an excess-
-  // property error. FirecrawlQuota extends QuotaInfo, so callers are unaffected.
 ): Promise<FirecrawlQuota | null> {
   const cached = quotaCache.get(connectionId);
   if (cached && Date.now() - cached.fetchedAt < CACHE_TTL_MS) {

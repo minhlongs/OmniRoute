@@ -4,11 +4,14 @@ import { useEffect, useMemo, useState } from "react";
 import { useTranslations } from "next-intl";
 
 import { Badge, Button, Input, Modal, Select, Toggle } from "@/shared/components";
+import { readFetchErrorMessage } from "@/shared/utils/fetchError";
+import { isValidProviderIconUrl } from "@/shared/validation/iconUrl";
 import {
   CLIENT_IDENTITY_PROFILE_OPTIONS,
   getClientIdentityProfileHeaders,
 } from "@/shared/constants/clientIdentityProfiles";
 import NewApiAggregatorFields from "../[id]/components/modals/NewApiAggregatorFields";
+import { providerText } from "../[id]/providerPageHelpers";
 
 type CompatibleMode = "openai" | "anthropic" | "cc";
 type CompatibleProviderNode = { id: string } & Record<string, unknown>;
@@ -115,6 +118,8 @@ export default function AddCompatibleProviderModal({
     method?: string | null;
   }>(null);
   const [showAdvanced, setShowAdvanced] = useState(false);
+  const [iconUrlError, setIconUrlError] = useState<string | null>(null);
+  const [saveError, setSaveError] = useState<string | null>(null);
 
   const apiTypeOptions = useMemo(
     () => [
@@ -134,6 +139,8 @@ export default function AddCompatibleProviderModal({
     setValidationResult(null);
     setCheckKey("");
     setShowAdvanced(false);
+    setSaveError(null);
+    setIconUrlError(null);
   }, [isOpen, mode]);
 
   const modalTitle =
@@ -184,10 +191,19 @@ export default function AddCompatibleProviderModal({
     setCheckKey("");
     setValidationResult(null);
     setShowAdvanced(false);
+    setSaveError(null);
+    setIconUrlError(null);
   };
 
   const handleSubmit = async () => {
     if (!hasRequiredFields) return;
+    const iconUrl = formData.iconUrl.trim();
+    if (!isValidProviderIconUrl(iconUrl)) {
+      setIconUrlError(t("iconUrlInvalid"));
+      return;
+    }
+    setIconUrlError(null);
+    setSaveError(null);
     setSubmitting(true);
     try {
       const body: Record<string, unknown> = {
@@ -233,13 +249,21 @@ export default function AddCompatibleProviderModal({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
       });
-      const data = (await res.json()) as { node: CompatibleProviderNode };
-      if (res.ok) {
+      const failedCreate = providerText(t, "failedCreate", "Failed to create provider");
+      if (!res.ok) {
+        setSaveError(await readFetchErrorMessage(res, failedCreate));
+        return;
+      }
+
+      const data = await res.json().catch(() => ({}));
+      if (data.node) {
         onCreated(data.node);
         resetAfterCreate();
+        return;
       }
-    } catch (error) {
-      console.log(`Error creating ${mode} compatible node:`, error);
+      setSaveError(failedCreate);
+    } catch {
+      setSaveError(providerText(t, "networkError", "Network error"));
     } finally {
       setSubmitting(false);
     }
@@ -274,7 +298,10 @@ export default function AddCompatibleProviderModal({
         method: data.method ?? null,
       });
     } catch {
-      setValidationResult({ valid: false, error: "Network error" });
+      setValidationResult({
+        valid: false,
+        error: providerText(t, "networkError", "Network error"),
+      });
     } finally {
       setValidating(false);
     }
@@ -328,7 +355,7 @@ export default function AddCompatibleProviderModal({
           value={formData.iconUrl}
           onChange={(e) => setFormData({ ...formData, iconUrl: e.target.value })}
           placeholder="https://example.com/logo.png"
-          hint={t("iconUrlHint")}
+          hint={iconUrlError ?? t("iconUrlHint")}
         />
 
         <Toggle
@@ -433,6 +460,15 @@ export default function AddCompatibleProviderModal({
           </div>
         )}
 
+        {saveError && (
+          <div
+            role="alert"
+            aria-live="assertive"
+            className="text-sm text-red-500 bg-red-500/10 border border-red-500/20 rounded-lg px-3 py-2"
+          >
+            {saveError}
+          </div>
+        )}
         <div className="flex gap-2">
           <Button onClick={handleSubmit} fullWidth disabled={!hasRequiredFields || submitting}>
             {submitting ? t("creating") : t("add")}

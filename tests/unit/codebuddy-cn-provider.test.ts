@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import {
   AI_PROVIDERS,
   USAGE_SUPPORTED_PROVIDERS,
-  FREE_APIKEY_PROVIDER_IDS,
+  supportsDualAuthProvider,
 } from "../../src/shared/constants/providers.ts";
 import { REGISTRY } from "../../open-sse/config/providerRegistry.ts";
 import { getExecutor } from "../../open-sse/executors/index.ts";
@@ -23,6 +23,20 @@ type CapturedRequest = {
   url: string;
   init?: RequestInit;
   body: Record<string, unknown>;
+};
+
+type ToolDefinition = {
+  type: string;
+  function: {
+    name: string;
+    description?: string;
+    parameters: unknown;
+  };
+};
+
+type UsageResult = {
+  plan: string;
+  quotas: Record<string, { total: number; used: number }>;
 };
 
 async function executeWithMockedUpstream(
@@ -137,13 +151,13 @@ test("codebuddy-cn registry entry has expected shape", () => {
     "glm-5.0",
     "glm-5.0-turbo",
     "glm-5v-turbo",
-    "glm-4.7",
     "minimax-m3",
     "minimax-m2.7",
     "kimi-k2.7",
     "kimi-k2.6",
     "kimi-k2.5",
     "hy3-preview",
+    "hy3",
     "deepseek-v4-pro",
     "deepseek-v4-flash",
     "deepseek-v3-2-volc",
@@ -249,9 +263,19 @@ test("CodeBuddyCnExecutor retries a sensitive-content rejection with compact too
 
   assert.equal(status, 200);
   assert.equal(calls.length, 2, "known rejection should dispatch exactly one compact retry");
-  assert.deepEqual(calls[0].body.tools, input.tools, "the first request must remain unchanged");
+  // #9723 (55c2b35eb7): transformRequest now proactively strips descriptions from
+  // oversized (>=64KB) tool payloads BEFORE the first dispatch, so the first
+  // request already ships compact tools — it is no longer sent unchanged.
+  const firstTools = calls[0].body.tools as ToolDefinition[];
+  assert.deepEqual(
+    firstTools.map((tool) => tool.function.name),
+    ["read_file", "run_workflow"],
+    "the first request must preserve tool order and names"
+  );
+  assert.equal("description" in firstTools[0].function, false);
+  assert.equal("description" in firstTools[1].function, false);
 
-  const retryTools = calls[1].body.tools as Array<Record<string, any>>;
+  const retryTools = calls[1].body.tools as ToolDefinition[];
   assert.deepEqual(
     retryTools.map((tool) => tool.function.name),
     ["read_file", "run_workflow"],
@@ -261,7 +285,7 @@ test("CodeBuddyCnExecutor retries a sensitive-content rejection with compact too
   assert.equal("description" in retryTools[1].function, false);
   assert.deepEqual(
     retryTools.map((tool) => tool.function.parameters),
-    (input.tools as Array<Record<string, any>>).map((tool) => tool.function.parameters),
+    (input.tools as ToolDefinition[]).map((tool) => tool.function.parameters),
     "parameter schemas, including nested descriptions, must remain unchanged"
   );
   assert.deepEqual(calls[1].body.tool_choice, input.tool_choice);
@@ -273,13 +297,41 @@ test("CodeBuddyCnExecutor retries a sensitive-content rejection with compact too
   }
 });
 
-test("CodeBuddyCnExecutor sends successful tool requests once without compacting them", async () => {
+test("CodeBuddyCnExecutor sends successful oversized tool requests once, proactively compacted (#9723)", async () => {
   const input = toolRequestBody();
   const { calls, status } = await executeWithMockedUpstream(input, [successResponse()]);
 
   assert.equal(status, 200);
+  assert.equal(calls.length, 1, "a successful request must not trigger the rejection retry");
+  // #9723: >=64KB of tool metadata is stripped up-front to dodge the content
+  // filter — names, order and parameter schemas survive; descriptions do not.
+  const sentTools = calls[0].body.tools as ToolDefinition[];
+  assert.deepEqual(
+    sentTools.map((tool) => tool.function.name),
+    ["read_file", "run_workflow"]
+  );
+  assert.equal("description" in sentTools[0].function, false);
+  assert.equal("description" in sentTools[1].function, false);
+  assert.deepEqual(
+    sentTools.map((tool) => tool.function.parameters),
+    (input.tools as ToolDefinition[]).map((tool) => tool.function.parameters)
+  );
+});
+
+test("CodeBuddyCnExecutor sends normal-sized tool requests once and unchanged", async () => {
+  const input = toolRequestBody();
+  for (const tool of input.tools as ToolDefinition[]) {
+    tool.function.description = "A normal-sized tool description";
+  }
+  const { calls, status } = await executeWithMockedUpstream(input, [successResponse()]);
+
+  assert.equal(status, 200);
   assert.equal(calls.length, 1);
-  assert.deepEqual(calls[0].body.tools, input.tools);
+  assert.deepEqual(
+    calls[0].body.tools,
+    input.tools,
+    "sub-64KB tool payloads must pass through untouched"
+  );
 });
 
 test("CodeBuddyCnExecutor does not retry the rejection without tools", async () => {
@@ -304,7 +356,7 @@ test("CodeBuddyCnExecutor does not retry unrelated 400 responses with tools", as
 
 test("CodeBuddyCnExecutor does not retry sensitive rejection for normal-sized tools", async () => {
   const input = toolRequestBody();
-  for (const tool of input.tools as Array<Record<string, any>>) {
+  for (const tool of input.tools as ToolDefinition[]) {
     tool.function.description = "A normal-sized tool description";
   }
   const { calls, status } = await executeWithMockedUpstream(input, [rejectionResponse()]);
@@ -315,7 +367,7 @@ test("CodeBuddyCnExecutor does not retry sensitive rejection for normal-sized to
 
 test("CodeBuddyCnExecutor does not retry an already-compacted tool request", async () => {
   const input = toolRequestBody();
-  for (const tool of input.tools as Array<Record<string, any>>) {
+  for (const tool of input.tools as ToolDefinition[]) {
     delete tool.function.description;
   }
   const { calls, status } = await executeWithMockedUpstream(input, [rejectionResponse()]);
@@ -411,8 +463,7 @@ test("CodeBuddyCnExecutor preserves reasoning transformations on compact retries
 
 test("codebuddy-cn OAuth provider is wired with device_code flow and GET-poll on state", async () => {
   assert.equal(OAUTH_PROVIDER_IDS.CODEBUDDY_CN, "codebuddy-cn");
-  const map = PROVIDERS_MAP as Record<string, any>;
-  const cb = map["codebuddy-cn"];
+  const cb = PROVIDERS_MAP["codebuddy-cn"];
   assert.ok(cb, "PROVIDERS map must include 'codebuddy-cn'");
   assert.equal(cb.flowType, "device_code");
   assert.equal(typeof cb.requestDeviceCode, "function");
@@ -422,7 +473,7 @@ test("codebuddy-cn OAuth provider is wired with device_code flow and GET-poll on
   // with the state as a query param (upstream's distinguishing detail).
   const origFetch = globalThis.fetch;
   const calls: { url: string; init?: RequestInit }[] = [];
-  globalThis.fetch = async (url: any, init?: RequestInit) => {
+  globalThis.fetch = async (url: string | URL | Request, init?: RequestInit) => {
     calls.push({ url: String(url), init });
     return new Response(
       JSON.stringify({
@@ -509,7 +560,7 @@ test("codebuddy-cn is in USAGE_SUPPORTED_PROVIDERS and quota handler parses Tenc
   try {
     const result = await getCodeBuddyCnUsage("ACCESS_TOKEN", undefined, undefined);
     assert.ok(result && typeof result === "object");
-    const r = result as Record<string, any>;
+    const r = result as UsageResult;
     assert.equal(r.plan, "Refill Pack");
     assert.ok(r.quotas);
     // Refill (Monthly) uses CycleCapacity*; Bonus packs use plain Capacity*; soonest-expiring first.
@@ -527,10 +578,10 @@ test("codebuddy-cn is in USAGE_SUPPORTED_PROVIDERS and quota handler parses Tenc
 });
 
 test("codebuddy-cn is treated as a managed dual-auth provider (oauth + apikey accepted by POST /api/providers)", async () => {
-  // The provider creation gate trusts FREE_APIKEY_PROVIDER_IDS to admit
-  // OAuth-category providers that also accept a direct API key (like qoder).
+  // OAuth-category providers that also accept a direct API key use the
+  // dedicated dual-auth gate so their primary dashboard action remains OAuth.
   assert.ok(
-    FREE_APIKEY_PROVIDER_IDS.has("codebuddy-cn"),
+    supportsDualAuthProvider("codebuddy-cn"),
     "codebuddy-cn must be admitted by the dual-auth gate"
   );
 });

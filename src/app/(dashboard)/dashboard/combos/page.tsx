@@ -5,6 +5,7 @@ import dynamic from "next/dynamic";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import Button from "@/shared/components/Button";
+import GlobalModelSearchPanel from "./GlobalModelSearchPanel";
 import Card from "@/shared/components/Card";
 import { CardSkeleton } from "@/shared/components/Loading";
 import EmptyState from "@/shared/components/EmptyState";
@@ -15,6 +16,8 @@ import Tooltip from "@/shared/components/Tooltip";
 import { ComboCompressionModeSelect } from "@/shared/components/compression/ComboCompressionModeSelect";
 import { useCopyToClipboard } from "@/shared/hooks/useCopyToClipboard";
 import { FieldLabelWithHelp, WeightTotalBar } from "./parts";
+import { ComboTargetOptions } from "./ComboQuotaOnlyFallbackToggle";
+import { applyQuotaOnlyFallbackConfig, setQuotaOnlyFallback } from "./comboQuotaOnlyFallback";
 import { useComboProxyAssignments } from "./useComboProxyAssignments";
 import { ResponseValidationEditor, type ResponseValidationValue } from "./ResponseValidationEditor";
 import ReasoningTokenBufferToggle from "./ReasoningTokenBufferToggle";
@@ -25,11 +28,15 @@ import { ROUTING_STRATEGIES } from "@/shared/constants/routingStrategies";
 import {
   COMBO_BUILDER_AUTO_CONNECTION,
   COMBO_BUILDER_STAGES,
+  addAllGlobalSearchMatches,
+  addGlobalModelStep,
+  buildGlobalModelList,
   buildManualComboModelStep,
   buildPrecisionComboModelStep,
   canAccessComboBuilderStage,
   computeBatchAddModelSteps,
   computeBatchDeselectModelSteps,
+  filterGlobalModelList,
   findNextSuggestedConnectionId,
   getComboBuilderStageChecks,
   getComboBuilderStages,
@@ -181,6 +188,8 @@ const ADVANCED_FIELD_HELP_FALLBACK = {
     "Delay between set-level retry attempts, giving transient issues time to resolve.",
   nestedComboMode:
     "How references to other combos are handled. Flatten expands a combo ref into this combo's target list (legacy). Execute treats a combo ref as a black-box target: the parent strategy selects the child combo, then the child runs its own strategy and retries.",
+  reasoningTransportFallback:
+    "What to do when the next combo target cannot accept the original reasoning transport. Drop is the default: it removes reasoning state and tries the target. Skip leaves the request body untouched and falls through.",
 };
 
 const LEGACY_COMBO_RESILIENCE_KEYS = new Set([
@@ -524,9 +533,9 @@ function getStrategyBadgeClass(strategy) {
   return "bg-blue-500/15 text-blue-600 dark:text-blue-400";
 }
 
-function getI18nOrFallback(t, key, fallback) {
+function getI18nOrFallback(t, key, fallback, values = undefined) {
   try {
-    if (typeof t.has === "function" && t.has(key)) return t(key);
+    if (typeof t.has === "function" && t.has(key)) return t(key, values);
   } catch {}
   return fallback;
 }
@@ -870,6 +879,15 @@ export default function CombosPage() {
     }
   };
 
+  const handleComboCreated = async (comboId: string) => {
+    await fetchData();
+    // Wait for React to re-render the new card, then scroll it into view.
+    setTimeout(() => {
+      const el = document.querySelector(`[data-testid="combo-card-${comboId}"]`);
+      if (el) el.scrollIntoView({ behavior: "auto", block: "center" });
+    }, 0);
+  };
+
   const handleDelete = async (id) => {
     if (!confirm(t("deleteConfirm"))) return;
     try {
@@ -1095,7 +1113,7 @@ export default function CombosPage() {
         </div>
       </div>
 
-      <AutoComboCatalog />
+      <AutoComboCatalog onComboCreated={handleComboCreated} />
 
       <KimiComboPresetCard
         alreadyCreated={hasKimiCodingPreset(combos)}
@@ -1433,6 +1451,33 @@ function ComboUsageGuide({ onHide, onHideForever, onCreateCombo }) {
         })}
       </div>
 
+      <div className="mt-3 rounded-lg border border-primary/20 bg-primary/5 px-3 py-2">
+        <p className="text-[11px] font-semibold text-primary">
+          {getI18nOrFallback(t, "usageGuideInvokeTitle", "How to call this combo")}
+        </p>
+        <p className="mt-1 text-[11px] leading-4 text-text-muted">
+          {getI18nOrFallback(
+            t,
+            "usageGuideInvokeDesc",
+            'Send the combo\'s exact name as the model, e.g. model: "my-combo" (or combo/my-combo).'
+          )}
+        </p>
+        <p className="mt-1 text-[11px] leading-4 text-text-muted">
+          {getI18nOrFallback(
+            t,
+            "usageGuideInvokeAutoNote",
+            "auto and auto/* are a separate zero-config router that does not use your combos (unless a combo is literally named auto)."
+          )}
+        </p>
+        <p className="mt-1 text-[11px] leading-4 text-text-muted">
+          {getI18nOrFallback(
+            t,
+            "usageGuideInvokeOpenrouterNote",
+            "openrouter/auto is a real paid OpenRouter product (Auto Best Available), not an OmniRoute alias — exclude it via Settings → Routing → Hide paid models."
+          )}
+        </p>
+      </div>
+
       <div className="mt-3 flex items-center gap-2">
         <Button size="sm" icon="add" onClick={onCreateCombo}>
           {getI18nOrFallback(t, "createFirstCombo", "Create Your First Combo")}
@@ -1520,7 +1565,8 @@ function StrategyRecommendationsPanel({ strategy, onApply, showNudge }) {
           {getI18nOrFallback(
             t,
             "recommendationsUpdated",
-            "Recommendations updated for {strategy}."
+            "Recommendations updated for {strategy}.",
+            { strategy: strategyLabel }
           ).replace("{strategy}", strategyLabel)}
         </div>
       )}
@@ -2081,10 +2127,29 @@ function ComboFormModal({ isOpen, combo, onClose, onSave, activeProviders, combo
 
   const [dragIndex, setDragIndex] = useState(null);
   const [dragOverIndex, setDragOverIndex] = useState(null);
+  const [builderSelectionMode, setBuilderSelectionMode] = useState<"step" | "global">("step");
+  const [globalSearchQuery, setGlobalSearchQuery] = useState("");
+
   const builderProviders = useMemo(
     () => builderOptions.providers || [],
     [builderOptions.providers]
   );
+
+  const allGlobalModels = useMemo(() => buildGlobalModelList(builderProviders), [builderProviders]);
+
+  const filteredGlobalModels = useMemo(
+    () => filterGlobalModelList(allGlobalModels, globalSearchQuery),
+    [allGlobalModels, globalSearchQuery]
+  );
+
+  const handleAddGlobalModelStep = (step: any) => {
+    setModels((prev) => addGlobalModelStep(prev, step) as typeof prev);
+  };
+
+  const handleAddAllGlobalSearchMatches = () => {
+    setModels((prev) => addAllGlobalSearchMatches(prev, filteredGlobalModels) as typeof prev);
+  };
+
   const builderComboRefs = (builderOptions.comboRefs || []).filter(
     (comboRef) => comboRef.name !== combo?.name && comboRef.name !== name.trim()
   );
@@ -2660,7 +2725,7 @@ function ComboFormModal({ isOpen, combo, onClose, onSave, activeProviders, combo
   };
 
   const FREE_STACK_PRESET_MODELS = [
-    { model: "agy/gemini-3.5-flash-low", weight: 0 },
+    { model: "agy/gemini-3.7-flash-low", weight: 0 },
     { model: "kr/claude-sonnet-4.5", weight: 0 },
     { model: "if/kimi-k2-thinking", weight: 0 },
     { model: "if/qwen3-coder-plus", weight: 0 },
@@ -2769,7 +2834,11 @@ function ComboFormModal({ isOpen, combo, onClose, onSave, activeProviders, combo
       saveData.description = null;
     }
 
-    const configToSave = sanitizeComboRuntimeConfig(config);
+    const configToSave = applyQuotaOnlyFallbackConfig(
+      strategy,
+      models,
+      sanitizeComboRuntimeConfig(config)
+    );
     if (strategy === "round-robin") {
       if (config.concurrencyPerModel !== undefined)
         configToSave.concurrencyPerModel = config.concurrencyPerModel;
@@ -3203,214 +3272,249 @@ function ComboFormModal({ isOpen, combo, onClose, onSave, activeProviders, combo
                   </div>
                 )}
 
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-2 mt-3">
-                  <div>
-                    <label className="text-[10px] font-medium uppercase tracking-wide text-text-muted block mb-1">
-                      1. {getI18nOrFallback(t, "builderProvider", "Provider")}
-                    </label>
-                    <select
-                      value={builderProviderId}
-                      onChange={handleBuilderProviderChange}
-                      data-testid="combo-builder-provider"
-                      className="w-full text-xs py-2 px-2 rounded border border-black/10 dark:border-white/10 bg-white dark:bg-white/5 text-text-main focus:border-primary focus:outline-none"
-                    >
-                      <option value="">
-                        {builderLoading
-                          ? getI18nOrFallback(t, "builderLoadingProviders", "Loading providers…")
-                          : getI18nOrFallback(t, "builderSelectProvider", "Select provider")}
-                      </option>
-                      {builderProviders.map((provider) => (
-                        <option key={provider.providerId} value={provider.providerId}>
-                          {provider.displayName} ({provider.connectionCount} acct
-                          {provider.connectionCount === 1 ? "" : "s"})
-                        </option>
-                      ))}
-                    </select>
-                  </div>
+                <GlobalModelSearchPanel
+                  builderSelectionMode={builderSelectionMode}
+                  onSelectionModeChange={setBuilderSelectionMode}
+                  globalSearchQuery={globalSearchQuery}
+                  onGlobalSearchQueryChange={setGlobalSearchQuery}
+                  filteredGlobalModels={filteredGlobalModels}
+                  models={models}
+                  onAddOne={handleAddGlobalModelStep}
+                  onAddAll={handleAddAllGlobalSearchMatches}
+                  t={t}
+                />
 
-                  <div>
-                    <label className="text-[10px] font-medium uppercase tracking-wide text-text-muted block mb-1">
-                      2. {getI18nOrFallback(t, "builderModel", "Model")}
-                    </label>
-                    <select
-                      value={builderModelId}
-                      onChange={handleBuilderModelChange}
-                      disabled={!selectedBuilderProvider}
-                      data-testid="combo-builder-model"
-                      className="w-full text-xs py-2 px-2 rounded border border-black/10 dark:border-white/10 bg-white dark:bg-white/5 text-text-main focus:border-primary focus:outline-none disabled:opacity-50"
-                    >
-                      <option value="">
-                        {selectedBuilderProvider
-                          ? getI18nOrFallback(t, "builderSelectModel", "Select model")
-                          : getI18nOrFallback(t, "builderProviderFirst", "Choose provider first")}
-                      </option>
-                      {(selectedBuilderProvider?.models || []).map((model) => (
-                        <option key={model.id} value={model.id}>
-                          {model.name}
-                          {model.source ? ` · ${model.source}` : ""}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
+                {builderSelectionMode === "step" && (
+                  <>
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-2 mt-3">
+                      <div>
+                        <label className="text-[10px] font-medium uppercase tracking-wide text-text-muted block mb-1">
+                          1. {getI18nOrFallback(t, "builderProvider", "Provider")}
+                        </label>
+                        <select
+                          value={builderProviderId}
+                          onChange={handleBuilderProviderChange}
+                          data-testid="combo-builder-provider"
+                          className="w-full text-xs py-2 px-2 rounded border border-black/10 dark:border-white/10 bg-white dark:bg-white/5 text-text-main focus:border-primary focus:outline-none"
+                        >
+                          <option value="">
+                            {builderLoading
+                              ? getI18nOrFallback(
+                                  t,
+                                  "builderLoadingProviders",
+                                  "Loading providers…"
+                                )
+                              : getI18nOrFallback(t, "builderSelectProvider", "Select provider")}
+                          </option>
+                          {builderProviders.map((provider) => (
+                            <option key={provider.providerId} value={provider.providerId}>
+                              {provider.displayName} ({provider.connectionCount} acct
+                              {provider.connectionCount === 1 ? "" : "s"})
+                            </option>
+                          ))}
+                        </select>
+                      </div>
 
-                  <div>
-                    <label className="text-[10px] font-medium uppercase tracking-wide text-text-muted block mb-1">
-                      3. {getI18nOrFallback(t, "builderAccount", "Account")}
-                    </label>
-                    <select
-                      value={builderConnectionId}
-                      onChange={handleBuilderConnectionChange}
-                      disabled={!selectedBuilderModel}
-                      data-testid="combo-builder-account"
-                      className="w-full text-xs py-2 px-2 rounded border border-black/10 dark:border-white/10 bg-white dark:bg-white/5 text-text-main focus:border-primary focus:outline-none disabled:opacity-50"
-                    >
-                      <option value={COMBO_BUILDER_AUTO_CONNECTION}>
-                        {getI18nOrFallback(
-                          t,
-                          "autoSelectAccount",
-                          "Auto-select account at runtime"
-                        )}
-                      </option>
-                      {selectedBuilderConnections.map((connection) => (
-                        <option key={connection.id} value={connection.id}>
-                          {pickDisplayValue([connection.label], emailsVisible, connection.label)}
-                          {connection.status !== "active" ? ` · ${connection.status}` : ""}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                </div>
+                      <div>
+                        <label className="text-[10px] font-medium uppercase tracking-wide text-text-muted block mb-1">
+                          2. {getI18nOrFallback(t, "builderModel", "Model")}
+                        </label>
+                        <select
+                          value={builderModelId}
+                          onChange={handleBuilderModelChange}
+                          disabled={!selectedBuilderProvider}
+                          data-testid="combo-builder-model"
+                          className="w-full text-xs py-2 px-2 rounded border border-black/10 dark:border-white/10 bg-white dark:bg-white/5 text-text-main focus:border-primary focus:outline-none disabled:opacity-50"
+                        >
+                          <option value="">
+                            {selectedBuilderProvider
+                              ? getI18nOrFallback(t, "builderSelectModel", "Select model")
+                              : getI18nOrFallback(
+                                  t,
+                                  "builderProviderFirst",
+                                  "Choose provider first"
+                                )}
+                          </option>
+                          {(selectedBuilderProvider?.models || []).map((model) => (
+                            <option key={model.id} value={model.id}>
+                              {model.name}
+                              {model.source ? ` · ${model.source}` : ""}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
 
-                {builderConnectionId === COMBO_BUILDER_AUTO_CONNECTION &&
-                selectedBuilderConnections.length > 1 ? (
-                  <div className="mt-2 rounded-md border border-black/8 dark:border-white/8 bg-white/70 dark:bg-white/[0.03] px-2.5 py-2">
-                    <label className="text-[10px] font-medium uppercase tracking-wide text-text-muted block mb-1.5">
-                      {getI18nOrFallback(
-                        t,
-                        "builderRestrictAccounts",
-                        "Restrict to accounts (optional)"
-                      )}
-                    </label>
-                    <div className="flex flex-wrap gap-1.5" data-testid="combo-builder-allowlist">
-                      {selectedBuilderConnections.map((connection) => {
-                        const checked = builderAllowedConnectionIds.includes(connection.id);
-                        return (
-                          <button
-                            type="button"
-                            key={connection.id}
-                            onClick={() => handleBuilderAllowedConnectionToggle(connection.id)}
-                            aria-pressed={checked}
-                            className={`text-[11px] px-2 py-1 rounded border transition-colors ${
-                              checked
-                                ? "border-primary bg-primary/10 text-primary"
-                                : "border-black/10 dark:border-white/10 text-text-muted hover:border-primary/40"
-                            }`}
-                          >
-                            {pickDisplayValue([connection.label], emailsVisible, connection.label)}
-                          </button>
-                        );
-                      })}
+                      <div>
+                        <label className="text-[10px] font-medium uppercase tracking-wide text-text-muted block mb-1">
+                          3. {getI18nOrFallback(t, "builderAccount", "Account")}
+                        </label>
+                        <select
+                          value={builderConnectionId}
+                          onChange={handleBuilderConnectionChange}
+                          disabled={!selectedBuilderModel}
+                          data-testid="combo-builder-account"
+                          className="w-full text-xs py-2 px-2 rounded border border-black/10 dark:border-white/10 bg-white dark:bg-white/5 text-text-main focus:border-primary focus:outline-none disabled:opacity-50"
+                        >
+                          <option value={COMBO_BUILDER_AUTO_CONNECTION}>
+                            {getI18nOrFallback(
+                              t,
+                              "autoSelectAccount",
+                              "Auto-select account at runtime"
+                            )}
+                          </option>
+                          {selectedBuilderConnections.map((connection) => (
+                            <option key={connection.id} value={connection.id}>
+                              {pickDisplayValue(
+                                [connection.label],
+                                emailsVisible,
+                                connection.label
+                              )}
+                              {connection.status !== "active" ? ` · ${connection.status}` : ""}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
                     </div>
-                    <p className="text-[10px] text-text-muted mt-1.5">
-                      {getI18nOrFallback(
-                        t,
-                        "builderRestrictAccountsHint",
-                        "Leave empty to use the whole active pool. When selected, round-robin / weighted picks stay within this subset of accounts."
-                      )}
-                    </p>
-                  </div>
-                ) : null}
 
-                {isExpertMode ? (
-                  <div className="mt-2 flex flex-wrap items-center gap-2">
-                    <Button
-                      onClick={handleAddBuilderStep}
-                      size="sm"
-                      disabled={!builderCandidateStep || !!builderHasDuplicate}
-                      data-testid="combo-builder-add-step"
-                    >
-                      {getI18nOrFallback(t, "builderAddStep", "Add detailed step")}
-                    </Button>
-                    {builderHasDuplicate && (
-                      <span className="text-[10px] text-amber-600 dark:text-amber-300">
-                        {getI18nOrFallback(
-                          t,
-                          "builderDuplicateExact",
-                          "This exact provider/model/account step is already in the combo."
-                        )}
-                      </span>
-                    )}
-                  </div>
-                ) : (
-                  <div className="mt-2 rounded-md border border-black/8 dark:border-white/8 bg-white/70 dark:bg-white/[0.03] px-2.5 py-2">
-                    <p className="text-[10px] uppercase tracking-wide text-text-muted">
-                      {getI18nOrFallback(t, "builderPreview", "Current step preview")}
-                    </p>
-                    <p className="text-xs text-text-main mt-1">
-                      {builderCandidateStep
-                        ? formatModelDisplay(builderCandidateStep)
-                        : getI18nOrFallback(
-                            t,
-                            "previewNextStep",
-                            "Choose provider and model to preview the next step."
-                          )}
-                    </p>
-                    <div className="flex flex-wrap items-center gap-1.5 mt-2">
-                      <Button
-                        onClick={handleAddBuilderStep}
-                        size="sm"
-                        disabled={!builderCandidateStep || !!builderHasDuplicate}
-                        data-testid="combo-builder-add-step"
-                      >
-                        {getI18nOrFallback(t, "builderAddStep", "Add detailed step")}
-                      </Button>
-                      {builderHasDuplicate && (
-                        <span className="text-[10px] text-amber-600 dark:text-amber-300">
+                    {builderConnectionId === COMBO_BUILDER_AUTO_CONNECTION &&
+                    selectedBuilderConnections.length > 1 ? (
+                      <div className="mt-2 rounded-md border border-black/8 dark:border-white/8 bg-white/70 dark:bg-white/[0.03] px-2.5 py-2">
+                        <label className="text-[10px] font-medium uppercase tracking-wide text-text-muted block mb-1.5">
                           {getI18nOrFallback(
                             t,
-                            "builderDuplicateExact",
-                            "This exact provider/model/account step is already in the combo."
+                            "builderRestrictAccounts",
+                            "Restrict to accounts (optional)"
                           )}
-                        </span>
-                      )}
-                    </div>
-                  </div>
-                )}
+                        </label>
+                        <div
+                          className="flex flex-wrap gap-1.5"
+                          data-testid="combo-builder-allowlist"
+                        >
+                          {selectedBuilderConnections.map((connection) => {
+                            const checked = builderAllowedConnectionIds.includes(connection.id);
+                            return (
+                              <button
+                                type="button"
+                                key={connection.id}
+                                onClick={() => handleBuilderAllowedConnectionToggle(connection.id)}
+                                aria-pressed={checked}
+                                className={`text-[11px] px-2 py-1 rounded border transition-colors ${
+                                  checked
+                                    ? "border-primary bg-primary/10 text-primary"
+                                    : "border-black/10 dark:border-white/10 text-text-muted hover:border-primary/40"
+                                }`}
+                              >
+                                {pickDisplayValue(
+                                  [connection.label],
+                                  emailsVisible,
+                                  connection.label
+                                )}
+                              </button>
+                            );
+                          })}
+                        </div>
+                        <p className="text-[10px] text-text-muted mt-1.5">
+                          {getI18nOrFallback(
+                            t,
+                            "builderRestrictAccountsHint",
+                            "Leave empty to use the whole active pool. When selected, round-robin / weighted picks stay within this subset of accounts."
+                          )}
+                        </p>
+                      </div>
+                    ) : null}
 
-                <div className="mt-3 pt-3 border-t border-black/5 dark:border-white/5">
-                  <label className="text-[10px] font-medium uppercase tracking-wide text-text-muted block mb-1">
-                    {getI18nOrFallback(t, "builderComboRef", "Reference another combo")}
-                  </label>
-                  <div className="flex flex-col sm:flex-row gap-2">
-                    <select
-                      value={builderComboRefName}
-                      onChange={(e) => setBuilderComboRefName(e.target.value)}
-                      className="flex-1 text-xs py-2 px-2 rounded border border-black/10 dark:border-white/10 bg-white dark:bg-white/5 text-text-main focus:border-primary focus:outline-none"
-                    >
-                      <option value="">
-                        {getI18nOrFallback(
-                          t,
-                          "selectComboToReference",
-                          "Select an existing combo to reference"
+                    {isExpertMode ? (
+                      <div className="mt-2 flex flex-wrap items-center gap-2">
+                        <Button
+                          onClick={handleAddBuilderStep}
+                          size="sm"
+                          disabled={!builderCandidateStep || !!builderHasDuplicate}
+                          data-testid="combo-builder-add-step"
+                        >
+                          {getI18nOrFallback(t, "builderAddStep", "Add detailed step")}
+                        </Button>
+                        {builderHasDuplicate && (
+                          <span className="text-[10px] text-amber-600 dark:text-amber-300">
+                            {getI18nOrFallback(
+                              t,
+                              "builderDuplicateExact",
+                              "This exact provider/model/account step is already in the combo."
+                            )}
+                          </span>
                         )}
-                      </option>
-                      {builderComboRefs.map((comboRef) => (
-                        <option key={comboRef.id} value={comboRef.name}>
-                          {comboRef.name} · {comboRef.strategy} · {comboRef.stepCount} step
-                          {comboRef.stepCount === 1 ? "" : "s"}
-                        </option>
-                      ))}
-                    </select>
-                    <Button
-                      onClick={handleAddComboReference}
-                      variant="ghost"
-                      size="sm"
-                      disabled={!builderComboRefName}
-                    >
-                      {getI18nOrFallback(t, "builderAddComboRef", "Add combo ref")}
-                    </Button>
-                  </div>
-                </div>
+                      </div>
+                    ) : (
+                      <div className="mt-2 rounded-md border border-black/8 dark:border-white/8 bg-white/70 dark:bg-white/[0.03] px-2.5 py-2">
+                        <p className="text-[10px] uppercase tracking-wide text-text-muted">
+                          {getI18nOrFallback(t, "builderPreview", "Current step preview")}
+                        </p>
+                        <p className="text-xs text-text-main mt-1">
+                          {builderCandidateStep
+                            ? formatModelDisplay(builderCandidateStep)
+                            : getI18nOrFallback(
+                                t,
+                                "previewNextStep",
+                                "Choose provider and model to preview the next step."
+                              )}
+                        </p>
+                        <div className="flex flex-wrap items-center gap-1.5 mt-2">
+                          <Button
+                            onClick={handleAddBuilderStep}
+                            size="sm"
+                            disabled={!builderCandidateStep || !!builderHasDuplicate}
+                            data-testid="combo-builder-add-step"
+                          >
+                            {getI18nOrFallback(t, "builderAddStep", "Add detailed step")}
+                          </Button>
+                          {builderHasDuplicate && (
+                            <span className="text-[10px] text-amber-600 dark:text-amber-300">
+                              {getI18nOrFallback(
+                                t,
+                                "builderDuplicateExact",
+                                "This exact provider/model/account step is already in the combo."
+                              )}
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                    )}
+
+                    <div className="mt-3 pt-3 border-t border-black/5 dark:border-white/5">
+                      <label className="text-[10px] font-medium uppercase tracking-wide text-text-muted block mb-1">
+                        {getI18nOrFallback(t, "builderComboRef", "Reference another combo")}
+                      </label>
+                      <div className="flex flex-col sm:flex-row gap-2">
+                        <select
+                          value={builderComboRefName}
+                          onChange={(e) => setBuilderComboRefName(e.target.value)}
+                          className="flex-1 text-xs py-2 px-2 rounded border border-black/10 dark:border-white/10 bg-white dark:bg-white/5 text-text-main focus:border-primary focus:outline-none"
+                        >
+                          <option value="">
+                            {getI18nOrFallback(
+                              t,
+                              "selectComboToReference",
+                              "Select an existing combo to reference"
+                            )}
+                          </option>
+                          {builderComboRefs.map((comboRef) => (
+                            <option key={comboRef.id} value={comboRef.name}>
+                              {comboRef.name} · {comboRef.strategy} · {comboRef.stepCount} step
+                              {comboRef.stepCount === 1 ? "" : "s"}
+                            </option>
+                          ))}
+                        </select>
+                        <Button
+                          onClick={handleAddComboReference}
+                          variant="ghost"
+                          size="sm"
+                          disabled={!builderComboRefName}
+                        >
+                          {getI18nOrFallback(t, "builderAddComboRef", "Add combo ref")}
+                        </Button>
+                      </div>
+                    </div>
+                  </>
+                )}
 
                 {builderError && (
                   <div className="mt-2 rounded-md border border-amber-500/20 bg-amber-500/10 px-2 py-1.5 text-[10px] text-amber-700 dark:text-amber-300">
@@ -3482,24 +3586,16 @@ function ComboFormModal({ isOpen, combo, onClose, onSave, activeProviders, combo
                         </div>
                       </div>
 
-                      {strategy === "cost-optimized" && (
-                        <span
-                          className={`text-[9px] px-1.5 py-0.5 rounded-full uppercase font-semibold ${
-                            hasPricingForModel(entry.model)
-                              ? "bg-emerald-500/15 text-emerald-600 dark:text-emerald-400"
-                              : "bg-amber-500/15 text-amber-600 dark:text-amber-400"
-                          }`}
-                          title={
-                            hasPricingForModel(entry.model)
-                              ? getI18nOrFallback(t, "pricingAvailable", "Pricing available")
-                              : getI18nOrFallback(t, "pricingMissing", "No pricing")
-                          }
-                        >
-                          {hasPricingForModel(entry.model)
-                            ? getI18nOrFallback(t, "pricingAvailableShort", "priced")
-                            : getI18nOrFallback(t, "pricingMissingShort", "no-price")}
-                        </span>
-                      )}
+                      <ComboTargetOptions
+                        strategy={strategy}
+                        entry={entry}
+                        index={index}
+                        onCheckedChange={(stepIndex, enabled) =>
+                          setModels(setQuotaOnlyFallback(models, stepIndex, enabled))
+                        }
+                        hasPricing={hasPricingForModel(entry.model)}
+                        translate={(key, fallback) => getI18nOrFallback(t, key, fallback)}
+                      />
 
                       {/* Weight input (weighted mode only) */}
                       {strategy === "weighted" && (
@@ -3802,6 +3898,49 @@ function ComboFormModal({ isOpen, combo, onClose, onSave, activeProviders, combo
                     </div>
                     <div className="col-span-2">
                       <ReasoningTokenBufferToggle config={config} setConfig={setConfig} t={t} />
+                    </div>
+                    <div>
+                      <FieldLabelWithHelp
+                        label={getI18nOrFallback(
+                          t,
+                          "reasoningTransportFallback",
+                          "Reasoning transport fallback"
+                        )}
+                        help={getI18nOrFallback(
+                          t,
+                          "advancedHelp.reasoningTransportFallback",
+                          ADVANCED_FIELD_HELP_FALLBACK.reasoningTransportFallback
+                        )}
+                        showHelp={!isExpertMode}
+                        htmlFor="combo-reasoning-transport-fallback"
+                      />
+                      <select
+                        id="combo-reasoning-transport-fallback"
+                        value={config.reasoningTransportFallback === "skip" ? "skip" : "drop"}
+                        onChange={(e) =>
+                          setConfig({
+                            ...config,
+                            reasoningTransportFallback:
+                              e.target.value === "skip" ? "skip" : undefined,
+                          })
+                        }
+                        className="w-full text-xs py-1.5 px-2 rounded border border-black/10 dark:border-white/10 bg-surface-1 focus:border-primary focus:outline-none"
+                      >
+                        <option value="skip">
+                          {getI18nOrFallback(
+                            t,
+                            "reasoningTransportFallbackSkip",
+                            "Skip incompatible target (fall through)"
+                          )}
+                        </option>
+                        <option value="drop">
+                          {getI18nOrFallback(
+                            t,
+                            "reasoningTransportFallbackDrop",
+                            "Drop reasoning and try target"
+                          )}
+                        </option>
+                      </select>
                     </div>
                     <div>
                       <FieldLabelWithHelp

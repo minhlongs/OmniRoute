@@ -21,6 +21,7 @@ export interface ValidatedConfig {
   adaptation: AdaptationParams;
   maxRequestCost: number;
   costConfig: ReturnType<typeof resolveCostConfig>;
+  virtualLanes: boolean;
 }
 
 function requirePositiveInt(
@@ -162,6 +163,7 @@ export function validateConfig(input: AdaptiveAdmissionConfig): ValidatedConfig 
     windowMs,
     maxRequestCost: costConfig.maxRequestCost,
     costConfig,
+    virtualLanes: input.virtualLanes === true,
     adaptation: resolveAdaptationParams(input, minLimit, maxLimit, windowMs),
   };
 }

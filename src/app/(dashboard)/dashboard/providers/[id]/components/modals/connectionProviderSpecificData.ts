@@ -17,6 +17,8 @@ type FormData = QuotaScrapingFieldValues &
   GlmTeamQuotaFieldValues & {
     accountId: string;
     apiRegion: string;
+    awsAccessKeyId: string;
+    awsSessionToken: string;
     ccCompatibleContext1m: boolean;
     ccCompatibleRedactThinking: boolean;
     ccCompatibleSummarizeThinking: boolean;
@@ -34,6 +36,9 @@ type FormData = QuotaScrapingFieldValues &
     routingTags: string;
     tag?: string;
     validationModelId?: string;
+    tunnelId: string;
+    connectorName: string;
+    runtimeKey?: string;
   };
 type ProviderSpecificData = Record<string, unknown>;
 
@@ -87,7 +92,11 @@ export function buildAddProviderSpecificData(options: {
   }
   assignQuotaScrapingProviderData(provider, formData, data);
   if (isGooglePse && formData.cx.trim()) data.cx = formData.cx.trim();
-  if (usesBaseUrl) data.baseUrl = validatedBaseUrl;
+  if (provider === "aws-polly") {
+    data.accessKeyId = formData.awsAccessKeyId.trim() || undefined;
+    data.region = formData.region.trim() || "us-east-1";
+    data.sessionToken = formData.awsSessionToken.trim() || undefined;
+  } else if (usesBaseUrl) data.baseUrl = validatedBaseUrl;
   if (showsRegion) data.region = formData.region?.trim() || defaultRegion;
   else if (isGlm) {
     data.apiRegion = formData.apiRegion;
@@ -103,6 +112,10 @@ export function buildAddProviderSpecificData(options: {
     if (Number.isFinite(parsedQuotaPerUnit) && parsedQuotaPerUnit > 0) {
       data.quotaPerUnit = parsedQuotaPerUnit;
     }
+  }
+  if (provider === "chatgpt-web-codex") {
+    if (formData.tunnelId.trim()) data.tunnelId = formData.tunnelId.trim();
+    if (formData.connectorName.trim()) data.connectorName = formData.connectorName.trim();
   }
   return Object.keys(data).length > 0 ? data : undefined;
 }
@@ -143,7 +156,11 @@ export function assignEditApiKeyProviderSpecificData(options: {
   assignQuotaScrapingProviderData(o.provider, o.formData, o.target);
   if (o.formData.validationModelId) o.target.validationModelId = o.formData.validationModelId;
   if (o.isGooglePse) o.target.cx = o.formData.cx.trim() || undefined;
-  if (o.usesBaseUrl) o.target.baseUrl = o.validatedBaseUrl;
+  if (o.provider === "aws-polly") {
+    o.target.accessKeyId = o.formData.awsAccessKeyId.trim() || undefined;
+    o.target.region = o.formData.region.trim() || "us-east-1";
+    o.target.sessionToken = o.formData.awsSessionToken.trim() || undefined;
+  } else if (o.usesBaseUrl) o.target.baseUrl = o.validatedBaseUrl;
   if (o.showsRegion) o.target.region = o.formData.region?.trim() || o.defaultRegion;
   else if (o.isGlm) {
     o.target.apiRegion = o.formData.apiRegion;
@@ -173,5 +190,9 @@ export function assignEditApiKeyProviderSpecificData(options: {
   } else {
     o.target.newApiAggregatorBalance = undefined;
     o.target.quotaPerUnit = undefined;
+  }
+  if (o.provider === "chatgpt-web-codex") {
+    o.target.tunnelId = o.formData.tunnelId.trim() || undefined;
+    o.target.connectorName = o.formData.connectorName.trim() || undefined;
   }
 }

@@ -35,7 +35,6 @@
  *   - Only replace blocks ≥ minChars (default 600).
  *   - `stackable: true`, `stackPriority: 4` (runs just after session-dedup(3)).
  */
-
 import crypto from "node:crypto";
 import {
   deleteAllCcrBlocks,
@@ -46,7 +45,7 @@ import {
 } from "../../../../../src/lib/db/ccrBlocks.ts";
 import { createCompressionStats } from "../../stats.ts";
 import { queryBlock, type CcrQuery } from "./ccrQuery.ts";
-import { injectCcrProtocolInstruction } from "./protocolInstruction.ts";
+import { callerSupportsCcrRetrieve, injectCcrProtocolInstruction } from "./protocolInstruction.ts";
 import type {
   CompressionEngine,
   CompressionEngineApplyOptions,
@@ -292,8 +291,10 @@ function rehydrateEntry(hash: string, principalId: string, now: number): CcrEntr
 
   // Re-admit through the same budgets a fresh store would face. If the block no longer
   // fits, it stays on disk and is served straight from the row instead of being cached.
-  const { principalId: owner, bytes } = entry;
-  if (enforcePrincipalBudget(owner, bytes) && enforceGlobalBudget(owner, bytes)) {
+  if (
+    enforcePrincipalBudget(entry.principalId, entry.bytes) &&
+    enforceGlobalBudget(entry.principalId, entry.bytes)
+  ) {
     const key = buildStoreKey(hash, principalId === ANON ? undefined : principalId);
     ccrStore.set(key, entry);
     ccrTotalBytes += entry.bytes;
@@ -935,6 +936,30 @@ export const ccrEngine: CompressionEngine = {
     const stepConfig = options?.stepConfig ?? {};
 
     if (stepConfig["enabled"] === false) {
+      return { body, compressed: false, stats: null };
+    }
+
+    // #7746 follow-up: only callers whose tools[] proves they can reach
+    // omniroute_ccr_retrieve may have content replaced at all. For everyone
+    // else (plain OpenAI-compatible clients — the marker is an MCP-only
+    // contract) replacement would strand the original text behind a hash the
+    // model has no way to resolve. Skip the whole engine for them. The check
+    // is wrapped defensively: a malformed body must fail OPEN (no
+    // compression), never throw into the request pipeline.
+    let callerCanRetrieve = false;
+    try {
+      callerCanRetrieve = callerSupportsCcrRetrieve(body);
+    } catch (err) {
+      // Defensive: the helper is total, but if it ever throws we must fail
+      // OPEN (no compression) — and surface it so a future regression in the
+      // helper is visible instead of silently bypassing compression forever.
+      console.warn(
+        "[compression/ccr] callerSupportsCcrRetrieve threw; skipping compression:",
+        err instanceof Error ? err.message : err
+      );
+      callerCanRetrieve = false;
+    }
+    if (!callerCanRetrieve) {
       return { body, compressed: false, stats: null };
     }
 

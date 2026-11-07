@@ -53,21 +53,14 @@ describe("opencode-zen reasoning effort — max support (#9318)", () => {
     );
   });
 
-  // ── opencode (noauth) behavior unchanged ─────────────────────────────
-  it("opencode (noauth) with max → normalized to xhigh (unchanged behavior)", () => {
+  // ── opencode (noauth) max passthrough ─────────────────────────────────
+  it("opencode (noauth) with max preserves max", () => {
     const result = sanitizeReasoningEffortForProvider(
       { reasoning_effort: "max", messages: [] },
       "opencode",
       "deepseek-v4-flash"
     );
-    // opencode (noauth) is NOT in the supportsMaxEffortForProvider list, so
-    // max normalizes to xhigh (which is the xhigh-opt-in fallback).
-    // If xhigh is supported by the model, max→xhigh; otherwise max→high.
-    const eff = (result as Record<string, unknown>).reasoning_effort;
-    assert.ok(
-      eff === "xhigh" || eff === "high",
-      `expected max to normalize to xhigh or high for opencode (noauth), got ${eff}`
-    );
+    assert.equal((result as Record<string, unknown>).reasoning_effort, "max");
   });
 
   it("opencode (noauth) with high keeps high", () => {
@@ -97,17 +90,12 @@ describe("opencode-zen reasoning effort — max support (#9318)", () => {
     );
   });
 
-  it("opencode-go + non-deepseek model with max normalizes (regression guard)", () => {
+  it("opencode-go + non-deepseek model with max preserves max", () => {
     const result = sanitizeReasoningEffortForProvider(
       { reasoning_effort: "max", messages: [] },
       "opencode-go",
       "some-other-model"
     );
-    // opencode-go only supports max for deepseek models; other models normalize
-    const eff = (result as Record<string, unknown>).reasoning_effort;
-    assert.ok(
-      eff === "xhigh" || eff === "high",
-      `expected max to normalize for opencode-go + non-deepseek model, got ${eff}`
-    );
+    assert.equal((result as Record<string, unknown>).reasoning_effort, "max");
   });
 });

@@ -7,6 +7,7 @@
  */
 
 import { markServerReady, markServerStarting } from "@/lib/serverLifecycle";
+import { normalizeBootError } from "@/lib/instrumentationBootError";
 
 function getRandomBytes(byteLength: number): Uint8Array {
   const bytes = new Uint8Array(byteLength);
@@ -37,23 +38,13 @@ export function renameProcessTitle(currentTitle: string): string {
   return `omniroute${currentTitle.slice("next-server".length)}`;
 }
 
-/**
- * Normalize any thrown/rejected value into a real `Error` instance.
- *
- * Next.js's own `registerInstrumentation()` wrapper (see
- * `node_modules/next/dist/server/lib/router-utils/instrumentation-globals.external.js`)
- * unconditionally does `err.message = \`...${err.message}\`` on whatever our
- * `register()` export rejects with, assuming it is always an `Error`. If a raw
- * non-Error primitive bubbles up instead (e.g. sql.js's WASM adapter throws the
- * bare string `"Database closed"` — see `./lib/db/adapters/sqljsAdapter.ts`),
- * that assignment throws `TypeError: Cannot create property 'message' on
- * string '...'` in strict mode, masking the original error and crashing the
- * whole server on every boot (#6560). Normalizing before it leaves our code
- * guarantees Next always receives something `.message`-assignable.
- */
-export function normalizeBootError(err: unknown): Error {
-  return err instanceof Error ? err : new Error(String(err));
-}
+// `normalizeBootError` now lives in `@/lib/instrumentationBootError` (imported
+// above) — shared, dependency-free, and reused by `src/instrumentation.ts`'s
+// outermost boot boundary (#10171) so both boot-failure logging sites agree
+// on the same normalization instead of maintaining two copies of the same
+// one-liner. Re-exported here so existing callers/tests importing it from
+// this module keep working unchanged.
+export { normalizeBootError };
 
 // Matches sql.js's raw `throw "Database closed"` (and similarly-worded
 // variants) thrown when a query runs against an already-closed WASM handle —
@@ -242,6 +233,33 @@ export async function scanComboModelNameCollisionsAtBoot(): Promise<void> {
   }
 }
 
+/**
+ * #9654 U7: fold a dashboard DB toggle for the adaptive virtual-lanes flag into
+ * the process-global admission runtime's env at boot. Env-wins: no-op when the
+ * operator's OMNIROUTE_CHAT_VIRTUAL_LANES env var is set (the lazy runtime
+ * already reads process.env correctly). The runtime reads env only at
+ * construction, so this must run before the first request touches it — hence
+ * awaited here, after ensureDbReadyForBoot(). Non-fatal.
+ *
+ * Exported (rather than inline in registerNodejs()) so it can be unit tested
+ * directly without exercising the rest of the startup sequence.
+ */
+export async function warmAdaptiveVirtualLanesIntoRuntime(): Promise<void> {
+  try {
+    const { warmAdaptiveVirtualLanesIntoRuntime: warm } =
+      await import("@/lib/admissionVirtualLanes");
+    const materialized = await warm();
+    if (materialized) {
+      console.log(
+        "[STARTUP] Adaptive virtual lanes flag materialized from dashboard override (#9654)"
+      );
+    }
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.warn("[STARTUP] Could not warm adaptive virtual lanes flag (non-fatal):", msg);
+  }
+}
+
 export async function registerNodejs(): Promise<void> {
   markServerStarting();
 
@@ -295,6 +313,7 @@ export async function registerNodejs(): Promise<void> {
   }
 
   await scanComboModelNameCollisionsAtBoot();
+  await warmAdaptiveVirtualLanesIntoRuntime();
 
   const [
     { initGracefulShutdown },
@@ -452,8 +471,12 @@ export async function registerNodejs(): Promise<void> {
   // instrumentation startup), NOT in the unused src/server-init.ts.
   try {
     const { initCredentialHealthCheck } = await import("@/lib/credentialHealth/scheduler");
-    initCredentialHealthCheck();
-    console.log("[STARTUP] Credential health scheduler started");
+    const started = initCredentialHealthCheck();
+    console.log(
+      started
+        ? "[STARTUP] Credential health scheduler started"
+        : "[STARTUP] Credential health scheduler disabled"
+    );
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
     console.warn("[STARTUP] Could not start credential health scheduler:", msg);
@@ -533,6 +556,15 @@ export async function registerNodejs(): Promise<void> {
           const msg = err instanceof Error ? err.message : String(err);
           console.warn("[STARTUP] Auto-refresh daemon failed to start (non-fatal):", msg);
         }),
+
+      // Conductor bridge (PRD Conductor RF1): mirrors OmniConductor hub tasks into the
+      // A2A TaskManager via the hub SSE. Opt-in — self-gated on CONDUCTOR_HUB_URL.
+      import("@/lib/conductor/boot").then((m) => {
+        if (m.initConductorBridge()) console.log("[STARTUP] Conductor bridge started");
+      }).catch((err: unknown) => {
+        const msg = err instanceof Error ? err.message : String(err);
+        console.warn("[STARTUP] Conductor bridge failed to start (non-fatal):", msg);
+      }),
 
       // Proactive connection-cooldown recovery (#8): re-validate connections whose
       // transient `rate_limited_until` window has elapsed OUTSIDE the request hot path,

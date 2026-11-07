@@ -1,4 +1,5 @@
 import {
+  clampLimit,
   closeAdaptationWindow,
   createAdaptationState,
   noteLatency,
@@ -26,6 +27,13 @@ import {
   type AdmissionSnapshot,
   type ShadowDecision,
 } from "./types.ts";
+
+/**
+ * Idle TTL for per-tenant virtual admission lanes (#9654).
+ */
+const ADMISSION_LANE_TTL_MS = 60_000;
+/** Bounded per-tenant lane map to prevent unbounded memory growth (#9654). */
+const ADMISSION_LANE_MAX_SESSIONS = 1_000;
 
 type VirtualDisposition = "active" | "queued" | "rejected" | "none";
 
@@ -95,6 +103,16 @@ export class AdaptiveAdmissionController {
   private adaptation: AdaptationState;
   private queue: FairCostQueue<QueuedPayload>;
   private virtualQueue: FairCostQueue<{ recordId: string }>;
+  /** Per-tenant virtual admission lanes (#9654). */
+  private readonly virtualLanes = new Map<
+    string,
+    {
+      queue: FairCostQueue<QueuedPayload>;
+      lastUsedMs: number;
+    }
+  >();
+  /** Eviction timer for idle lanes; re-armed when a lane is created. */
+  private laneEvictionTimer: unknown = undefined;
   private readonly active = new Map<string, ActiveLeaseRecord>();
   private activeCost = 0n;
   private virtualActiveCost = 0;
@@ -137,6 +155,11 @@ export class AdaptiveAdmissionController {
       next.maxLimit,
       Math.max(next.minLimit, this.adaptation.currentLimit)
     );
+    // #10111: the idle-recovery ceiling must track a new initialLimit (and the
+    // possibly-also-new min/maxLimit) instead of staying pinned to the value computed
+    // at construction time — otherwise a raised initialLimit can never recover past the
+    // stale ceiling, and a lowered one leaves the ceiling above the new maxLimit.
+    this.adaptation.recoveryCeiling = clampLimit(next.initialLimit, next.minLimit, next.maxLimit);
     this.adaptation.windowStartMs = this.clock.now();
     this.adaptation.windowActiveCostIntegral = 0;
     this.adaptation.windowCompleted = 0;
@@ -148,6 +171,14 @@ export class AdaptiveAdmissionController {
 
     const drained = this.queue.drain();
     this.queue = new FairCostQueue(next.maxQueueCount, next.maxQueueCost);
+    // Drain per-tenant virtual lane queues (#9654).
+    for (const [, lane] of this.virtualLanes) {
+      for (const entry of lane.queue.drain()) {
+        drained.push(entry);
+      }
+    }
+    this.virtualLanes.clear();
+    this.clearLaneEviction();
     for (const entry of drained) {
       if (next.mode !== "enforce") {
         this.clearEntryTimer(entry);
@@ -191,6 +222,11 @@ export class AdaptiveAdmissionController {
       virtualActiveCount: saturateSnapshotNumber(this.virtualActiveCount),
       virtualQueuedCost: saturateSnapshotNumber(this.virtualQueue.totalCost),
       virtualQueuedCount: saturateSnapshotNumber(this.virtualQueue.size),
+      virtualLanes: this.config.virtualLanes === true,
+      laneCount: saturateSnapshotNumber(this.virtualLanes.size),
+      laneQueuedCost: saturateSnapshotNumber(this.laneTotalQueuedCost()),
+      laneQueuedCount: saturateSnapshotNumber(this.laneTotalQueuedCount()),
+      laneTenants: this.laneTenantSnapshot(),
       admittedCount: saturateSnapshotNumber(this.admittedCount),
       rejectedCount: saturateSnapshotNumber(this.rejectedCount),
       wouldAdmitCount: saturateSnapshotNumber(this.wouldAdmitCount),
@@ -223,6 +259,7 @@ export class AdaptiveAdmissionController {
   /** Deterministic window tick for tests / injected clocks. */
   tick(): void {
     this.sampleIntegral();
+    this.evictIdleLanes();
     closeAdaptationWindow(this.adaptation, this.config.adaptation, this.clock.now());
     // Real queue first, then virtual: raised limits must promote shadow-queued work
     // before newer arrivals are classified against the updated budget.
@@ -256,6 +293,17 @@ export class AdaptiveAdmissionController {
 
     // enforce
     if (cost > limit) {
+      // #10111 solo-progress: the adaptive aggregate limit can collapse below an
+      // individually-valid request (a slow-provider turn shrinks currentLimit via the
+      // latency gradient, and no increase can fire because every path to "completed"
+      // requires an admission). A request within the healthy aggregate ceiling must never
+      // be terminally rejected as oversized while the system is otherwise idle — admit a
+      // single bounded solo request so the pipeline keeps making progress and the limit can
+      // recover. The hard per-request ceiling (maxLimit), the critical/high pressure fuse,
+      // and a busy system (active/queued work present) all take precedence over solo.
+      if (this.shouldAdmitSolo(cost)) {
+        return this.admit(cost);
+      }
       return this.reject("ADMISSION_OVERSIZED", "request cost exceeds max budget");
     }
 
@@ -289,6 +337,37 @@ export class AdaptiveAdmissionController {
       );
       this.rejectedCount += 1;
     }
+    // Drain per-tenant virtual lane queues (#9654).
+    for (const [, lane] of this.virtualLanes) {
+      for (const entry of lane.queue.drain()) {
+        this.clearEntryTimer(entry);
+        this.detachAbort(entry);
+        entry.payload.reject(
+          createAdmissionRejectError("ADMISSION_SHUTDOWN", "admission controller shut down")
+        );
+        this.rejectedCount += 1;
+      }
+    }
+    this.virtualLanes.clear();
+    this.clearLaneEviction();
+  }
+
+  /**
+   * #10111: whether a request that currently exceeds the temporary aggregate limit may run
+   * solo. True only when the request fits the healthy aggregate ceiling (maxLimit), the
+   * system is otherwise idle (no active/queued/lane work) and pressure is normal — so an
+   * individually-valid request is not terminally rejected as oversized just because a
+   * latency-gradient decrease collapsed the temporary limit. Under genuine load, critical
+   * pressure, or an over-ceiling request the caller falls through to the terminal reject.
+   */
+  private shouldAdmitSolo(cost: number): boolean {
+    return (
+      cost <= this.config.maxLimit &&
+      this.active.size === 0 &&
+      this.queue.size === 0 &&
+      this.laneTotalQueuedCount() === 0 &&
+      this.adaptation.pressure === "normal"
+    );
   }
 
   private resolveCost(request: AdmissionRequest): number {
@@ -440,9 +519,23 @@ export class AdaptiveAdmissionController {
       },
     };
 
-    if (!this.queue.enqueue(entry)) {
+    // Per-tenant virtual admission lanes (#9654): when enabled via
+    // OMNIROUTE_CHAT_VIRTUAL_LANES=1, requests with a tenantKey are enqueued into
+    // a per-tenant lane queue instead of the shared queue, so one tenant's
+    // burst does not 503 other sessions. Lanes are bounded by
+    // ADMISSION_LANE_MAX_SESSIONS and idle-evicted after ADMISSION_LANE_TTL_MS.
+    // Default: OFF — preserves the shared FairCostQueue round-robin behavior.
+    if (entry.tenantKey !== "_default" && this.config.virtualLanes) {
+      const lane = this.getOrCreateLane(entry.tenantKey);
+      if (!lane.queue.enqueue(entry)) {
+        this.removeEmptyLane(entry.tenantKey);
+        return this.reject("ADMISSION_QUEUE_FULL", "admission lane queue is full");
+      }
+      this.armLaneEviction();
+    } else if (!this.queue.enqueue(entry)) {
       return this.reject("ADMISSION_QUEUE_FULL", "admission queue is full");
     }
+    this.dispatch();
 
     entry.timerId = this.clock.setTimer(
       () => {
@@ -466,7 +559,17 @@ export class AdaptiveAdmissionController {
   }
 
   private expireEntry(id: string, code: AdmissionRejectCode, message: string): void {
-    const entry = this.queue.removeById(id);
+    let entry = this.queue.removeById(id);
+    if (!entry) {
+      // Search per-tenant lane queues (#9654).
+      for (const [, lane] of this.virtualLanes) {
+        entry = lane.queue.removeById(id);
+        if (entry) {
+          this.removeEmptyLane(entry.tenantKey);
+          break;
+        }
+      }
+    }
     if (!entry) return;
     this.clearEntryTimer(entry);
     this.detachAbort(entry);
@@ -490,7 +593,6 @@ export class AdaptiveAdmissionController {
 
   private dispatch(): void {
     if (this.shutDown || this.config.mode !== "enforce") return;
-
     while (this.queue.size > 0) {
       const limit = this.adaptation.currentLimit;
       const available = BigInt(limit) - this.activeCost;
@@ -515,6 +617,172 @@ export class AdaptiveAdmissionController {
       }
       entry.payload.resolve(this.admit(entry.cost));
     }
+    this.dispatchLanes();
+  }
+
+  /** Round-robin dispatch across per-tenant virtual lane queues (#9654). */
+  private dispatchLanes(): void {
+    if (this.shutDown || this.config.mode !== "enforce") return;
+    if (this.virtualLanes.size === 0) return;
+
+    const keys = Array.from(this.virtualLanes.keys());
+    for (const key of keys) {
+      const lane = this.virtualLanes.get(key);
+      if (!lane) continue;
+      // Dispatch as many entries from this lane as capacity allows,
+      // then break to give other lanes a fair share.
+      while (lane.queue.size > 0) {
+        const limit = this.adaptation.currentLimit;
+        const available = BigInt(limit) - this.activeCost;
+        if (available <= 0n) return;
+        const entry = lane.queue.dequeue(Number(available));
+        if (!entry) break; // head doesn't fit
+        this.clearEntryTimer(entry);
+        this.detachAbort(entry);
+        if (entry.payload.signal?.aborted) {
+          entry.payload.reject(
+            createAdmissionRejectError("ADMISSION_ABORTED", "request aborted while queued")
+          );
+          this.rejectedCount += 1;
+          continue;
+        }
+        if (this.clock.now() >= entry.deadlineMs) {
+          entry.payload.reject(
+            createAdmissionRejectError("ADMISSION_DEADLINE", "admission wait deadline exceeded")
+          );
+          this.rejectedCount += 1;
+          continue;
+        }
+        entry.payload.resolve(this.admit(entry.cost));
+        break; // yield to next lane for fairness
+      }
+      this.removeEmptyLane(key);
+    }
+  }
+
+  private getOrCreateLane(tenantKey: string): {
+    queue: FairCostQueue<QueuedPayload>;
+    lastUsedMs: number;
+  } {
+    let lane = this.virtualLanes.get(tenantKey);
+    if (!lane) {
+      // Evict oldest lane if at capacity (LRU).
+      if (this.virtualLanes.size >= ADMISSION_LANE_MAX_SESSIONS) {
+        const oldestKey = this.oldestLaneKey();
+        if (oldestKey) {
+          this.deleteLane(oldestKey);
+        }
+      }
+      // Per-lane queue uses the same maxQueueCount/maxQueueCost as the shared
+      // queue. Total memory is bounded by ADMISSION_LANE_MAX_SESSIONS (1000)
+      // × per-lane queue caps — each lane's FairCostQueue rejects when full.
+      lane = {
+        queue: new FairCostQueue(this.config.maxQueueCount, this.config.maxQueueCost),
+        lastUsedMs: this.clock.now(),
+      };
+      this.virtualLanes.set(tenantKey, lane);
+    }
+    lane.lastUsedMs = this.clock.now();
+    return lane;
+  }
+
+  private removeEmptyLane(tenantKey: string): void {
+    const lane = this.virtualLanes.get(tenantKey);
+    if (lane && lane.queue.size === 0) {
+      this.virtualLanes.delete(tenantKey);
+    }
+  }
+
+  /** Drain and reject all pending entries in a lane before removing it from the map. */
+  private deleteLane(tenantKey: string): void {
+    const lane = this.virtualLanes.get(tenantKey);
+    if (!lane) return;
+    for (const entry of lane.queue.drain()) {
+      this.clearEntryTimer(entry);
+      this.detachAbort(entry);
+      entry.payload.reject(
+        createAdmissionRejectError("ADMISSION_LANE_EVICTED", "connection lane evicted")
+      );
+      this.rejectedCount += 1;
+    }
+    this.virtualLanes.delete(tenantKey);
+  }
+
+  private oldestLaneKey(): string | undefined {
+    let oldest: string | undefined;
+    let oldestMs = Infinity;
+    for (const [key, lane] of this.virtualLanes) {
+      if (lane.lastUsedMs <= oldestMs) {
+        oldestMs = lane.lastUsedMs;
+        oldest = key;
+      }
+    }
+    return oldest;
+  }
+
+  private evictIdleLanes(): void {
+    const now = this.clock.now();
+    const keysToDelete: string[] = [];
+    for (const [key, lane] of this.virtualLanes) {
+      if (now - lane.lastUsedMs >= ADMISSION_LANE_TTL_MS) {
+        keysToDelete.push(key);
+      }
+    }
+    for (const key of keysToDelete) {
+      this.deleteLane(key);
+    }
+    if (this.virtualLanes.size > 0) {
+      this.armLaneEviction();
+    } else {
+      this.clearLaneEviction();
+    }
+  }
+
+  private armLaneEviction(): void {
+    this.clearLaneEviction();
+    this.laneEvictionTimer = this.clock.setTimer(
+      () => this.evictIdleLanes(),
+      ADMISSION_LANE_TTL_MS
+    );
+  }
+
+  private clearLaneEviction(): void {
+    if (this.laneEvictionTimer !== undefined) {
+      this.clock.clearTimer(this.laneEvictionTimer);
+      this.laneEvictionTimer = undefined;
+    }
+  }
+
+  private laneTotalQueuedCost(): number {
+    let total = 0;
+    for (const [, lane] of this.virtualLanes) {
+      total = addSaturated(total, lane.queue.totalCost);
+    }
+    return total;
+  }
+
+  private laneTotalQueuedCount(): number {
+    let count = 0;
+    for (const [, lane] of this.virtualLanes) {
+      count = addSaturated(count, lane.queue.size);
+    }
+    return count;
+  }
+
+  private laneTenantSnapshot(): ReadonlyArray<{
+    tenantKey: string;
+    queuedCount: number;
+    queuedCost: number;
+  }> {
+    const arr: { tenantKey: string; queuedCount: number; queuedCost: number }[] = [];
+    for (const [tenantKey, lane] of this.virtualLanes) {
+      arr.push({
+        tenantKey,
+        queuedCount: saturateSnapshotNumber(lane.queue.size),
+        queuedCost: saturateSnapshotNumber(lane.queue.totalCost),
+      });
+    }
+    return arr;
   }
 
   private releaseVirtual(record: ActiveLeaseRecord): void {

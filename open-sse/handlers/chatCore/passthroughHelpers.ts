@@ -1,4 +1,5 @@
 import { FORMATS } from "../../translator/formats.ts";
+import { isVerifiedNativeCodexRequest } from "../../config/codexIdentity.ts";
 import { isClaudeCodeCompatibleProvider } from "../../services/claudeCodeCompatible.ts";
 import { isResponsesEndpointPath } from "../../utils/responsesEndpoint.ts";
 import { getHeaderValueCaseInsensitive } from "./headers.ts";
@@ -11,14 +12,22 @@ export function shouldUseNativeCodexPassthrough({
   provider,
   sourceFormat,
   endpointPath,
+  body,
+  headers,
 }: {
   provider?: string | null;
   sourceFormat?: string | null;
   endpointPath?: string | null;
+  body?: unknown;
+  headers?: Headers | Record<string, unknown> | null;
 }): boolean {
-  if (provider !== "codex") return false;
+  if (provider !== "codex" && provider !== "chatgpt-web-codex") return false;
   if (sourceFormat !== FORMATS.OPENAI_RESPONSES) return false;
-  return isResponsesEndpointPath(endpointPath);
+  let normalizedEndpoint = String(endpointPath || "");
+  while (normalizedEndpoint.endsWith("/")) normalizedEndpoint = normalizedEndpoint.slice(0, -1);
+  const segments = normalizedEndpoint.split("/");
+  if (!segments.includes("responses")) return false;
+  return provider === "codex" || isVerifiedNativeCodexRequest(body, headers);
 }
 
 export function shouldUseNativeXaiResponsesPassthrough({
@@ -37,10 +46,33 @@ export function shouldUseNativeXaiResponsesPassthrough({
 
 export function stampNativeResponsesPassthroughBody(
   body: Record<string, unknown>,
-  mode: "codex" | "xai"
+  mode: "codex" | "xai" | "openai-compatible"
 ): Record<string, unknown> {
   if (mode === "codex") return { ...body, _nativeCodexPassthrough: true };
-  return { ...body, _nativeXaiResponsesPassthrough: true };
+  if (mode === "xai") return { ...body, _nativeXaiResponsesPassthrough: true };
+  return { ...body, _nativeOpenAICompatibleResponsesPassthrough: true };
+}
+
+export function shouldUseNativeOpenAICompatibleResponsesPassthrough({
+  provider,
+  sourceFormat,
+  endpointPath,
+  providerSpecificData,
+}: {
+  provider?: string | null;
+  sourceFormat?: string | null;
+  endpointPath?: string | null;
+  providerSpecificData?: unknown;
+}): boolean {
+  if (!provider?.startsWith("openai-compatible-")) return false;
+  if (sourceFormat !== FORMATS.OPENAI_RESPONSES) return false;
+  if (providerSpecificData && typeof providerSpecificData === "object") {
+    const psd = providerSpecificData as Record<string, unknown>;
+    if (psd.apiType === "responses" || psd._omnirouteForceResponsesUpstream === true) {
+      return true;
+    }
+  }
+  return false;
 }
 
 /**

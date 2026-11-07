@@ -501,11 +501,13 @@ jobs:
           BASE_REF: ${{ github.base_ref && format('origin/{0}', github.base_ref) || '' }}
         run: node scripts/i18n/check-ui-value-drift.mjs
 
-  # #8038: cheap single-locale glossary/protected-terms consistency gate —
+  # #8038: cheap glossary/protected-terms consistency gate —
   # complements i18n-ui-coverage (key parity) and the ICU `i18n` job below
   # without needing app-boot/Playwright infra. Same gating as i18n-ui-coverage.
+  # ko added after the #8224 ko.json mistranslation cleanup so the fixed
+  # terminology cannot silently regress on the next machine-translation run.
   i18n-glossary-zhcn:
-    name: i18n Glossary (zh-CN)
+    name: i18n Glossary (zh-CN, ko)
     runs-on: ubuntu-latest
     needs: changes
     if: ${{ github.event_name != 'pull_request' || (github.event.pull_request.draft == false && (needs.changes.outputs.i18n == 'true' || needs.changes.outputs.code == 'true')) }}
@@ -683,7 +685,50 @@ jobs:
       - run: npm run build:cli
       - name: Assert dist/server.js exists
         run: test -f dist/server.js || (echo "dist/server.js missing — build:cli did not assemble correctly" && exit 1)
+      # `build:cli` monta dist/ mas NAO grava dist/BUILD_SHA — so `build:release` faz
+      # isso, chamando write-build-sha.mjs. O guard de proveniencia do #10427, dentro
+      # de check:pack-artifact, rejeita um artefato sem SHA (e rejeita mesmo com
+      # OMNIROUTE_ALLOW_CANARY_BUILD=1: o que nao da para identificar nao da para
+      # vouchear). Sem este passo o par build+validate deste job e estruturalmente
+      # incompativel e falha 100% das vezes.
+      - name: Stamp dist/BUILD_SHA for the provenance guard (#10427)
+        # O SHA TEM de vir do head da PR, nao de `git rev-parse HEAD`. Este workflow
+        # roda em `pull_request`, entao o checkout e o MERGE COMMIT efemero que o
+        # GitHub cria — um commit que nao existe em branch nenhuma e portanto nunca e
+        # ancestral da release. O guard de proveniencia (#10427) rejeita exatamente
+        # isso, e com razao: um artefato carimbado com o merge commit nao pode ser
+        # rastreado ate codigo que passou pelos gates.
+        env:
+          OMNIROUTE_BUILD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          export OMNIROUTE_BUILD_SHA="${OMNIROUTE_BUILD_SHA:0:7}"
+          node scripts/build/write-build-sha.mjs
+      # O guard de proveniencia checa ancestralidade contra `origin/main` por padrao.
+      # Esse e o ref certo na PUBLICACAO (npm-publish.yml roda em main), mas em
+      # `pull_request` e estruturalmente impossivel: enquanto a PR esta aberta o head
+      # dela NUNCA e ancestral de main — e o checkout raso nem traz `origin/main` para
+      # o grafo local, entao a sonda responde `false` de qualquer jeito. Resultado: o
+      # gate falhava 100% das vezes em PR. Pre-merge o unico invariante checavel e "o
+      # stamp corresponde a branch sob teste", entao apontamos o ref para o head da PR.
+      # Usamos `refs/pull/<N>/head` e nao `head.ref` porque aquele existe no PROPRIO
+      # origin mesmo quando a PR vem de um fork; `head.ref` so existe no repo do autor.
+      - name: Resolve the provenance ref for the pack gate (#10427)
+        id: provenance-ref
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          if [ -n "$PR_NUMBER" ]; then
+            git fetch --no-tags --depth=50 origin \
+              "+refs/pull/$PR_NUMBER/head:refs/remotes/origin/pr-head"
+            echo "ref=origin/pr-head" >> "$GITHUB_OUTPUT"
+          else
+            git fetch --no-tags --depth=50 origin \
+              "+refs/heads/$GITHUB_REF_NAME:refs/remotes/origin/$GITHUB_REF_NAME"
+            echo "ref=origin/$GITHUB_REF_NAME" >> "$GITHUB_OUTPUT"
+          fi
       - run: npm run check:pack-artifact
+        env:
+          OMNIROUTE_RELEASE_REF: ${{ steps.provenance-ref.outputs.ref }}
       # WS1.2 (#7065 class): pack the real tarball, install it into a clean prefix and
       # BOOT it to a healthy /api/monitoring/health — the gate that structure checks
       # cannot provide (3 releases shipped boot-crashing tarballs with green lists).
@@ -695,11 +740,12 @@ jobs:
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     needs: build
-    # WS1.5 (v3.8.49 plan): the Electron rebuild/spawn path previously executed for
+    # WS1.5 (v3.8.49 plan): the Electron native-module path previously executed for
     # the FIRST time on the release tag — the v3.8.48 Windows bug (npx.cmd spawned
     # without shell, CVE-2024-27980 behavior change) could only surface at release.
-    # windows-latest runs prepare:bundle (the ABI rebuild + spawn plan) per release
-    # PR; ubuntu keeps the full pack + headless smoke.
+    # windows-latest runs prepare:bundle (better-sqlite3 prebuild verification since
+    # v13 — the node-gyp rebuild is gone) per release PR; ubuntu keeps the full
+    # pack + headless smoke.
     strategy:
       fail-fast: false
       matrix:
@@ -736,7 +782,7 @@ jobs:
       # precedent): its first-ever real run (2026-07-15, run 29457533565) died in
       # 0.7s with the error swallowed by pwsh — bash shell captures stderr and
       # continue-on-error keeps the heavy gate green while we harden it (#7336).
-      - name: Prepare Electron standalone (Windows ABI rebuild + spawn path)
+      - name: Prepare Electron standalone (Windows prebuild verification)
         if: runner.os == 'Windows'
         working-directory: electron
         continue-on-error: true
@@ -789,9 +835,23 @@ jobs:
       # D3 (plano mestre): a coverage é coletada NESTE mesmo run (c8/NODE_V8_COVERAGE propaga
       # aos filhos através do npm) — elimina a matrix Coverage Shard ×8, que re-executava a
       # suíte inteira só para medir o gate. Padrão usado pelo CI do próprio nodejs/node.
+      # Heap: os shards rodam sob instrumentacao de cobertura do V8, que retem muito
+      # mais memoria que a suite crua. Com o teto antigo de 4096 MB os shards passaram
+      # a abortar com SIGABRT (exit 134, "Ineffective mark-compacts near heap limit")
+      # ao redor de 4086 MB conforme o catalogo de providers cresceu no ciclo v3.8.50 —
+      # todos os testes passavam e o processo morria no fim, o que le como falha de
+      # teste sem ser. O teto vive em `test:unit:ci:shard` (package.json) e agora
+      # acompanha os 8192 MB ja usados pelas variantes nao-shardadas; os runners
+      # GitHub-hosted tem 16 GB.
       - name: Unit tests (shard ${{ matrix.shard }}/8) with V8 coverage
         env:
           TEST_SHARD: ${{ matrix.shard }}/8
+          # NODE_OPTIONS (nao so o flag em test:unit:ci:shard) porque quem estoura o
+          # heap e o processo `c8` que embrulha a suite — ele agrega ~577 MB de JSON
+          # de cobertura bruta. Subir o teto so no node filho deixa o pai no default
+          # do V8 (~4 GB) e o OOM continua igual, em ~4083 MB. Mesmo padrao ja usado
+          # pelo job de merge de cobertura mais abaixo.
+          NODE_OPTIONS: --max-old-space-size=8192
         run: |
           rm -rf coverage-shard coverage-shard-report
           npx c8 \
@@ -811,7 +871,12 @@ jobs:
 
   test-bun-sqlite:
     name: Bun SQLite Compatibility
-    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+      fail-fast: false
+    runs-on: ${{ matrix.os }}
+    continue-on-error: ${{ matrix.os == 'windows-latest' }}
     timeout-minutes: 10
     needs: changes
     if: ${{ github.event_name != 'pull_request' || (needs.changes.outputs.code == 'true' && github.event.pull_request.draft == false) }}
@@ -824,6 +889,15 @@ jobs:
           node-version: ${{ env.CI_NODE_VERSION }}
           cache: npm
       - uses: ./.github/actions/npm-ci-retry
+      - name: Install Bun (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          powershell -c "iwr bun.sh/install.ps1 -useb | iex"
+          echo "$env:USERPROFILE\.bun\bin" | Out-File -FilePath $env:GITHUB_PATH -Append
+      - name: Install Bun (non-Windows)
+        if: runner.os != 'Windows'
+        run: npm install -g bun
       - run: npm run test:bun:db
 
   test-vitest:
@@ -982,7 +1056,10 @@ jobs:
     name: SonarQube
     runs-on: ubuntu-latest
     needs: test-coverage
-    if: ${{ !cancelled() && needs.test-coverage.result == 'success' }}
+    # Temporarily opt-in: the private project currently has no Sonar quota.
+    # Re-enable without another code change by setting the repository Actions
+    # variable SONARQUBE_ENABLED=true after quota/project access is restored.
+    if: ${{ vars.SONARQUBE_ENABLED == 'true' && !cancelled() && needs.test-coverage.result == 'success' }}
     env:
       SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
       SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
@@ -1240,6 +1317,63 @@ jobs:
       - run: npm run check:node-runtime
       - run: npm run test:security
 
+  # Live-server E2E. Both suites boot a real OmniRoute via their own runner and
+  # drive it over HTTP; neither needs provider credentials. They were documented in
+  # AGENTS.md's test matrix but wired to NO workflow, and had additionally been
+  # unrunnable (vitest.config.ts excluded the very files their runners passed as a
+  # positional filter) — so nothing had executed them for as long as that was true.
+  test-ecosystem:
+    name: Ecosystem E2E (live server)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    # needs: changes (not build) — the runner boots its own dev server.
+    needs: changes
+    if: ${{ github.event_name != 'pull_request' || (needs.changes.outputs.code == 'true' && github.event.pull_request.draft == false) }}
+    env:
+      JWT_SECRET: ci-test-secret-with-sufficient-length-for-validation
+      API_KEY_SECRET: ci-test-api-key-secret-long
+      DISABLE_SQLITE_AUTO_BACKUP: "true"
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ env.CI_NODE_VERSION }}
+          cache: npm
+      - uses: ./.github/actions/npm-ci-retry
+      - run: npm run check:node-runtime
+      - run: npm run test:ecosystem
+
+  test-protocols-e2e:
+    name: Protocol Clients E2E (live server, advisory)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    needs: changes
+    if: ${{ github.event_name != 'pull_request' || (needs.changes.outputs.code == 'true' && github.event.pull_request.draft == false) }}
+    # ADVISORY until #10049 is resolved. Restoring this suite immediately surfaced a
+    # real discrepancy that had been invisible while it could not run: GET
+    # /api/mcp/audit answers 403 over loopback where the suite expects 200|401. That
+    # is a pre-existing contract question, not a defect introduced by wiring the job
+    # up, so it must not block every PR in the meantime. Flip to blocking (drop this
+    # continue-on-error) the moment #10049 lands.
+    continue-on-error: true
+    env:
+      JWT_SECRET: ci-test-secret-with-sufficient-length-for-validation
+      API_KEY_SECRET: ci-test-api-key-secret-long
+      DISABLE_SQLITE_AUTO_BACKUP: "true"
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ env.CI_NODE_VERSION }}
+          cache: npm
+      - uses: ./.github/actions/npm-ci-retry
+      - run: npm run check:node-runtime
+      - run: npm run test:protocols:e2e
+
   ci-summary:
     name: CI Dashboard
     runs-on: ubuntu-latest
@@ -1262,6 +1396,8 @@ jobs:
       - test-e2e
       - test-integration
       - test-security
+      - test-ecosystem
+      - test-protocols-e2e
     steps:
       - name: Download i18n results
         continue-on-error: true
@@ -1320,9 +1456,9 @@ jobs:
           echo "| Lint | $(status '${{ needs.lint.result }}') |" >> "$GITHUB_STEP_SUMMARY"
           echo "| Docs Sync (Strict) | $(status '${{ needs.docs-sync-strict.result }}') |" >> "$GITHUB_STEP_SUMMARY"
           echo "| i18n UI Coverage | $(status '${{ needs.i18n-ui-coverage.result }}') |" >> "$GITHUB_STEP_SUMMARY"
-          echo "| i18n Glossary (zh-CN) | $(status '${{ needs.i18n-glossary-zhcn.result }}') |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| i18n Glossary (zh-CN, ko) | $(status '${{ needs.i18n-glossary-zhcn.result }}') |" >> "$GITHUB_STEP_SUMMARY"
           echo "| PR Test Policy | $(status '${{ needs.pr-test-policy.result }}') |" >> "$GITHUB_STEP_SUMMARY"
-          echo "| SonarQube | $(status '${{ needs.sonarqube.result }}') |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| SonarQube (opt-in; disabled without SONARQUBE_ENABLED=true) | $(status '${{ needs.sonarqube.result }}') |" >> "$GITHUB_STEP_SUMMARY"
 
           echo "" >> "$GITHUB_STEP_SUMMARY"
           echo "## 🏗️ Build" >> "$GITHUB_STEP_SUMMARY"
@@ -1342,6 +1478,8 @@ jobs:
           echo "| E2E | $(status '${{ needs.test-e2e.result }}') |" >> "$GITHUB_STEP_SUMMARY"
           echo "| Integration | $(status '${{ needs.test-integration.result }}') |" >> "$GITHUB_STEP_SUMMARY"
           echo "| Security Tests | $(status '${{ needs.test-security.result }}') |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Ecosystem E2E | $(status '${{ needs.test-ecosystem.result }}') |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Protocol Clients E2E (advisory, #10049) | $(status '${{ needs.test-protocols-e2e.result }}') |" >> "$GITHUB_STEP_SUMMARY"
 
           echo "" >> "$GITHUB_STEP_SUMMARY"
           echo "## 🌍 Translations" >> "$GITHUB_STEP_SUMMARY"

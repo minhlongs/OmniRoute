@@ -140,7 +140,11 @@ function isPlainObject(value: unknown): value is JsonRecord {
 
 export function normalizeCodexTools(
   body: Record<string, unknown>,
-  options?: { dropImageGeneration?: boolean; preserveCustomTools?: boolean }
+  options?: {
+    dropImageGeneration?: boolean;
+    preserveCustomTools?: boolean;
+    defaultFunctionStrict?: boolean;
+  }
 ): void {
   if (!Array.isArray(body.tools)) return;
 
@@ -241,7 +245,9 @@ export function normalizeCodexTools(
         ? tool.strict
         : typeof functionObject?.strict === "boolean"
           ? functionObject.strict
-          : undefined;
+          : typeof options?.defaultFunctionStrict === "boolean"
+            ? options.defaultFunctionStrict
+            : undefined;
 
     // Codex/OpenAI Responses API rejects `pattern` fields using regex lookaround
     // (e.g. `^(?=.*@).+$`) with a 400 "regex lookaround is not supported" error.

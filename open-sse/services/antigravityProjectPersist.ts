@@ -39,7 +39,7 @@ export function preferAntigravityConnectionsWithStoredProject<T extends Record<s
 ): T[] {
   if (!Array.isArray(connections) || connections.length === 0) return connections;
   const hasStoredProject = (connection: T): boolean => {
-    if (typeof connection.projectId === "string" && connection.projectId) return true;
+    if (typeof connection.projectId === "string" && connection.projectId.trim()) return true;
     let psd = connection.providerSpecificData;
     if (typeof psd === "string") {
       try {
@@ -48,15 +48,27 @@ export function preferAntigravityConnectionsWithStoredProject<T extends Record<s
         return false;
       }
     }
-    return Boolean(
-      psd &&
-      typeof psd === "object" &&
-      typeof (psd as Record<string, unknown>).projectId === "string" &&
-      (psd as Record<string, unknown>).projectId
-    );
+    if (!psd || typeof psd !== "object") return false;
+    const projectId = (psd as Record<string, unknown>).projectId;
+    return typeof projectId === "string" && projectId.trim().length > 0;
   };
-  const withStoredProject = connections.filter(hasStoredProject);
-  return withStoredProject.length > 0 ? withStoredProject : connections;
+  // #11284: rows whose missing Cloud Code project was CONFIRMED at request
+  // time (errorCode="missing_project_id") are dead weight — drop them when a
+  // healthier sibling exists. When every row is confirmed missing, keep the
+  // pool so the typed 422 (not an empty-selection 404) explains what to fix.
+  const hasHealthySibling = (connection: T): boolean =>
+    connections.some(
+      (other) => other !== connection && other.errorCode !== "missing_project_id"
+    );
+  const candidates = connections.filter(
+    (connection) =>
+      connection.errorCode !== "missing_project_id" ||
+      !hasHealthySibling(connection) ||
+      !hasStoredProject(connection)
+  );
+  const withStoredProject = candidates.filter(hasStoredProject);
+  if (withStoredProject.length > 0) return withStoredProject;
+  return candidates.length > 0 ? candidates : connections;
 }
 
 export async function persistDiscoveredAntigravityProjectId(

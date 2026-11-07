@@ -17,6 +17,7 @@ import {
   providerCircuitOpenResponse,
   unavailableResponse,
 } from "@omniroute/open-sse/utils/error.ts";
+import { inheritTrustedLocalRateLimitResponse } from "@omniroute/open-sse/services/rateLimitManager/errors.ts";
 import { HTTP_STATUS } from "@omniroute/open-sse/config/constants.ts";
 import {
   runWithProxyContext,
@@ -418,8 +419,12 @@ export async function executeChatWithBreaker({
   skipUpstreamRetry = false,
   trafficType = "production",
   correlationId = null,
+  conversationId = null,
   modelPinned = false,
   routingComboId = null,
+  reasoningTransportFallback = "drop",
+  sessionAffinityKey = null,
+  managedLease = null,
 }: ExecuteChatWithBreakerOptions): Promise<ExecuteChatWithBreakerResult> {
   let tlsFingerprintUsed = false;
   const normalizedTrafficType: TrafficType =
@@ -445,6 +450,12 @@ export async function executeChatWithBreaker({
         runWithProxyContext(proxyInfo?.proxy || null, () =>
           (handleChatCore as any)({
             body: { ...body, model: `${provider}/${model}` },
+            // #2905-followup: forward the already-resolved custom-model targetFormat
+            // override through as modelInfo.targetFormat. Without this, chatCore.ts's
+            // own resolveChatCoreRequestSetup() reads customModelTargetFormat off THIS
+            // modelInfo object (not the one resolveModelOrError computed it from) and
+            // finds nothing, silently re-deriving targetFormat from the static registry
+            // / provider default and discarding the DB override a second time.
             modelInfo: {
               provider,
               model,
@@ -467,8 +478,12 @@ export async function executeChatWithBreaker({
             skipUpstreamRetry,
             trafficType: normalizedTrafficType,
             correlationId,
+            conversationId,
             modelPinned,
             routingComboId,
+            sessionAffinityKey,
+            reasoningTransportFallback,
+            managedLease,
             skipResourcePressureGuard: true,
             onCredentialsRefreshed: async (newCreds: any) => {
               await updateProviderCredentials(credentials.connectionId, {
@@ -529,6 +544,15 @@ export async function executeChatWithBreaker({
         )
       );
 
+    const tlsTrackingIdentity = {
+      provider,
+      sessionScope: credentials.connectionId,
+    };
+    // Track whenever direct TLS is possible. proxyFetch decides against wreq only
+    // after resolving NO_PROXY/local bypasses, so predicting from proxyInfo here
+    // would drop the account scope when a configured proxy resolves to direct.
+    const tlsFingerprintActive = isTlsFingerprintActive(provider);
+
     if (isShadowTraffic) {
       if (!bypassCircuitBreaker && breaker && !breaker.canExecute()) {
         const retryAfterMs = breaker.getRetryAfterMs();
@@ -542,8 +566,8 @@ export async function executeChatWithBreaker({
         };
       }
 
-      if (!proxyInfo?.proxy && isTlsFingerprintActive()) {
-        const tracked = await runWithTlsTracking(chatFn);
+      if (tlsFingerprintActive) {
+        const tracked = await runWithTlsTracking(tlsTrackingIdentity, chatFn);
         return { result: tracked.result, tlsFingerprintUsed: tracked.tlsFingerprintUsed };
       }
 
@@ -552,8 +576,8 @@ export async function executeChatWithBreaker({
     }
 
     if (bypassCircuitBreaker) {
-      if (!proxyInfo?.proxy && isTlsFingerprintActive()) {
-        const tracked = await runWithTlsTracking(chatFn);
+      if (tlsFingerprintActive) {
+        const tracked = await runWithTlsTracking(tlsTrackingIdentity, chatFn);
         return { result: tracked.result, tlsFingerprintUsed: tracked.tlsFingerprintUsed };
       }
 
@@ -561,8 +585,10 @@ export async function executeChatWithBreaker({
       return { result, tlsFingerprintUsed: false };
     }
 
-    if (!proxyInfo?.proxy && isTlsFingerprintActive()) {
-      const tracked = await breaker.execute(async () => runWithTlsTracking(chatFn));
+    if (tlsFingerprintActive) {
+      const tracked = await breaker.execute(async () =>
+        runWithTlsTracking(tlsTrackingIdentity, chatFn)
+      );
       return { result: tracked.result, tlsFingerprintUsed: tracked.tlsFingerprintUsed };
     }
 
@@ -606,7 +632,8 @@ export function handleNoCredentials(
   model: string,
   lastError: string | null,
   lastStatus: number | null,
-  candidateAliases?: readonly string[]
+  candidateAliases?: readonly string[],
+  isCombo: boolean = false
 ) {
   if (credentials?.allRateLimited) {
     const errorMsg = lastError || credentials.lastError || "Unavailable";
@@ -642,6 +669,14 @@ export function handleNoCredentials(
     );
   }
 
+  if (lastError && lastStatus) {
+    log.warn("CHAT", "Preserving last upstream error after credential exhaustion", {
+      provider,
+      model,
+      lastStatus,
+    });
+    return errorResponse(lastStatus, lastError);
+  }
   if (credentials?.allExpired) {
     // Every connection for this provider is in a terminal state (expired,
     // banned, or credits_exhausted). Surface as 401 with a re-auth hint
@@ -659,14 +694,6 @@ export function handleNoCredentials(
     log.warn("CHAT", message);
     return errorResponse(HTTP_STATUS.UNAUTHORIZED, message);
   }
-  if (lastError && lastStatus) {
-    log.warn("CHAT", "Preserving last upstream error after credential exhaustion", {
-      provider,
-      model,
-      lastStatus,
-    });
-    return errorResponse(lastStatus, lastError);
-  }
   if (!excludeConnectionId) {
     // Ported from upstream decolua/9router#336 (Ibrahim Ryan): surface as 404
     // NOT_FOUND instead of 400 BAD_REQUEST so combo routing can fall through to
@@ -681,7 +708,7 @@ export function handleNoCredentials(
     log.warn("AUTH", `No active credentials for provider: ${provider}`);
     // #FIX: surface the candidate aliases (from resolveModelOrError) so the
     // operator can pick a working provider/model prefix instead of guessing.
-    // Without this, "No active credentials for provider: kiro" leaves the
+    // Without this, "No active credentials for provider: byNara" leaves the
     // user staring at a wall — most bugs in this area are actually "wrong
     // provider was picked", not "the provider is broken".
     const hint =
@@ -691,6 +718,26 @@ export function handleNoCredentials(
             .map((a) => `${a}/${model}`)
             .join(", ")}.`
         : "";
+
+    // Issue #2: for single-model (non-combo) requests, a 404 leaks a misleading
+    // "No active credentials" status to a direct API client (e.g. OpenCode) that
+    // then mis-files it as "resource not found" instead of an auth/credential
+    // failure. The 404 is only meaningful as a combo fall-through signal, so
+    // remap it to an explicit error status for single-model traffic: a 401 when
+    // the provider exists but has no usable credentials, else 503 when the
+    // provider itself is unknown/unreachable. Combo routing keeps the 404 so it
+    // can still skip past a disabled-credentials leg.
+    if (!isCombo) {
+      const singleModelStatus =
+        provider && String(provider).trim().length > 0
+          ? HTTP_STATUS.UNAUTHORIZED
+          : HTTP_STATUS.SERVICE_UNAVAILABLE;
+      return errorResponse(
+        singleModelStatus,
+        `No active credentials for provider: ${provider}.${hint}`
+      );
+    }
+
     return errorResponse(
       HTTP_STATUS.NOT_FOUND,
       `No active credentials for provider: ${provider}.${hint}`
@@ -887,7 +934,7 @@ export function withSessionHeader(response: Response, sessionId: string | null):
       headers: response.headers,
     });
     cloned.headers.set("X-OmniRoute-Session-Id", sessionId);
-    return cloned;
+    return inheritTrustedLocalRateLimitResponse(response, cloned);
   }
 }
 
@@ -904,7 +951,7 @@ export function withCorrelationId(response: Response, correlationId: string | nu
       headers: response.headers,
     });
     cloned.headers.set("X-Correlation-Id", correlationId);
-    return cloned;
+    return inheritTrustedLocalRateLimitResponse(response, cloned);
   }
 }
 
@@ -933,6 +980,23 @@ export function withModalityBridgeHeader(response: Response, value: string | nul
   }
 }
 
+export function withConversationId(response: Response, conversationId: string | null): Response {
+  if (!response || !conversationId) return response;
+
+  try {
+    response.headers.set("X-ConversationId", conversationId);
+    return response;
+  } catch {
+    const cloned = new Response(response.body, {
+      status: response.status,
+      statusText: response.statusText,
+      headers: response.headers,
+    });
+    cloned.headers.set("X-ConversationId", conversationId);
+    return cloned;
+  }
+}
+
 export function withSelectedConnectionHeader(
   response: Response,
   connectionId: string | null | undefined
@@ -949,6 +1013,6 @@ export function withSelectedConnectionHeader(
       headers: response.headers,
     });
     cloned.headers.set("X-OmniRoute-Selected-Connection-Id", connectionId);
-    return cloned;
+    return inheritTrustedLocalRateLimitResponse(response, cloned);
   }
 }

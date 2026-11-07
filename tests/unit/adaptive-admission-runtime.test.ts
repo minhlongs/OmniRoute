@@ -600,6 +600,51 @@ describe("rejection mapping", () => {
     runtime.dispose();
     oversizedRuntime.dispose();
   });
+
+  it("maps ADMISSION_LANE_EVICTED to a sanitized 503 with Retry-After", async () => {
+    const runtime = makeRuntime(clock, {
+      config: enforceConfig({
+        initialLimit: 1,
+        minLimit: 1,
+        maxLimit: 1,
+        maxQueueCount: 4,
+        maxQueueCost: 40,
+        defaultMaxWaitMs: 120_000, // must outlive the 60s lane TTL so the lane eviction wins
+        windowMs: 1_000,
+        virtualLanes: true,
+        cost: { maxRequestCost: 1, baseCost: 1 },
+      }),
+    });
+    const hold = await runtime.acquire({
+      tenantKey: "hold",
+      body: { stream: true },
+    });
+    assert.equal(hold.status, "admitted");
+
+    // Park a waiter in a virtual lane; its own deadline is far beyond the TTL.
+    const pending = runtime.acquire({
+      tenantKey: "lane-waiter",
+      body: { stream: true },
+      maxWaitMs: 120_000,
+    });
+
+    // Advance past the 60s lane TTL: the window tick evicts idle lanes, which
+    // drains and rejects the queued waiter with ADMISSION_LANE_EVICTED.
+    clock.advance(60_001);
+
+    const rejected = await pending;
+    assert.equal(rejected.status, "rejected");
+    if (rejected.status === "rejected") {
+      assert.equal(rejected.code, "admission_lane_evicted");
+      assert.equal(rejected.response.status, 503);
+      assert.equal(rejected.response.headers.get("Retry-After"), "1");
+      const body = await parseJson(rejected.response);
+      assert.equal(body.error.code, "admission_lane_evicted");
+      assert.ok(!JSON.stringify(body).includes("lane-waiter"));
+    }
+    if (hold.status === "admitted") hold.lease.release();
+    runtime.dispose();
+  });
 });
 
 describe("resource pressure integration", () => {

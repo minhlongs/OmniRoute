@@ -5,7 +5,7 @@
  * is the source of truth; this schema validates whatever we downloaded
  * before caching it locally.
  *
- * Schema version: 1
+ * Schema versions: v1 legacy + v2 with explicit unknown model metadata.
  */
 
 import { z } from "zod";
@@ -43,6 +43,16 @@ export type RadarTier = z.infer<typeof RadarTierSchema>;
 
 const IntNullable = z.number().int().nullable();
 
+/** D25: English is canonical; Portuguese is an optional localized companion. */
+export const RadarLocalizedTextSchema = z.union([
+  z.string(), // compatibility with schema-v1 feeds published before D25
+  z.object({
+    en: z.string().min(1),
+    pt: z.string().min(1).optional(),
+  }),
+]);
+export type RadarLocalizedText = z.infer<typeof RadarLocalizedTextSchema>;
+
 /**
  * Budget is a discriminated union on `kind`:
  *   - per_model: tokensPerMonth (positive int)
@@ -71,16 +81,45 @@ const LimitsSchema = z.object({
   tpd: IntNullable,
 });
 
-const CapabilitiesSchema = z.object({
+const CapabilitiesV1Schema = z.object({
   tools: z.boolean(),
   vision: z.boolean(),
   thinking: z.boolean(),
 });
 
+const CapabilitiesV2Schema = z.object({
+  tools: z.boolean().nullable(),
+  vision: z.boolean().nullable(),
+  thinking: z.boolean().nullable(),
+});
+
+const MetadataEvidenceUrlSchema = z
+  .string()
+  .url()
+  .superRefine((value, ctx) => {
+    const parsed = new URL(value);
+    if (parsed.protocol !== "https:" || parsed.username || parsed.password) {
+      ctx.addIssue({ code: "custom", message: "metadata evidence must use credential-free HTTPS" });
+    }
+  });
+
+const SetupKeyUrlSchema = z
+  .string()
+  .url()
+  .superRefine((value, ctx) => {
+    const parsed = new URL(value);
+    if (parsed.protocol !== "https:" || parsed.username || parsed.password || parsed.port) {
+      ctx.addIssue({
+        code: "custom",
+        message: "setup key URL must use credential-free HTTPS on the default port",
+      });
+    }
+  });
+
 const SetupSchema = z
   .object({
-    keyUrl: z.string().url().nullable(),
-    steps: z.array(z.string()),
+    keyUrl: SetupKeyUrlSchema.nullable(),
+    steps: z.array(RadarLocalizedTextSchema),
   })
   .nullable();
 
@@ -131,7 +170,7 @@ const RadarReferralsSchema = z
 // Model
 // ---------------------------------------------------------------------------
 
-const ModelSchema = z.object({
+const ModelV1Schema = z.object({
   provider: z.string(),
   modelId: z.string(),
   displayName: z.string(),
@@ -140,11 +179,24 @@ const ModelSchema = z.object({
   budget: BudgetSchema,
   limits: LimitsSchema,
   contextWindow: z.number().int().nullable(),
-  capabilities: CapabilitiesSchema,
+  capabilities: CapabilitiesV1Schema,
   trainsOnPrompts: z.boolean().nullable(),
   tosRisk: TosRiskEnum,
   setup: SetupSchema,
   enabled: z.boolean(),
+});
+
+const ModelV2Schema = ModelV1Schema.extend({
+  contextWindow: z.number().int().positive().nullable(),
+  capabilities: CapabilitiesV2Schema,
+  metadataEvidenceUrls: z.array(MetadataEvidenceUrlSchema),
+}).superRefine((model, ctx) => {
+  const hasMetadata =
+    model.contextWindow !== null ||
+    Object.values(model.capabilities).some((capability) => capability !== null);
+  if (hasMetadata && model.metadataEvidenceUrls.length === 0) {
+    ctx.addIssue({ code: "custom", message: "known model metadata requires evidence" });
+  }
 });
 
 // ---------------------------------------------------------------------------
@@ -167,8 +219,8 @@ const QuirkTargetSchema = z.object({
 
 const QuirkSchema = z.object({
   slug: z.string(),
-  title: z.string(),
-  body: z.string(),
+  title: RadarLocalizedTextSchema,
+  body: RadarLocalizedTextSchema,
   severity: SeverityEnum,
   targets: z.array(QuirkTargetSchema),
 });
@@ -177,15 +229,14 @@ const QuirkSchema = z.object({
 // Top-level feed schema
 // ---------------------------------------------------------------------------
 
-export const RadarFeedSchema = z.object({
+const RadarFeedV1Schema = z.object({
   feed: z.literal("omniroute-radar"),
   schemaVersion: z.literal(1),
   version: z.string(),
   generatedAt: z.string().datetime(),
-  // NOTE: this body field is ALWAYS "live", by design — the community tier
-  // is the exact same signed bytes served from an older snapshot, and there
-  // is only one signed artifact per version (rewriting this field
-  // server-side per request would break the exact-bytes Ed25519 signature).
+  // NOTE: this body field is not the entitlement decision. The server can
+  // publish separate exact-byte live/community artifacts for one version,
+  // while the selected request tier is still communicated by the header.
   // The tier ACTUALLY served is decided by the server per-request based on
   // the Authorization key, and is surfaced via the `x-omniroute-feed-tier`
   // response header instead. NEVER read this field for UI/display — use the
@@ -197,7 +248,7 @@ export const RadarFeedSchema = z.object({
     models: z.number().int(),
   }),
   providers: z.array(ProviderSchema),
-  models: z.array(ModelSchema),
+  models: z.array(ModelV1Schema),
   quirks: z.array(QuirkSchema),
   referrals: RadarReferralsSchema,
   totals: z.object({
@@ -207,12 +258,40 @@ export const RadarFeedSchema = z.object({
   }),
 });
 
+const RadarFeedV2Schema = RadarFeedV1Schema.extend({
+  schemaVersion: z.literal(2),
+  models: z.array(ModelV2Schema),
+});
+
+const RawRadarFeedSchema = z.discriminatedUnion("schemaVersion", [
+  RadarFeedV1Schema,
+  RadarFeedV2Schema,
+]);
+
+export const RadarFeedSchema = RawRadarFeedSchema.transform((feed) => {
+  if (feed.schemaVersion === 2) return feed;
+  return {
+    ...feed,
+    models: feed.models.map((model) => ({
+      ...model,
+      // The v1 builder used false as an absence placeholder. True was never
+      // a default, so it remains factual; false is normalized to unknown.
+      capabilities: {
+        tools: model.capabilities.tools || null,
+        vision: model.capabilities.vision || null,
+        thinking: model.capabilities.thinking || null,
+      },
+      metadataEvidenceUrls: [],
+    })),
+  };
+});
+
 // ---------------------------------------------------------------------------
 // Inferred types
 // ---------------------------------------------------------------------------
 
 export type RadarFeed = z.infer<typeof RadarFeedSchema>;
-export type RadarModel = z.infer<typeof ModelSchema>;
+export type RadarModel = z.infer<typeof ModelV2Schema>;
 export type RadarProvider = z.infer<typeof ProviderSchema>;
 export type RadarQuirk = z.infer<typeof QuirkSchema>;
 export type RadarBudget = z.infer<typeof BudgetSchema>;

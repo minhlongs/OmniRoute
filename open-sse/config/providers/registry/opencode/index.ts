@@ -22,23 +22,27 @@ export const opencodeProvider: RegistryEntry = {
       supportsReasoning: true,
       interleavedField: "reasoning_content",
     },
-    { id: "deepseek-v4-flash-free", name: "DeepSeek V4 Flash Free", supportsReasoning: true },
-    // #9418 (2026-08-23): Ox Alpha Free — stealth preview reasoning model, free
-    // for a limited window. 1M context, multimodal (text/image/video), 131K max
-    // output, low|high|max reasoning variants, zero data retention on the Zen
-    // route. Upstream id is `x-preview-f-free`; OpenRouter lists the same model
-    // as `stealth/ox-alpha`. Reasoning is mandatory and interleaved on
-    // reasoning_content (same contract as big-pickle's DeepSeek thinking mode).
+    // #MUSE_SPARK: Muse Spark is served by OpenCode Zen ONLY on the OpenAI
+    // Responses API (https://opencode.ai/zen/v1/responses), not /chat/completions
+    // (confirmed in the official OpenCode Zen docs: https://opencode.ai/docs/zen/).
+    // Without targetFormat:"openai-responses" these models fall through to the
+    // default chat/completions pass-through and the upstream returns null/empty
+    // content (see issue #10867). The opencode provider is passthrough, so
+    // declaring them here only sets the wire format / capability flags — the
+    // live upstream model list already advertises both ids.
     {
-      id: "x-preview-f-free",
-      name: "Ox Alpha Free (Unlimited)",
+      id: "muse-spark-1.2",
+      name: "Muse Spark 1.2",
       supportsReasoning: true,
-      interleavedField: "reasoning_content",
-      contextLength: 1048576,
-      maxOutputTokens: 131072,
-      supportsVision: true,
-      supportedThinkingEfforts: ["low", "high", "max"],
+      targetFormat: "openai-responses",
     },
+    {
+      id: "muse-spark-1.2-contributor-free",
+      name: "Muse Spark 1.2 Contributor Free",
+      supportsReasoning: true,
+      targetFormat: "openai-responses",
+    },
+    { id: "deepseek-v4-flash-free", name: "DeepSeek V4 Flash Free", supportsReasoning: true },
     // #6998: 2026-07-14 refresh — the upstream free tier rotated its lineup;
     // minimax-m3-free, minimax-m2.5-free, ling-2.6-1t-free,
     // trinity-large-preview-free, nemotron-3-super-free and qwen3.6-plus-free

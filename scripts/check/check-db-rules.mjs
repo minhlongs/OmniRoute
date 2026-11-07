@@ -42,6 +42,7 @@ export const INTENTIONALLY_INTERNAL = new Set([
   "accessTokens", // intentionally-internal: 4 rotas /api/cli/* (connect, whoami, tokens, tokens/[id]) + server/authz/accessTokenAuth.ts via import direto "@/lib/db/accessTokens" (Rule #2)
   "apiKeyColumnFallbacks", // db-internal: importado só por db/apiKeys.ts (API_KEY_COLUMN_FALLBACKS — fallbacks de coluna split do apiKeys.ts)
   "apiKeyUsageLimitFields", // db-internal: importado só por db/apiKeys.ts (helpers de campo de limite de uso split do apiKeys.ts; mig 101)
+  "backupRetention", // db-internal: importado só por db/backup.ts e db/migrationRunner.ts (política de retenção compartilhada; mora fora de backup.ts porque core.ts importa migrationRunner.ts — importar backup.ts de lá fecharia um ciclo, #10421)
   "caseMapping", // db-internal: importado só por db/core.ts (toSnakeCase/toCamelCase/objToSnake — column-mapping snake↔camel split do core.ts, #4947)
   "cleanup", // intentionally-internal: 3 API routes (purge-quota-snapshots, purge-call-logs, purge-detailed-logs)
   "cliToolState", // intentionally-internal: 14+ API routes em /api/cli-tools/*-settings
@@ -49,6 +50,7 @@ export const INTENTIONALLY_INTERNAL = new Set([
   "commandCodeAuth", // intentionally-internal: 5 API routes em /api/providers/command-code/auth/*
   "compression", // intentionally-internal: 2 API routes (settings/compression, context/rtk/config)
   "compressionDetailNormalizers", // db-internal: importado só por db/compression.ts (normalizeSessionDedupConfig/normalizeCcrConfig/buildDetailConfigDefaults/applyDetailConfigUpdate — normalizadores do detail-config split do compression.ts, #8404)
+  "connectionRuntimeState", // intentionally-internal: warmupScheduler sqlite/redis stores importam diretamente de @/lib/db/connectionRuntimeState (Rule #2)
   "vacuumScheduler", // intentionally-internal: src/instrumentation-node.ts (dynamic import, lifecycle wiring per Rule #2)
   "detailedLogs", // intentionally-internal: 3 callers (callLogs.ts, logs/detail route, embeddings handler)
   "discovery", // DEAD?: 0 importers na auditoria de 2026-06-11; lib/discovery/index.ts não usa db/discovery
@@ -83,16 +85,19 @@ export const INTENTIONALLY_INTERNAL = new Set([
 export const KNOWN_UNEXPORTED = INTENTIONALLY_INTERNAL;
 
 // (c) Leituras de SQL contra bancos EXTERNOS, permitidas por design (#3500).
-// Estas rotas NÃO consultam o DB do OmniRoute (getDbInstance) — elas abrem o
-// SQLite de OUTRO aplicativo (Cursor / Kiro) para auto-importar credenciais.
-// Por isso NÃO podem viver em src/lib/db/ (que é o domínio do DB do OmniRoute):
-// são leituras read-only de um arquivo externo, com caminho/escopo próprios.
-// Continuam no allowlist como exceção DOCUMENTADA — o gate ainda bloqueia
+// Esta rota NÃO consulta o DB do OmniRoute (getDbInstance) — ela abre o
+// SQLite de OUTRO aplicativo (Kiro) para auto-importar credenciais.
+// Por isso NÃO pode viver em src/lib/db/ (que é o domínio do DB do OmniRoute):
+// é uma leitura read-only de um arquivo externo, com caminho/escopo próprio.
+// Continua no allowlist como exceção DOCUMENTADA — o gate ainda bloqueia
 // QUALQUER novo SQL cru contra o DB do OmniRoute em rotas/handlers.
 // Toda a dívida real da Hard Rule #5 (15 rotas internas) foi migrada para
 // módulos src/lib/db/ nas slices do #3500; este set ficou só com as exceções.
+// O análogo do Cursor (src/app/api/oauth/cursor/auto-import/route.ts) NÃO
+// precisa de entrada aqui: o SQL contra o state.vscdb externo do Cursor vive
+// em src/lib/cursor/tokenExtractor.ts, fora do escopo desta checagem (que só
+// varre src/app/api/**/route.ts e open-sse/handlers/*.ts).
 const EXTERNAL_DB_ALLOWED = new Set([
-  "src/app/api/oauth/cursor/auto-import/route.ts", // read-only no itemTable do SQLite do Cursor (DB externo)
   "src/app/api/oauth/kiro/auto-import/route.ts", // read-only no SQLite do Kiro (DB externo)
 ]);
 

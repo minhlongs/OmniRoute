@@ -46,9 +46,19 @@ import {
   getCodexGlobalServiceMode,
   type CodexGlobalServiceMode,
 } from "@/lib/providers/codexFastTier";
-import AddCompatibleProviderModal from "./components/AddCompatibleProviderModal";
+import dynamic from "next/dynamic";
+const AddCompatibleProviderModal = dynamic(
+  () => import("./components/AddCompatibleProviderModal"),
+  { ssr: false }
+);
 import { CategoryDot } from "./components/CategoryDot";
-import { ImportProvidersFromFileModal } from "./components/ImportProvidersFromFileModal";
+const ImportProvidersFromFileModal = dynamic(
+  () =>
+    import("./components/ImportProvidersFromFileModal").then(
+      (m) => m.ImportProvidersFromFileModal
+    ),
+  { ssr: false }
+);
 import NoAuthProvidersSection from "./components/NoAuthProvidersSection";
 import HighlightableProviderCard from "./components/HighlightableProviderCard";
 import ProviderCountBadge from "./components/ProviderCountBadge";
@@ -134,22 +144,28 @@ type ProviderBatchTestResults = {
   error?: string | { message?: string };
 };
 
-function getConnectionErrorTag(connection) {
+function getConnectionErrorTag(connection, t: ProviderMessageTranslator) {
   if (!connection) return null;
 
   const explicitType = connection.lastErrorType;
-  if (explicitType === "runtime_error") return "Runtime";
+  if (explicitType === "runtime_error") return providerText(t, "errorTypeRuntime", "Runtime");
   if (
     explicitType === "upstream_auth_error" ||
     explicitType === "auth_missing" ||
     explicitType === "token_refresh_failed" ||
     explicitType === "token_expired"
   ) {
-    return "Auth";
+    return providerText(t, "errorTypeUpstreamAuth", "Auth");
   }
-  if (explicitType === "upstream_rate_limited") return "Rate limited";
-  if (explicitType === "upstream_unavailable") return "Server error";
-  if (explicitType === "network_error") return "Network";
+  if (explicitType === "upstream_rate_limited") {
+    return providerText(t, "errorTypeRateLimited", "Rate limited");
+  }
+  if (explicitType === "upstream_unavailable") {
+    return providerText(t, "errorTypeUpstreamUnavailable", "Server error");
+  }
+  if (explicitType === "network_error") {
+    return providerText(t, "errorTypeNetworkError", "Network");
+  }
 
   const numericCode = Number(connection.errorCode);
   if (Number.isFinite(numericCode) && numericCode >= 400) {
@@ -157,19 +173,21 @@ function getConnectionErrorTag(connection) {
   }
 
   const fromMessage = getErrorCode(connection.lastError);
-  if (fromMessage === "401" || fromMessage === "403") return "Auth";
+  if (fromMessage === "401" || fromMessage === "403") {
+    return providerText(t, "errorTypeUpstreamAuth", "Auth");
+  }
   if (fromMessage && fromMessage !== "ERR") return fromMessage;
 
   const msg = (connection.lastError || "").toLowerCase();
   if (msg.includes("runtime") || msg.includes("not runnable") || msg.includes("not installed"))
-    return "Runtime";
+    return providerText(t, "errorTypeRuntime", "Runtime");
   if (
     msg.includes("invalid api key") ||
     msg.includes("token invalid") ||
     msg.includes("revoked") ||
     msg.includes("unauthorized")
   )
-    return "Auth";
+    return providerText(t, "errorTypeUpstreamAuth", "Auth");
 
   return "ERR";
 }
@@ -355,7 +373,7 @@ export default function ProvidersPage() {
       (a: any, b: any) =>
         (new Date(b.lastErrorAt || 0) as any) - (new Date(a.lastErrorAt || 0) as any)
     )[0];
-    const errorCode = latestError ? getConnectionErrorTag(latestError) : null;
+    const errorCode = latestError ? getConnectionErrorTag(latestError, t) : null;
     const errorTime = latestError?.lastErrorAt ? getRelativeTime(latestError.lastErrorAt) : null;
 
     // Check expirations
@@ -385,18 +403,39 @@ export default function ProvidersPage() {
             : null
         : null;
 
-    // Count API keys in "warning" state across all connections
+    // Count API keys in "warning" state across all connections, and (#10261)
+    // aggregate a SANITIZED reasons summary (max failure count + most recent
+    // failure time — never the raw upstream error text) so the warning badge
+    // can expose why connections are flagged instead of a bare count.
+    let warningMaxFailures = 0;
+    let warningLatestFailureAt: string | null = null;
     const warning = providerConnections.reduce((warnCount, conn) => {
       const health = (conn as any).providerSpecificData?.apiKeyHealth as
-        Record<string, { status: string }> | undefined;
+        | Record<string, { status: string; failures?: number; lastFailure?: string | null }>
+        | undefined;
       if (!health) return warnCount;
-      return warnCount + Object.values(health).filter((h) => h.status === "warning").length;
+      const warningEntries = Object.values(health).filter((h) => h.status === "warning");
+      for (const entry of warningEntries) {
+        warningMaxFailures = Math.max(warningMaxFailures, entry.failures ?? 0);
+        if (
+          entry.lastFailure &&
+          (!warningLatestFailureAt || entry.lastFailure > warningLatestFailureAt)
+        ) {
+          warningLatestFailureAt = entry.lastFailure;
+        }
+      }
+      return warnCount + warningEntries.length;
     }, 0);
+    const warningLastFailureRelative = warningLatestFailureAt
+      ? getRelativeTime(warningLatestFailureAt)
+      : null;
 
     return {
       connected,
       error,
       warning,
+      warningMaxFailures,
+      warningLastFailureRelative,
       total,
       errorCode,
       errorTime,
