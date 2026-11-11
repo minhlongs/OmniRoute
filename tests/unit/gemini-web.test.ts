@@ -167,8 +167,12 @@ test("Provider: gemini-web in providerRegistry", async () => {
 test("Provider: gemini-web has correct models", async () => {
   const { REGISTRY } = await import("../../open-sse/config/providerRegistry.ts");
   const models = REGISTRY["gemini-web"].models;
-  assert.ok(models.some((m: { id: string }) => m.id === "gemini-4-argon"));
-  assert.ok(models.some((m: { id: string }) => m.id === "gemini-3.8-flash"));
+  // Gemini Web retired "4 Argon"; the Ultra top mode is now Gemini 4 Carbon (only model advertised).
+  assert.ok(models.some((m: { id: string }) => m.id === "gemini-4-carbon"));
+  assert.equal(
+    models.some((m: { id: string }) => m.id === "gemini-4-argon"),
+    false
+  );
   assert.equal(
     models.some((m: { id: string }) => m.id === "gemini-3.1-pro"),
     false
@@ -184,7 +188,12 @@ test("Provider: gemini-web has correct models", async () => {
   // Effort tiers are a router concept, not gemini-web models: the provider has no
   // thinking control, so `-high/-medium/-low` must not be advertised. The
   // executor normalizes a stale tier id onto the base model instead.
-  for (const tier of ["gemini-4-argon-high", "gemini-4-argon-medium", "gemini-4-argon-low"]) {
+  for (const tier of [
+    "gemini-4-carbon-high",
+    "gemini-4-carbon-medium",
+    "gemini-4-carbon-low",
+    "gemini-4-argon-high",
+  ]) {
     assert.equal(
       models.some((m: { id: string }) => m.id === tier),
       false,
@@ -193,7 +202,7 @@ test("Provider: gemini-web has correct models", async () => {
   }
 });
 
-test("GeminiWebExecutor rejects non-argon, non-3.8 models with HTTP 400", async () => {
+test("GeminiWebExecutor rejects non-Carbon, non-3.8 models with HTTP 400", async () => {
   const executor = new GeminiWebExecutor();
   for (const invalidModel of ["gemini-3.1-pro", "gemini-3.5-flash", "gemini-2.5-pro", "gpt-4o"]) {
     const result = await executor.execute({
@@ -207,11 +216,11 @@ test("GeminiWebExecutor rejects non-argon, non-3.8 models with HTTP 400", async 
     assert.equal(result.response.status, 400);
     const json = (await result.response.json()) as any;
     assert.equal(json.error.code, "unsupported_model_for_provider");
-    assert.match(json.error.message, /Only Argon and 3\.8 models are supported/);
+    assert.match(json.error.message, /Only Gemini 4 Carbon and 3\.8 Flash models are supported/);
   }
 });
 
-test("GeminiWebExecutor defaults to gemini-4-argon when model is omitted", async () => {
+test("GeminiWebExecutor defaults to gemini-4-carbon when model is omitted", async () => {
   const executor = new GeminiWebExecutor();
   const result = await executor.execute({
     model: undefined,
@@ -221,7 +230,7 @@ test("GeminiWebExecutor defaults to gemini-4-argon when model is omitted", async
     signal: AbortSignal.timeout(5000),
     log: null,
   });
-  // Missing credentials -> 401 proves model validation passed and defaulted to Argon
+  // Missing credentials -> 401 proves model validation passed and defaulted to Carbon
   assert.equal(result.response.status, 401);
 });
 
@@ -280,6 +289,47 @@ test("#2832/#3516: missing Playwright browser returns an actionable 503 with coo
       !json.error.includes("node_modules/playwright-core"),
       "must not contain node_modules source path"
     );
+  } finally {
+    playwright.chromium.launch = originalLaunch;
+  }
+});
+
+test("GeminiWebExecutor: Strict 4 Carbon requirement failure returns 503 with connection_cooldown hint", async () => {
+  const playwright = await import("playwright");
+  const originalLaunch = playwright.chromium.launch;
+
+  playwright.chromium.launch = (async () => ({
+    newContext: async () => ({
+      addCookies: async () => {},
+      newPage: async () => {
+        throw new Error(
+          "[gemini-web] Strict 4 Carbon requirement failed: 4 Carbon menu option is disabled for this account/session"
+        );
+      },
+    }),
+    close: async () => {},
+  })) as any;
+
+  try {
+    const executor = new GeminiWebExecutor();
+    const result = await executor.execute({
+      model: "gemini-4-carbon",
+      body: { messages: [{ role: "user", content: "hello" }], stream: false },
+      stream: false,
+      credentials: { apiKey: "__Secure-1PSID=test-cookie" },
+      signal: AbortSignal.timeout(5000),
+      log: null,
+      transport: "browser",
+    });
+
+    assert.equal(result.response.status, 503, "strict requirement failure must return 503");
+    assert.equal(
+      result.response.headers.get("X-Omni-Fallback-Hint"),
+      "connection_cooldown",
+      "must set X-Omni-Fallback-Hint to connection_cooldown"
+    );
+    const json = (await result.response.json()) as any;
+    assert.ok(json.error.includes("Strict 4 Carbon requirement failed"));
   } finally {
     playwright.chromium.launch = originalLaunch;
   }

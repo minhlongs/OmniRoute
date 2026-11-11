@@ -325,14 +325,14 @@ test("#9356 registry advertises no native tool calling and no reasoning for gemi
   }
 });
 
-test("registry exposes only the non-tier Argon and 3.8 ids", () => {
+test("registry exposes only the non-tier Gemini 4 Carbon id (Argon retired on Gemini Web)", () => {
   // Effort tiers are not separate models on a provider with no thinking control
   // (AIClient2API models them as thinkingLevel on the cloudcode-pa upstream).
   // Advertising `-high/-medium/-low` here only created ids that resolved to a
   // reasoning_effort the executor cannot honor.
   assert.deepEqual(
     gemini_webProvider.models.map((model) => model.id),
-    ["gemini-4-argon", "gemini-3.8-flash"]
+    ["gemini-4-carbon"]
   );
 });
 

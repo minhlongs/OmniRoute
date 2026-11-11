@@ -30,9 +30,20 @@ const ABSENT_CONTENT_IDENTITY_HEADERS = [
   "Client-Metadata",
 ] as const;
 
+export function requiresAntigravityCliProfile(model?: string | null): boolean {
+  if (typeof model !== "string" || !model.trim()) return false;
+  return /gemini-4-(?:carbon|argon)|(?:^|\/)(?:4-carbon|4-argon|gemini-4(?:-(?:high|medium|low))?)$/i.test(
+    model.trim()
+  );
+}
+
 export function getAntigravityClientProfile(
-  credentials?: AntigravityProfileCredentials | null
+  credentials?: AntigravityProfileCredentials | null,
+  model?: string | null
 ): AntigravityClientProfile {
+  if (requiresAntigravityCliProfile(model)) {
+    return "cli";
+  }
   const fromProviderData =
     credentials?.providerSpecificData &&
     typeof credentials.providerSpecificData === "object" &&
@@ -78,7 +89,12 @@ export function applyAntigravityClientProfileHeaders(
   credentials: AntigravityProfileCredentials | null | undefined,
   body: unknown
 ): AntigravityClientProfile {
-  const profile = getAntigravityClientProfile(credentials);
+  const bodyModel =
+    body && typeof body === "object" ? (body as Record<string, unknown>).model : undefined;
+  const profile = getAntigravityClientProfile(
+    credentials,
+    typeof bodyModel === "string" ? bodyModel : undefined
+  );
   const identityHeaders = getAntigravityContentHeaders(profile);
 
   removeHeaderCaseInsensitive(headers, "User-Agent");

@@ -18,6 +18,8 @@ import { buildErrorBody, sanitizeErrorMessage } from "../utils/error.ts";
 import { prepareToolMessages } from "../translator/webTools.ts";
 import {
   executeGeminiWebDirectHttp,
+  geminiWebPublicModelId,
+  resolveGeminiWebModelKind,
   shouldUseGeminiWebDirectHttp,
 } from "./gemini-web/streamGenerateClient.ts";
 import { buildToolModeResponse } from "./chatgptWebTools.ts";
@@ -649,7 +651,8 @@ function resolveGeminiWebCookie(credentials: ExecuteInput["credentials"]): strin
 }
 
 /**
- * Ensures Gemini 4 Argon model is active on gemini.google.com for Ultra accounts.
+ * Ensures Gemini 4 Carbon ("Most complex work") is active on gemini.google.com for Ultra accounts.
+ * (Historically "4 Argon"; Gemini Web retired that picker entry in favour of Carbon.)
  *
  * Requirements:
  * 1. Inspect model switch label/button (.input-area-switch-label, button.input-area-switch, etc.).
@@ -680,10 +683,12 @@ export async function ensureAdvancedModel(
   ) as ExecuteInput["log"];
 
   const is38 = requestedModel ? /3\.8/i.test(requestedModel) : false;
-  const targetLabel = is38 ? "3.8 Flash" : "4 Argon";
+  const targetLabel = is38 ? "3.8 Flash" : "4 Carbon";
+  // Gemini Web retired "4 Argon"; the top mode is now "Most complex work" (Gemini 4 Carbon).
   const modelMatcher = is38
-    ? (text: string) => /3\.8|Flash/i.test(text || "") && !/Argon/i.test(text || "")
-    : (text: string) => /4\s*Argon|Argon/i.test(text || "");
+    ? (text: string) =>
+        /3\.8|Flash|All-around/i.test(text || "") && !/Carbon|Argon|complex|Lite|Quick/i.test(text || "")
+    : (text: string) => /4\s*Carbon|Carbon|Most complex work/i.test(text || "");
 
   // Model switch trigger element selector
   const switchTriggerSelector =
@@ -698,7 +703,7 @@ export async function ensureAdvancedModel(
     const pickerCandidate = page
       .locator("button, [role='combobox'], [role='button']")
       .filter({
-        hasText: /Argon|Flash|Pro|Advanced/i,
+        hasText: /Carbon|complex|Argon|Flash|Pro|Advanced|answers|help/i,
       })
       .first();
     if ((await pickerCandidate.count().catch(() => 0)) > 0) {
@@ -977,11 +982,12 @@ export class GeminiWebExecutor extends BaseExecutor {
       };
     }
 
-    // Model restriction: strictly Argon and 3.8 only from Gemini Web.
+    // Model restriction: Gemini Web Ultra exposes Gemini 4 Carbon ("Most complex work") and
+    // 3.8 Flash. The retired Argon id is accepted for compatibility and runs on Carbon.
     // Tier suffixes (`-high`/`-medium`/`-low`) are a router concept — gemini-web
     // drives one web model per family, so both forms resolve to the same id.
     const rawModel = stripGeminiWebEffortTier(model || "");
-    const isArgon = /argon/i.test(rawModel);
+    const isArgon = /argon|carbon/i.test(rawModel);
     const is38 = /3\.8/i.test(rawModel);
     const isUltra = /ultra/i.test(rawModel);
     const isHttp = /-http$/i.test(rawModel);
@@ -993,7 +999,7 @@ export class GeminiWebExecutor extends BaseExecutor {
           JSON.stringify(
             buildErrorBody(
               400,
-              `Only Argon and 3.8 models are supported on Gemini Web (received "${rawModel}")`,
+              `Only Gemini 4 Carbon and 3.8 Flash models are supported on Gemini Web (received "${rawModel}")`,
               null,
               {
                 type: "invalid_request_error",
@@ -1009,7 +1015,10 @@ export class GeminiWebExecutor extends BaseExecutor {
       };
     }
 
-    const modelId = is38 ? rawModel || "gemini-3.8-flash" : rawModel || "gemini-4-argon";
+    const modelId =
+      is38 && resolveGeminiWebModelKind(rawModel) !== "carbon"
+        ? rawModel || "gemini-3.8-flash"
+        : geminiWebPublicModelId(rawModel || "gemini-4-carbon");
 
     const cookie = resolveGeminiWebCookie(credentials);
     if (!cookie) {
@@ -1293,7 +1302,7 @@ export class GeminiWebExecutor extends BaseExecutor {
 
       await this.persistRotatedCookies(context, cookie, credentials, onCredentialsRefreshed, log);
 
-      // (modelId resolved and validated at execute start: defaults to gemini-4-argon / gemini-3.8-flash)
+      // (modelId resolved and validated at execute start: defaults to gemini-4-carbon / gemini-3.8-flash)
 
       if (hasTools) {
         const cid = `chatcmpl-gwe-${crypto.randomUUID().slice(0, 12)}`;
@@ -1358,29 +1367,9 @@ export class GeminiWebExecutor extends BaseExecutor {
       };
     } catch (error) {
       const rawMessage = error instanceof Error ? error.message : "Unknown error";
-      if (rawMessage.includes("Strict 4 Argon requirement failed")) {
-        log?.warn?.("GEMINI-WEB", rawMessage);
-        return {
-          response: new Response(
-            JSON.stringify({
-              error: sanitizeErrorMessage(rawMessage),
-            }),
-            {
-              status: 503,
-              headers: {
-                "Content-Type": "application/json",
-                "X-Omni-Fallback-Hint": "connection_cooldown",
-              },
-            }
-          ),
-          url: GEMINI_URL,
-          headers: {},
-          transformedBody: body,
-        };
-      }
-      // Strict 4 Argon requirement enforcement: tag with connection_cooldown so accountFallback
-      // cascades to the next available account without tripping the provider circuit breaker.
-      if (rawMessage.includes("Strict 4 Argon requirement failed")) {
+      // Strict model requirement enforcement (4 Carbon, 4 Argon, 3.8 Flash): tag with connection_cooldown
+      // so accountFallback cascades to the next available account without tripping the provider circuit breaker.
+      if (/Strict (?:4 Carbon|4 Argon|3\.8 Flash) requirement failed|Strict [^:]+ requirement failed/i.test(rawMessage)) {
         log?.warn?.("GEMINI-WEB", rawMessage);
         return {
           response: new Response(

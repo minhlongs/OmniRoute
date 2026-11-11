@@ -78,6 +78,9 @@ export function processAntigravitySSEPayload(
   log?: { debug?: (scope: string, message: string) => void }
 ) {
   if (!payload || payload === "[DONE]") return;
+  if (payload.includes("This version of Antigravity is no longer supported")) {
+    throw new Error("This version of Antigravity is no longer supported");
+  }
   try {
     const parsed = JSON.parse(payload);
     const markdown =

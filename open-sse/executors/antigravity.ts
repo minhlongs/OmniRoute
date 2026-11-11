@@ -577,8 +577,12 @@ export class AntigravityExecutor extends BaseExecutor {
     return `${baseUrl}/v1internal:streamGenerateContent?alt=sse`;
   }
 
-  buildHeaders(credentials: AntigravityCredentials, _stream = true): Record<string, string> {
-    const clientProfile = getAntigravityClientProfile(credentials);
+  buildHeaders(
+    credentials: AntigravityCredentials,
+    _stream = true,
+    model?: string
+  ): Record<string, string> {
+    const clientProfile = getAntigravityClientProfile(credentials, model);
     const raw = {
       ...getAntigravityContentHeaders(clientProfile, credentials.accessToken),
       Accept: "text/event-stream",
@@ -1166,7 +1170,7 @@ export class AntigravityExecutor extends BaseExecutor {
    * exactly the same single call as before (zero extra upstream requests).
    */
   async execute(input: ExecuteInput) {
-    await resolveAntigravityClientVersion(getAntigravityClientProfile(input.credentials));
+    await resolveAntigravityClientVersion(getAntigravityClientProfile(input.credentials, input.model));
 
     // Look up the chain by the NORMALLY-resolved upstream id (honours MITM/static aliases).
     // If a MITM alias remapped the id away from a known Pro tier, no chain applies → fast path.
@@ -1239,7 +1243,8 @@ export class AntigravityExecutor extends BaseExecutor {
     { model, body, stream, credentials, signal, log, upstreamExtraHeaders }: ExecuteInput,
     modelIdOverride?: string
   ) {
-    await resolveAntigravityClientVersion(getAntigravityClientProfile(credentials));
+    const profileModel = await cleanModelName(model, modelIdOverride);
+    await resolveAntigravityClientVersion(getAntigravityClientProfile(credentials, profileModel));
     const fallbackCount = this.getFallbackCount();
     const l = toSafeAntigravityLog(log);
     let lastError = null;
@@ -1266,7 +1271,7 @@ export class AntigravityExecutor extends BaseExecutor {
 
     for (let urlIndex = 0; urlIndex < fallbackCount; urlIndex++) {
       const url = this.buildUrl(model, upstreamStream, urlIndex);
-      const headers = this.buildHeaders(credentials, upstreamStream);
+      const headers = this.buildHeaders(credentials, upstreamStream, profileModel);
       mergeUpstreamExtraHeaders(headers, upstreamExtraHeaders);
       const transformed = await this.transformRequest(
         model,
@@ -1513,10 +1518,16 @@ export class AntigravityExecutor extends BaseExecutor {
       return { action: "retrySameUrl" };
     }
 
+    // When 429 classification says switchAuth=true, all Cloud Code URLs share the same
+    // account quota/RPM bucket — fail over immediately instead of retrying URL #2.
+    if (switchAuth) {
+      return { action: "fallthrough", retryMs, lastStatus: response.status };
+    }
+
     // Auto retry for 429 (no Retry-After) or transient 5xx errors.
     // For 5xx we read the body to detect known transient patterns
     // ("Agent execution terminated due to error", "high traffic", "capacity").
-    if ((!retryMs || retryMs === 0) && retryAttemptsByUrl[urlIndex] < MAX_AUTO_RETRIES) {
+    if ((!retryMs || retryMs === 0) && !switchAuth && retryAttemptsByUrl[urlIndex] < MAX_AUTO_RETRIES) {
       const shouldAutoRetry = await this.shouldAutoRetryTransient(response);
       if (shouldAutoRetry) {
         retryAttemptsByUrl[urlIndex]++;

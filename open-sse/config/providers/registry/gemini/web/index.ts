@@ -25,17 +25,13 @@ export const gemini_webProvider: RegistryEntry = {
   // thinking control, so every tier would collapse onto the same web model.
   // Advertising them only produced ids that resolved to a `reasoning_effort`
   // the executor had to drop. The executor still normalizes a stale
-  // `gemini-4-argon-high`-style id via `stripGeminiWebEffortTier()`.
+  // `gemini-4-carbon-high` / legacy `gemini-4-argon-high`-style id via `stripGeminiWebEffortTier()`.
   models: [
+    // Gemini Web Ultra: "Most complex work" mode = Gemini 4 Carbon (the retired
+    // `gemini-4-argon` id is still accepted by the executor and runs on Carbon).
     {
-      id: "gemini-4-argon",
-      name: "Gemini 4 Argon",
-      toolCalling: false,
-      supportsReasoning: false,
-    },
-    {
-      id: "gemini-3.8-flash",
-      name: "Gemini 3.8 Flash",
+      id: "gemini-4-carbon",
+      name: "Gemini 4 Carbon",
       toolCalling: false,
       supportsReasoning: false,
     },
