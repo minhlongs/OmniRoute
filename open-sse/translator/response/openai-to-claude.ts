@@ -141,6 +141,114 @@ function extractXmlInvokeBlocks(
   return { cleaned, toolCalls };
 }
 
+type JsonRecord = Record<string, unknown>;
+
+interface ClaudeUsageRecord {
+  input_tokens: number;
+  output_tokens: number;
+  cache_read_input_tokens?: number;
+  cache_creation_input_tokens?: number;
+}
+
+function asRecord(value: unknown): JsonRecord | null {
+  return value && typeof value === "object" && !Array.isArray(value) ? (value as JsonRecord) : null;
+}
+
+/** Finite, non-negative, integral token count or null when absent/invalid. */
+function tokenCount(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0
+    ? Math.floor(value)
+    : null;
+}
+
+function firstTokenCount(...values: unknown[]): number {
+  for (const value of values) {
+    const count = tokenCount(value);
+    if (count !== null) return count;
+  }
+  return 0;
+}
+
+/**
+ * Normalize an upstream usage object to the Anthropic Messages usage contract.
+ *
+ * OpenAI-compatible upstreams report `prompt_tokens` as the WHOLE prompt (cached +
+ * cache-creation + fresh), while Anthropic requires `input_tokens` to be only the
+ * non-cached portion and exposes the rest through `cache_read_input_tokens` /
+ * `cache_creation_input_tokens`. `prompt_tokens_details.cached_tokens` (or
+ * DeepSeek's native `prompt_cache_hit_tokens`, already normalized upstream in
+ * usageTracking) is the implicit-cache read counter.
+ *
+ * Truthfulness rule: OpenAI implicit prefix caching has no cache-WRITE counter, so
+ * `cache_creation_input_tokens` is only emitted when the upstream actually reported a
+ * positive cache-creation value. It is never synthesized from `input_tokens` deltas —
+ * a fake creation count would misreport cache writes that never happened.
+ */
+function toClaudeUsage(raw: unknown): ClaudeUsageRecord | null {
+  const usage = asRecord(raw);
+  if (!usage) return null;
+
+  const promptDetails = asRecord(usage.prompt_tokens_details);
+  const inputDetails = asRecord(usage.input_tokens_details);
+  const cacheRead = firstTokenCount(
+    promptDetails?.cached_tokens,
+    inputDetails?.cached_tokens,
+    usage.cache_read_input_tokens,
+    usage.cached_tokens
+  );
+  const cacheCreation = firstTokenCount(
+    promptDetails?.cache_creation_tokens,
+    inputDetails?.cache_creation_tokens,
+    usage.cache_creation_input_tokens
+  );
+
+  const promptTotal = tokenCount(usage.prompt_tokens);
+  const inputTokens =
+    promptTotal !== null
+      ? Math.max(0, promptTotal - cacheRead - cacheCreation)
+      : firstTokenCount(usage.input_tokens);
+  const outputTokens = firstTokenCount(usage.completion_tokens, usage.output_tokens);
+
+  const normalized: ClaudeUsageRecord = {
+    input_tokens: inputTokens,
+    output_tokens: outputTokens,
+  };
+  if (cacheRead > 0) normalized.cache_read_input_tokens = cacheRead;
+  if (cacheCreation > 0) normalized.cache_creation_input_tokens = cacheCreation;
+  return normalized;
+}
+
+/** True when the usage object carries at least one real (non-zero) token count. */
+function hasReportedUsage(usage: unknown): boolean {
+  const record = asRecord(usage);
+  if (!record) return false;
+  return (
+    firstTokenCount(record.input_tokens, record.prompt_tokens) > 0 ||
+    firstTokenCount(record.output_tokens, record.completion_tokens) > 0 ||
+    firstTokenCount(record.cache_read_input_tokens, record.cached_tokens) > 0 ||
+    firstTokenCount(record.cache_creation_input_tokens) > 0
+  );
+}
+
+/**
+ * Complete a finish_reason whose usage had not arrived yet. Mirrors the #6906
+ * `awaitingTrailingUsage` behavior in the OpenAI → Responses translator: emit the
+ * pending `message_delta` with the best usage now known, then `message_stop`.
+ */
+function emitDeferredClaudeFinish(state): JsonRecord[] {
+  const usage = toClaudeUsage(state.usage) ?? { input_tokens: 0, output_tokens: 0 };
+  state.usage = usage;
+  state.claudeFinishDeferred = false;
+  return [
+    {
+      type: "message_delta",
+      delta: { stop_reason: state.claudeDeferredStopReason ?? "end_turn" },
+      usage,
+    },
+    { type: "message_stop" },
+  ];
+}
+
 // Helper: stop thinking block if started
 function stopThinkingBlock(state, results) {
   if (!state.thinkingBlockStarted) return;
@@ -164,46 +272,34 @@ function stopTextBlock(state, results) {
 
 // Convert OpenAI stream chunk to Claude format
 export function openaiToClaudeResponse(chunk, state) {
-  if (!chunk || !chunk.choices?.[0]) return null;
+  // Flush signal (translateResponse passes null at stream end): complete a deferred
+  // finish so a non-compliant upstream that never sends a trailing usage chunk cannot
+  // leave the client without message_delta/message_stop.
+  if (!chunk) {
+    return state.claudeFinishDeferred ? emitDeferredClaudeFinish(state) : null;
+  }
+
+  // Usage-only chunk: OpenAI `stream_options.include_usage` ends the stream with a
+  // chunk whose `choices` is `[]` and whose `usage` carries the full token breakdown
+  // (including prompt_tokens_details.cached_tokens). Handle it BEFORE the choices guard
+  // so the cached-token breakdown is never silently dropped. If a finish_reason was
+  // already seen, this chunk completes the deferred terminal events.
+  if (!chunk.choices || !chunk.choices[0]) {
+    if (chunk.usage && typeof chunk.usage === "object") {
+      const trailingUsage = toClaudeUsage(chunk.usage);
+      if (trailingUsage) state.usage = trailingUsage;
+    }
+    return state.claudeFinishDeferred ? emitDeferredClaudeFinish(state) : null;
+  }
 
   const results = [];
   const choice = chunk.choices[0];
   const delta = choice.delta;
 
-  // Track usage from OpenAI chunk if available
+  // Track usage from OpenAI chunk if available (overwrites with Anthropic-shaped usage).
   if (chunk.usage && typeof chunk.usage === "object") {
-    const promptTokens =
-      typeof chunk.usage.prompt_tokens === "number" ? chunk.usage.prompt_tokens : 0;
-    const outputTokens =
-      typeof chunk.usage.completion_tokens === "number" ? chunk.usage.completion_tokens : 0;
-
-    // Extract cache tokens from prompt_tokens_details
-    const cachedTokens = chunk.usage.prompt_tokens_details?.cached_tokens;
-    const cacheCreationTokens = chunk.usage.prompt_tokens_details?.cache_creation_tokens;
-    const cacheReadTokens = typeof cachedTokens === "number" ? cachedTokens : 0;
-    const cacheCreateTokens = typeof cacheCreationTokens === "number" ? cacheCreationTokens : 0;
-
-    // input_tokens = prompt_tokens - cached_tokens - cache_creation_tokens
-    // Because OpenAI's prompt_tokens includes all prompt-side tokens
-    const inputTokens = promptTokens - cacheReadTokens - cacheCreateTokens;
-
-    state.usage = {
-      input_tokens: inputTokens,
-      output_tokens: outputTokens,
-    };
-
-    // Add cache_read_input_tokens if present
-    if (cacheReadTokens > 0) {
-      state.usage.cache_read_input_tokens = cacheReadTokens;
-    }
-
-    // Add cache_creation_input_tokens if present
-    if (cacheCreateTokens > 0) {
-      state.usage.cache_creation_input_tokens = cacheCreateTokens;
-    }
-
-    // Note: completion_tokens_details.reasoning_tokens is already included in output_tokens
-    // No need to add separately as Claude expects total output_tokens
+    const reportedUsage = toClaudeUsage(chunk.usage);
+    if (reportedUsage) state.usage = reportedUsage;
   }
 
   // First chunk - ALWAYS send message_start first
@@ -505,14 +601,26 @@ export function openaiToClaudeResponse(chunk, state) {
     // Mark finish for later usage injection in stream.js
     state.finishReason = overrideFinishReason;
 
-    // Use tracked usage (will be estimated in stream.js if not valid)
-    const finalUsage = state.usage || { input_tokens: 0, output_tokens: 0 };
-    results.push({
-      type: "message_delta",
-      delta: { stop_reason: convertFinishReason(overrideFinishReason) },
-      usage: finalUsage,
-    });
-    results.push({ type: "message_stop" });
+    // Emit the terminal events with the accumulated usage. Most spec-compliant
+    // OpenAI-compatible upstreams send usage in a TRAILING `choices: []` chunk after
+    // finish_reason (OmniRoute requests stream_options.include_usage), so when no usage
+    // has been reported yet the terminal events are deferred until that chunk arrives —
+    // or until the stream flush (emitDeferredClaudeFinish), so the client is never left
+    // without a terminator. Without the deferral the real cache_read_input_tokens
+    // breakdown was silently dropped and Claude clients recorded input_tokens: 0.
+    const finalUsage = toClaudeUsage(state.usage);
+    if (finalUsage && hasReportedUsage(finalUsage)) {
+      state.usage = finalUsage;
+      results.push({
+        type: "message_delta",
+        delta: { stop_reason: convertFinishReason(overrideFinishReason) },
+        usage: finalUsage,
+      });
+      results.push({ type: "message_stop" });
+    } else {
+      state.claudeFinishDeferred = true;
+      state.claudeDeferredStopReason = convertFinishReason(overrideFinishReason);
+    }
   }
 
   return results.length > 0 ? results : null;

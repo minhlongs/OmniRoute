@@ -16,7 +16,8 @@ type ScopeEnforcedHandler = (
 
 export function registerToolSearchTool(
   server: McpServer,
-  withScopeEnforcement: ScopeEnforcedHandler
+  withScopeEnforcement: ScopeEnforcedHandler,
+  allowedToolNames?: ReadonlySet<string> | null
 ): void {
   server.registerTool(
     "omniroute_tool_search",
@@ -27,7 +28,7 @@ export function registerToolSearchTool(
     },
     withScopeEnforcement("omniroute_tool_search", (args) => {
       const parsed = toolSearchInput.parse(args ?? {});
-      const result = handleToolSearch(parsed);
+      const result = handleToolSearch(parsed, allowedToolNames);
       return Promise.resolve({
         content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }],
       });

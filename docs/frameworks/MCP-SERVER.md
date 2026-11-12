@@ -33,13 +33,86 @@ The MCP server exposes three transports, all backed by the same `createMcpServer
 | :---------------- | :------------------------------------------ | :--------------------------------------------------- |
 | `stdio`           | `open-sse/mcp-server/server.ts`             | IDE integrations (Claude Desktop, Cursor, etc.)      |
 | `sse`             | `POST/GET /api/mcp/sse` via `httpTransport` | Browser/agent clients that need an event stream      |
-| `streamable-http` | `POST/GET/DELETE /api/mcp/stream`           | Multi-session HTTP clients (`mcp-session-id` header) |
+| `streamable-http` | `POST/GET/DELETE /api/mcp/stream`           | Claude Code and multi-session HTTP clients (`mcp-session-id` header) |
 
 The active HTTP transport (`sse` or `streamable-http`) is selected by the `mcpTransport` setting. Switching transports closes existing sessions on the other transport.
 
+Both HTTP transports announce a **curated READ-ONLY profile by default** (13 context-retrieval tools) instead of the full catalog; `stdio` keeps the full catalog unless `MCP_TOOL_ALLOW`/`MCP_TOOL_DENY` are set. See [Tool Cardinality Reduction](#tool-cardinality-reduction-f43) and [Claude Code over HTTP](#claude-code-over-http-curated-read-only-profile).
+
+### Claude Code over HTTP (curated read-only profile)
+
+Claude Code's HTTP MCP transport registers the repo's existing Streamable HTTP endpoint. The key is that **tool schemas stay deferred**: Claude Code's tool search withholds MCP tool definitions from the model context and loads only the tools a task needs, so the curated manifest is not paid for on every request.
+
+**1. Enable the HTTP transport in OmniRoute**
+
+Open **Dashboard → MCP**, enable the MCP server, and select the `streamable-http` transport. The route stays disabled (`503`) until `mcpEnabled` is on, and returns `400` if `mcpTransport` is still `"sse"`/`"stdio"`.
+
+**2. Create an API key**
+
+Create a key with the narrow `mcp:connect` scope (recommended for MCP-only callers) or the broader `manage`/`admin` scope. `mcp:connect` only authorizes the `/api/mcp/*` transport; it grants no other management route. A key with `chat`-style scopes is rejected with `403`.
+
+**3. Register the server with Claude Code**
+
+The exact command is `claude mcp add --transport http <name> <url>` ([Claude Code MCP docs](https://code.claude.com/docs/en/mcp)):
+
+```bash
+claude mcp add --transport http omniroute http://localhost:20128/api/mcp/stream \
+  --header "Authorization: Bearer sk-…"
+```
+
+Or write the equivalent project-scope entry yourself (Claude Code reads `type: "http"` as the Streamable HTTP transport):
+
+```json
+{
+  "mcpServers": {
+    "omniroute": {
+      "type": "http",
+      "url": "http://localhost:20128/api/mcp/stream",
+      "headers": { "Authorization": "Bearer ${OMNIROUTE_MCP_KEY}" }
+    }
+  }
+}
+```
+
+Verify with `claude mcp list` (`✔ Connected`) or `/mcp` inside a session.
+
+**4. Keep schemas deferred**
+
+Tool search is **on by default** in current Claude Code versions (the `ENABLE_TOOL_SEARCH` value is unset), and it defers MCP tool definitions. Supported values ([tool search docs](https://code.claude.com/docs/en/agent-sdk/tool-search)):
+
+| `ENABLE_TOOL_SEARCH` | Effect                                                                     |
+| :------------------- | :------------------------------------------------------------------------- |
+| unset / `true`       | Tool search on; definitions deferred and discovered on demand              |
+| `auto` / `auto:N`    | Loads upfront until deferrable definitions reach N% of the context window  |
+| `false`              | Tool search off; every tool definition is loaded on every turn             |
+
+Do **not** set `"alwaysLoad": true` on the OmniRoute server entry — that field exempts a server from deferral and puts its schemas back in every request. When Claude Code is routed through OmniRoute as its LLM gateway (`ANTHROPIC_BASE_URL`), the gateway must forward the client's `defer_loading` tool fields and `tool_reference` blocks with the `anthropic-beta` header it negotiates; tool search behind a gateway is on by default since Claude Code v2.1.304.
+
+Server-side, `omniroute_tool_search` complements that mechanism: it returns compact one-line TypeScript signatures for the announced tools only, so a model can discover a tool without pulling in its full JSON schema. The HTTP profile scopes that search to the same curated subset that appears in `tools/list` — it can never advertise a tool the manifest disabled.
+
+**Curated read-only tools announced over HTTP (13):**
+
+| Tool                                   | Scopes          | Purpose                                   |
+| :------------------------------------- | :-------------- | :---------------------------------------- |
+| `omniroute_tool_search`                | `read:tools`    | Token-efficient tool discovery            |
+| `omniroute_memory_search`              | `read:memory`   | Memory retrieval                          |
+| `omniroute_skills_list`                | `read:skills`   | Skills catalog                            |
+| `omniroute_skills_executions`          | `read:skills`   | Skill execution history (read-only)       |
+| `omniroute_agent_skills_list`          | `read:catalog`  | Agent-skill catalog                       |
+| `omniroute_agent_skills_get`           | `read:catalog`  | Agent-skill detail                        |
+| `omniroute_agent_skills_coverage`     | `read:catalog`  | Agent-skill coverage report               |
+| `omniroute_list_models_catalog`        | `read:models`   | Model catalog                             |
+| `omniroute_web_search`                 | `execute:search` | Web search (outbound, read-only effect)  |
+| `omniroute_web_fetch`                  | `execute:search` | Web fetch (outbound, read-only effect)   |
+| `local_corpus_status`                  | `read:local-corpus` | Local corpus status                  |
+| `local_corpus_search`                  | `read:local-corpus` | Local corpus search                  |
+| `local_corpus_read`                    | `read:local-corpus` | Local corpus read                    |
+
+No write, admin, or `execute:completions` tool is announced by default. To restore the full catalog over HTTP, set `MCP_TOOL_ALLOW=all` on the server process; to customise, set `MCP_TOOL_ALLOW`/`MCP_TOOL_DENY` (see [Tool Cardinality Reduction](#tool-cardinality-reduction-f43)).
+
 ### Remote access (manage-scope bypass)
 
-`/api/mcp/*` is in the LOCAL_ONLY tier (`src/server/authz/routeGuard.ts`) — by default only loopback hosts (`localhost`, `127.0.0.1`, `::1`) can reach it. Since v3.8.2, non-loopback clients may connect if they present an `Authorization: Bearer <api-key>` whose key carries the `manage` scope. This is the only way to reach the remote MCP server through a tunnel, reverse proxy, or public hostname.
+`/api/mcp/*` is in the LOCAL_ONLY tier (`src/server/authz/routeGuard.ts`) — by default only loopback hosts (`localhost`, `127.0.0.1`, `::1`) can reach it. Since v3.8.2, non-loopback clients may connect if they present an `Authorization: Bearer <api-key>` whose key carries the `manage` scope. Since #7895 the narrower `mcp:connect` scope is also accepted for `/api/mcp/*` (and only there). A dashboard session still works from a browser. This is the only way to reach the remote MCP server through a tunnel, reverse proxy, or public hostname.
 
 ```bash
 # Grant manage scope: open the dashboard API Keys page and toggle

@@ -1,0 +1,133 @@
+# .claudeignore — retrieval-hygiene ignore list for Claude Code / agent tooling
+#
+# Purpose: keep generated, vendored, build and runtime trees OUT of retrieval and context
+# loading, so an agent searching this repo sees source, tests and docs — not 3.7 GB of
+# node_modules or 94 MB of duplicated translations.
+#
+# Syntax: gitignore-style (globs, `!` negation, trailing `/` = directory only).
+# Consumers: Claude Code and other retrieval/indexing tools that honor Claude-style ignore
+# files. `.cbmignore` covers the same intent for the codebase-memory MCP graph; `.gitignore`
+# remains the canonical VCS list. A path is skipped only when a tool honors this file — it
+# never affects git tracking or the Next.js build.
+#
+# Editing rules:
+#   1. Never ignore source. `src/`, `open-sse/`, `bin/`, `tests/`, `scripts/`, `config/`,
+#      `electron/` (source), `.github/`, `public/`, `skills/` and English `docs/**` must stay
+#      searchable. Hiding them creates blind spots in code search and impact analysis.
+#   2. Do not hide a path just because its name looks like data. Historical trap: `bin/` and
+#      `src/lib/env/` were once ignored as "scratch/data" — they are real entrypoints and route
+#      handlers. Verify with `git ls-files <path>` before adding a rule.
+#   3. Generated-but-referenced assets can be ignored (translation mirrors, screenshots,
+#      diagram exports) — regenerate them instead of reading them.
+#   4. Prefer a narrow path over a broad pattern; a broad `.env*` must keep `!.env.example`.
+#
+# Audit after editing: `git ls-files | grep -vE '<this file's patterns>'` should still list
+# every source directory, or use `node scripts/check/check-agent-rules.mjs` (asserts the
+# ignore list never covers source roots).
+
+# ── Dependencies / vendor ──────────────────────────────────────────────────
+node_modules/
+**/node_modules/
+.pnpm-store/
+vendor/
+@omniroute/opencode-plugin/node_modules/
+@omniroute/opencode-provider/node_modules/
+obsidian-plugin/node_modules/
+
+# ── Build output (reproducible) ────────────────────────────────────────────
+.next/
+.next-playwright/
+.build/
+.out/
+dist/
+build/
+out/
+electron/dist-electron/
+@omniroute/opencode-plugin/dist/
+@omniroute/opencode-provider/dist/
+src/mitm/tproxy/native/build/
+
+# ── Generated artifacts, reports, caches ───────────────────────────────────
+coverage/
+.coverage/
+reports/mutation/
+.stryker-tmp/
+stryker-output-*.json
+test-results/
+playwright-report/
+blob-report/
+quality-metrics.json
+config/quality/quality-metrics.json
+config/quality/test-impact-map.json
+audit-report.json
+scripts/i18n/_audit.json
+scripts/i18n/_pending-keys.json
+*.tsbuildinfo
+.eslintcache
+.eslintcache-complexity
+.eslintcache-probe
+.cache/
+
+# ── Runtime data, secrets, local state ─────────────────────────────────────
+.env
+.env.*
+!.env.example
+!.env.homolog.example
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+*.sqlite-journal
+data/
+.logs/
+logs/*
+.claude/scheduled_tasks/
+.claude/scheduled_tasks.lock
+.claude/sessions/
+.claude/state.json
+.claude/settings.local.json
+.claude/worktrees/
+.agents/
+.data/
+.data-dev/
+.local-data/
+.artifacts/
+.superpowers/
+_staging/
+tmp/
+
+# ── Generated / mirrored documentation (large, regenerate instead) ─────────
+# Translation mirrors duplicate the English docs tree; edit the English source.
+docs/i18n/
+# Exported diagram images are generated from `docs/diagrams/*.mmd` sources.
+docs/diagrams/exported/
+docs/screenshots/
+docs/superpowers/
+
+# ── Binary / media noise (not greppable) ───────────────────────────────────
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.ico
+*.webp
+*.pdf
+*.zip
+*.mp4
+*.woff
+*.woff2
+
+# ── OS / editor noise ──────────────────────────────────────────────────────
+.DS_Store
+.idea/
+.vscode/
+.husky/_/
+
+# ── DELIBERATELY KEPT VISIBLE (do not add rules for these) ─────────────────
+# src/app/**, src/lib/**, src/domain/**, src/shared/**, src/server/**, src/mitm/** (TS source)
+# open-sse/** (handlers, executors, translators, services, mcp-server source)
+# bin/** (published CLI entrypoint), electron/** (main/preload source)
+# tests/**, scripts/**, config/**, skills/**, public/**, examples/**, contrib/**
+# .github/** (workflows, actions), package.json, tsconfig*.json, eslint.config.mjs
+# docs/** in English (architecture, reference, security, frameworks, ops, routing, guides)
+# AGENTS.md, CLAUDE.md, GEMINI.md, CONTRIBUTING.md, SECURITY.md, README.md
+# CHANGELOG.md is large: grep it narrowly, never open it whole (see AGENTS.md).

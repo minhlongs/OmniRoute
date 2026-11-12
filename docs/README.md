@@ -72,6 +72,16 @@ How the system is put together — read these to understand the runtime, code la
 - [admission-lanes.md](architecture/admission-lanes.md) — the two admission-lane systems and what gates each.
 - [persistence-backend-boundary.md](architecture/persistence-backend-boundary.md) — pluggable persistence boundary (ADR).
 
+### Agent contract deep dives
+
+Long-form detail referenced by the root [`AGENTS.md`](../AGENTS.md). Load one page on demand instead of reading the whole contract.
+
+- [HARD_RULES.md](architecture/HARD_RULES.md) — full normative text of the 23 Hard Rules plus precedents.
+- [AGENT_WORKFLOW.md](architecture/AGENT_WORKFLOW.md) — git workflow, worktree protocol, base-green check, bug-fix validation, upstream contributions.
+- [MODIFICATION_SCENARIOS.md](architecture/MODIFICATION_SCENARIOS.md) — step-by-step recipes for recurring change types.
+- [RUNTIME_ENVIRONMENT.md](architecture/RUNTIME_ENVIRONMENT.md) — Node/Bun support matrix and toolchain boundaries.
+- [RESILIENCE_GUIDE.md](architecture/RESILIENCE_GUIDE.md) — circuit breaker, connection cooldown, model lockout runtime state.
+
 ## reference/
 
 Lookup material — API surface, environment variables, CLI flags, provider catalog.
@@ -145,6 +155,7 @@ Guardrails, compliance, stealth, and the mandatory patterns for handling public 
 - [MITM-TPROXY-DECRYPT.md](security/MITM-TPROXY-DECRYPT.md) — transparent MITM decrypt.
 - [SUPPLY_CHAIN.md](security/SUPPLY_CHAIN.md) — supply-chain gates (SLSA, SBOM, Trivy, osv-scanner, Scorecard).
 - [SOCKET_DEV_FINDINGS.md](security/SOCKET_DEV_FINDINGS.md) — supply-chain finding attestations.
+- [PII_STREAM_LEARNINGS.md](security/PII_STREAM_LEARNINGS.md) — regex-safety, SSE-snapshot and test-handle leak learnings for PII/stream code.
 
 ## compression/
 
