@@ -8,12 +8,12 @@
 > **Progressive disclosure.** Long reference material lives in linked docs, not here. Always in
 > force: the **Hard Rules** (23, below), **File placement**, **Security** conventions and the
 > **test-in-the-same-PR rule**; everything else is reference. Deep dives:
-> [`HARD_RULES`](docs/architecture/HARD_RULES.md) (full text + precedents),
-> [`AGENT_WORKFLOW`](docs/architecture/AGENT_WORKFLOW.md) (worktree, base-green, TDD/VPS gate),
-> [`MODIFICATION_SCENARIOS`](docs/architecture/MODIFICATION_SCENARIOS.md),
-> [`RUNTIME_ENVIRONMENT`](docs/architecture/RUNTIME_ENVIRONMENT.md),
+> [HARD_RULES](docs/architecture/HARD_RULES.md) (full text + precedents),
+> [AGENT_WORKFLOW](docs/architecture/AGENT_WORKFLOW.md) (worktree, base-green, TDD/VPS gate),
+> [MODIFICATION_SCENARIOS](docs/architecture/MODIFICATION_SCENARIOS.md),
+> [RUNTIME_ENVIRONMENT](docs/architecture/RUNTIME_ENVIRONMENT.md),
 > [`RESILIENCE_GUIDE`](docs/architecture/RESILIENCE_GUIDE.md),
-> [`PII_STREAM_LEARNINGS`](docs/security/PII_STREAM_LEARNINGS.md), [`docs/README.md`](docs/README.md).
+> [PII_STREAM_LEARNINGS](docs/security/PII_STREAM_LEARNINGS.md), [`docs/README.md`](docs/README.md).
 > Root size is capped at 30 KB by `node scripts/check/check-agent-rules.mjs` — put new detail in a
 > linked doc instead of growing this contract.
 
@@ -136,7 +136,7 @@ deep-dive before a non-trivial change. Full index: [`docs/README.md`](docs/READM
 - **Database** `src/lib/db/`, `db/migrations/` → [`src/lib/db/AGENTS.md`](src/lib/db/AGENTS.md)
 - **MCP / A2A / agent features** `open-sse/mcp-server/`, `src/lib/a2a/`, `src/lib/{acp,memory,skills,cloudAgent}/` → [`MCP-SERVER`](docs/frameworks/MCP-SERVER.md), [`A2A-SERVER`](docs/frameworks/A2A-SERVER.md)
 - **Security / authz** `src/lib/{guardrails,compliance}/`, `src/server/authz/` → [`GUARDRAILS`](docs/security/GUARDRAILS.md), [`AUTHZ_GUIDE`](docs/architecture/AUTHZ_GUIDE.md)
-- **Ops / quality** `src/mitm/`, `electron/`, `scripts/check/` → [`TUNNELS_GUIDE`](docs/ops/TUNNELS_GUIDE.md), [`QUALITY_GATES`](docs/architecture/QUALITY_GATES.md)
+- **Ops / quality** `src/mitm/`, `electron/`, `scripts/check/` → [TUNNELS_GUIDE](docs/ops/TUNNELS_GUIDE.md), [QUALITY_GATES](docs/architecture/QUALITY_GATES.md)
 
 Also worth knowing: `docs/reference/{API_REFERENCE,PROVIDER_REFERENCE,ENVIRONMENT}.md`,
 `docs/openapi.yaml`, `docs/ops/RELEASE_CHECKLIST.md`, `docs/guides/VSCODE-COPILOT.md`.
@@ -226,7 +226,7 @@ Documentation must describe verified behavior, not plausible behavior.
    signature.
 4. Run `npm run check:docs-all` for edits under `docs/` (it includes the fabricated-docs validation)
    and `node scripts/check/check-agent-rules.mjs` when editing `AGENTS.md` or a
-   `docs/architecture/AGENT_*` / `HARD_RULES` page.
+   `docs/architecture/AGENT_*` / `docs/architecture/HARD_RULES.md` page.
 
 ---
 
@@ -247,15 +247,15 @@ Per-change recipes — read only yours:
 
 ## Testing
 
-| What                           | Command                                                                      |
-| ------------------------------ | ---------------------------------------------------------------------------- |
-| Unit tests                     | `npm run test:unit`                                                          |
-| Single file                    | `node --import tsx/esm --test tests/unit/your-file.test.ts`                  |
-| Vitest (MCP server, autoCombo) | `npm run test:vitest`                                                        |
+| What                           | Command                                                                       |
+| ------------------------------ | ----------------------------------------------------------------------------- |
+| Unit tests                     | `npm run test:unit`                                                           |
+| Single file                    | `node --import tsx/esm --test tests/unit/your-file.test.ts`                   |
+| Vitest (MCP server, autoCombo) | `npm run test:vitest`                                                         |
 | Protocol E2E (MCP + A2A)       | `npm run test:protocols:e2e` (CI job `test-protocols-e2e`, advisory — #10049) |
-| Ecosystem                      | `npm run test:ecosystem` (CI job `test-ecosystem`, blocking)                 |
-| Coverage gate                  | `npm run test:coverage` (60/60/60/60 — statements/lines/functions/branches)  |
-| Coverage report                | `npm run coverage:report`                                                    |
+| Ecosystem                      | `npm run test:ecosystem` (CI job `test-ecosystem`, blocking)                  |
+| Coverage gate                  | `npm run test:coverage` (60/60/60/60 — statements/lines/functions/branches)   |
+| Coverage report                | `npm run coverage:report`                                                     |
 
 **PR rule**: changing production code in `src/`, `open-sse/`, `electron/` or `bin/` requires
 included/updated tests in the same PR (unit → integration → e2e preference). **Both runners must
@@ -331,7 +331,7 @@ gh issue list --repo diegosouzapw/OmniRoute --state open \
 If the base is red: never treat inherited failures as your branch's defect, never "fix" them inside a
 feature branch, and add `⚠️ base-red inherited: #<issue>` to the PR body.
 
-Full protocol + incident rationales: [`AGENT_WORKFLOW`](docs/architecture/AGENT_WORKFLOW.md).
+Full protocol + incident rationales: [AGENT_WORKFLOW](docs/architecture/AGENT_WORKFLOW.md).
 
 ---
 
@@ -359,7 +359,7 @@ a Conventional Commit message. Full rules:
   preserve the Node driver/fallback chain.
 - **Bun** (pinned exact devDependency) runs **only** an allow-listed set of gate/generator scripts
   and the `test:bun:db` smoke — never `npm install`, the build, `check:pack-artifact` or the main
-  test runners. Rationales: [`RUNTIME_ENVIRONMENT`](docs/architecture/RUNTIME_ENVIRONMENT.md).
+  test runners. Rationales: [RUNTIME_ENVIRONMENT](docs/architecture/RUNTIME_ENVIRONMENT.md).
 - **Toolchain**: TypeScript 6.0+, target ES2022, module esnext, resolution bundler. Path aliases:
   `@/*` → `src/`, `@omniroute/open-sse` → `open-sse/`, `@omniroute/open-sse/*` → `open-sse/*`.
 - **Runtime config**: default port 20128 (API + dashboard) · data dir `DATA_DIR`, default
@@ -476,7 +476,7 @@ Full normative text, precedents and dismissal criteria for every rule:
 ## PII & stream sanitization learnings
 
 Regex bounds (ReDoS), SSE final-snapshot handling, DB-handle cleanup in tests: read
-[`PII_STREAM_LEARNINGS`](docs/security/PII_STREAM_LEARNINGS.md) before touching PII masking,
+[PII_STREAM_LEARNINGS](docs/security/PII_STREAM_LEARNINGS.md) before touching PII masking,
 `src/lib/piiSanitizer.ts` or the streaming sanitizer.
 
 ---
@@ -494,6 +494,7 @@ Dashboard: operator's URL/port (default `http://localhost:20128`). Credentials a
 > it as compromised and do not reuse it.
 
 <!-- BEGIN:nextjs-agent-rules -->
+
 # This is NOT the Next.js you know
 
 This version has breaking changes — APIs, conventions, and file structure may all differ from your
