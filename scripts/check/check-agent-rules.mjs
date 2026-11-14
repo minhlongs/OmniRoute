@@ -6,7 +6,7 @@
  * the Hard Rules must survive any restructuring — either verbatim in the root file or
  * preserved in the linked deep-dive page that replaced a long section.
  *
- * Run manually (not wired into `check:docs-all`, which owns doc accuracy):
+ * Wired into `npm run check:agent-rules` (`check:docs-all`, `.husky/pre-commit`, `run-all-gates.mjs`):
  *   node scripts/check/check-agent-rules.mjs          # check + human summary
  *   node scripts/check/check-agent-rules.mjs --json   # machine-readable result
  *
@@ -413,7 +413,13 @@ function run() {
     }
   }
 
-  return { ok: failures.length === 0, failures, notes, rootBytes, claudeBytes: fs.statSync(CLAUDE_MD).size };
+  return {
+    ok: failures.length === 0,
+    failures,
+    notes,
+    rootBytes,
+    claudeBytes: fs.statSync(CLAUDE_MD).size,
+  };
 }
 
 const result = run();

@@ -15,9 +15,8 @@ delete process.env.MCP_TOOL_ALLOW;
 delete process.env.MCP_TOOL_DENY;
 
 const transport = await import("../../../open-sse/mcp-server/httpTransport.ts");
-const { READ_ONLY_CONTEXT_TOOL_NAMES } = await import(
-  "../../../open-sse/mcp-server/readOnlyToolProfile.ts"
-);
+const { READ_ONLY_CONTEXT_TOOL_NAMES } =
+  await import("../../../open-sse/mcp-server/readOnlyToolProfile.ts");
 const { resetDbInstance } = await import("../../../src/lib/db/core.ts");
 
 type JsonRpcEnvelope = {
@@ -89,7 +88,10 @@ test("the HTTP transport announces the curated read-only profile by default", as
   assert.equal(names.length, 13);
   assert.ok(!names.includes("omniroute_switch_combo"), "no write tool may be announced");
   assert.ok(!names.includes("omniroute_memory_add"), "no write tool may be announced");
-  assert.ok(!names.includes("omniroute_route_request"), "no execute-completion tool may be announced");
+  assert.ok(
+    !names.includes("omniroute_route_request"),
+    "no execute-completion tool may be announced"
+  );
 
   transport.shutdownMcpHttp();
 });
@@ -142,6 +144,44 @@ test("MCP_TOOL_ALLOW=all restores the full catalog over HTTP", async () => {
     delete process.env.MCP_TOOL_ALLOW;
     transport.shutdownMcpHttp();
   }
+});
+
+test("the SSE HTTP transport shares the curated read-only profile by default", async () => {
+  transport.shutdownMcpHttp();
+  const initResponse = await transport.handleMcpSSE(
+    new Request("http://localhost/api/mcp/sse", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "application/json, text/event-stream",
+      },
+      body: JSON.stringify({ jsonrpc: "2.0", method: "initialize", id: 10, params: INIT_PARAMS }),
+    })
+  );
+  assert.equal(initResponse.status, 200);
+  const sseSessionId = initResponse.headers.get("mcp-session-id");
+  assert.ok(sseSessionId, "SSE initialize must return an Mcp-Session-Id header");
+
+  const listHeaders: Record<string, string> = {
+    "Content-Type": "application/json",
+    Accept: "application/json, text/event-stream",
+    "mcp-session-id": sseSessionId,
+  };
+  const listResponse = await transport.handleMcpSSE(
+    new Request("http://localhost/api/mcp/sse", {
+      method: "POST",
+      headers: listHeaders,
+      body: JSON.stringify({ jsonrpc: "2.0", method: "tools/list", id: 11 }),
+    })
+  );
+  assert.equal(listResponse.status, 200);
+  const envelope = await readJsonRpc(listResponse);
+  const result = envelope.result as ToolsListResult;
+  const names = result.tools.map((tool) => tool.name).sort();
+  assert.deepEqual(names, [...READ_ONLY_CONTEXT_TOOL_NAMES].sort());
+  assert.equal(names.length, 13);
+
+  transport.shutdownMcpHttp();
 });
 
 test.after(() => {

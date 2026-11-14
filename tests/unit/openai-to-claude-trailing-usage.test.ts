@@ -27,6 +27,10 @@ import assert from "node:assert/strict";
 
 const { openaiToClaudeResponse } =
   await import("../../open-sse/translator/response/openai-to-claude.ts");
+const { FORMATS } = await import("../../open-sse/translator/formats.ts");
+const { filterUsageForFormat } = await import("../../open-sse/utils/usageTracking.ts");
+const { getLoggedInputTokens, getLoggedOutputTokens, getReasoningTokens } =
+  await import("../../src/lib/usage/tokenAccounting.ts");
 
 function createState() {
   return {
@@ -252,5 +256,45 @@ describe("OpenAI → Claude streaming: trailing usage-only chunk", () => {
     const delta = finish.find((event) => event.type === "message_delta");
     assert.equal((delta?.usage as Record<string, unknown>).input_tokens, 0);
     assert.equal((delta?.usage as Record<string, unknown>).cache_read_input_tokens, 140);
+  });
+
+  test("preserves metered reasoning_tokens on state.usage for accounting without leaking to wire usage", () => {
+    const state = createState();
+    openaiToClaudeResponse(contentChunk(), state);
+    openaiToClaudeResponse(finishChunk(), state);
+
+    const trailing = flatten(
+      openaiToClaudeResponse(
+        trailingUsageChunk("chatcmpl-1", {
+          prompt_tokens: 120000,
+          completion_tokens: 500,
+          total_tokens: 120500,
+          prompt_tokens_details: { cached_tokens: 110000 },
+          completion_tokens_details: { reasoning_tokens: 320 },
+        }),
+        state
+      ) as unknown[]
+    );
+
+    const wireDeltaUsage = trailing[0]?.usage as Record<string, unknown>;
+    assert.equal(wireDeltaUsage.input_tokens, 10000);
+    assert.equal(wireDeltaUsage.output_tokens, 500);
+    assert.equal(wireDeltaUsage.cache_read_input_tokens, 110000);
+    assert.equal("reasoning_tokens" in wireDeltaUsage, false);
+    assert.equal("completion_tokens_details" in wireDeltaUsage, false);
+
+    // Internal state.usage retains reasoning_tokens for call-log & billable accounting.
+    const internalUsage = (state as { usage?: Record<string, unknown> }).usage;
+    assert.equal(getLoggedInputTokens(internalUsage), 120000);
+    assert.equal(getLoggedOutputTokens(internalUsage), 500);
+    assert.equal(getReasoningTokens(internalUsage), 320);
+
+    // Stream wire filter keeps strict Anthropic usage fields only.
+    const filteredWire = filterUsageForFormat(internalUsage, FORMATS.CLAUDE);
+    assert.equal("reasoning_tokens" in filteredWire, false);
+    assert.equal("completion_tokens_details" in filteredWire, false);
+    assert.equal(filteredWire.input_tokens, 10000);
+    assert.equal(filteredWire.output_tokens, 500);
+    assert.equal(filteredWire.cache_read_input_tokens, 110000);
   });
 });

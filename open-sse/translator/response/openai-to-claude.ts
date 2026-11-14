@@ -46,10 +46,22 @@ function extractXmlInvokeBlocks(
     const toolCallTextMatch = remaining.match(/TOOL_CALL\s+([A-Za-z0-9_]+):\s*/);
 
     const matches = [
-      invokeMatch ? { type: "invoke" as const, index: invokeMatch.index!, data: invokeMatch } : null,
-      toolCallTagMatch ? { type: "tool_call_tag" as const, index: toolCallTagMatch.index!, data: toolCallTagMatch } : null,
-      toolCallTextMatch ? { type: "tool_call_text" as const, index: toolCallTextMatch.index!, data: toolCallTextMatch } : null,
-    ].filter(Boolean).sort((a, b) => a!.index - b!.index);
+      invokeMatch
+        ? { type: "invoke" as const, index: invokeMatch.index!, data: invokeMatch }
+        : null,
+      toolCallTagMatch
+        ? { type: "tool_call_tag" as const, index: toolCallTagMatch.index!, data: toolCallTagMatch }
+        : null,
+      toolCallTextMatch
+        ? {
+            type: "tool_call_text" as const,
+            index: toolCallTextMatch.index!,
+            data: toolCallTextMatch,
+          }
+        : null,
+    ]
+      .filter(Boolean)
+      .sort((a, b) => a!.index - b!.index);
 
     if (matches.length === 0) {
       cleaned += remaining;
@@ -94,9 +106,7 @@ function extractXmlInvokeBlocks(
         const name = (parsed.name || parsed.tool_name || "") as string;
         const rawArgs = parsed.arguments || parsed.args || parsed.parameters || {};
         const args: Record<string, string> =
-          typeof rawArgs === "string"
-            ? JSON.parse(rawArgs)
-            : (rawArgs as Record<string, string>);
+          typeof rawArgs === "string" ? JSON.parse(rawArgs) : (rawArgs as Record<string, string>);
         if (name) {
           toolCalls.push({ id: `toolu_txt_${Date.now()}_${toolCalls.length}`, name, args });
         }
@@ -114,12 +124,27 @@ function extractXmlInvokeBlocks(
       let jsonEndIndex = -1;
       for (let i = 0; i < afterPrefix.length; i++) {
         const c = afterPrefix[i];
-        if (escape) { escape = false; continue; }
-        if (c === "\\" && inString) { escape = true; continue; }
-        if (c === '"') { inString = !inString; continue; }
+        if (escape) {
+          escape = false;
+          continue;
+        }
+        if (c === "\\" && inString) {
+          escape = true;
+          continue;
+        }
+        if (c === '"') {
+          inString = !inString;
+          continue;
+        }
         if (!inString) {
           if (c === "{") depth++;
-          else if (c === "}") { depth--; if (depth === 0) { jsonEndIndex = i + 1; break; } }
+          else if (c === "}") {
+            depth--;
+            if (depth === 0) {
+              jsonEndIndex = i + 1;
+              break;
+            }
+          }
         }
       }
       if (jsonEndIndex === -1) {
@@ -237,7 +262,7 @@ function hasReportedUsage(usage: unknown): boolean {
  */
 function emitDeferredClaudeFinish(state): JsonRecord[] {
   const usage = toClaudeUsage(state.usage) ?? { input_tokens: 0, output_tokens: 0 };
-  state.usage = usage;
+  state.usage = mergeClaudeStateUsage(state.usage, usage);
   state.claudeFinishDeferred = false;
   return [
     {
@@ -247,6 +272,38 @@ function emitDeferredClaudeFinish(state): JsonRecord[] {
     },
     { type: "message_stop" },
   ];
+}
+
+/**
+ * Preserve metered reasoning_tokens on `state.usage` for internal call-log and
+ * billable-token accounting while replacing OpenAI prompt/completion keys with the
+ * Anthropic-normalized breakdown (`getLoggedInputTokens` sums `input_tokens +
+ * cache_read + cache_creation` when `prompt_tokens` is absent). `reasoning_tokens` is
+ * stripped before client wire emission by `filterUsageForFormat(..., FORMATS.CLAUDE)`.
+ */
+function mergeClaudeStateUsage(
+  previous: unknown,
+  normalized: ClaudeUsageRecord,
+  rawChunkUsage?: unknown
+): JsonRecord {
+  const prev = asRecord(previous);
+  const raw = asRecord(rawChunkUsage);
+  const rawCompletionDetails = asRecord(raw?.completion_tokens_details);
+  const prevCompletionDetails = asRecord(prev?.completion_tokens_details);
+  const rawOutputDetails = asRecord(raw?.output_tokens_details);
+  const prevOutputDetails = asRecord(prev?.output_tokens_details);
+  const reasoning = firstTokenCount(
+    raw?.reasoning_tokens,
+    rawCompletionDetails?.reasoning_tokens,
+    rawOutputDetails?.thinking_tokens,
+    prev?.reasoning_tokens,
+    prevCompletionDetails?.reasoning_tokens,
+    prevOutputDetails?.thinking_tokens
+  );
+  if (reasoning > 0) {
+    return { ...normalized, reasoning_tokens: reasoning };
+  }
+  return { ...normalized };
 }
 
 // Helper: stop thinking block if started
@@ -287,7 +344,9 @@ export function openaiToClaudeResponse(chunk, state) {
   if (!chunk.choices || !chunk.choices[0]) {
     if (chunk.usage && typeof chunk.usage === "object") {
       const trailingUsage = toClaudeUsage(chunk.usage);
-      if (trailingUsage) state.usage = trailingUsage;
+      if (trailingUsage) {
+        state.usage = mergeClaudeStateUsage(state.usage, trailingUsage, chunk.usage);
+      }
     }
     return state.claudeFinishDeferred ? emitDeferredClaudeFinish(state) : null;
   }
@@ -299,7 +358,9 @@ export function openaiToClaudeResponse(chunk, state) {
   // Track usage from OpenAI chunk if available (overwrites with Anthropic-shaped usage).
   if (chunk.usage && typeof chunk.usage === "object") {
     const reportedUsage = toClaudeUsage(chunk.usage);
-    if (reportedUsage) state.usage = reportedUsage;
+    if (reportedUsage) {
+      state.usage = mergeClaudeStateUsage(state.usage, reportedUsage, chunk.usage);
+    }
   }
 
   // First chunk - ALWAYS send message_start first
@@ -610,7 +671,7 @@ export function openaiToClaudeResponse(chunk, state) {
     // breakdown was silently dropped and Claude clients recorded input_tokens: 0.
     const finalUsage = toClaudeUsage(state.usage);
     if (finalUsage && hasReportedUsage(finalUsage)) {
-      state.usage = finalUsage;
+      state.usage = mergeClaudeStateUsage(state.usage, finalUsage, chunk.usage);
       results.push({
         type: "message_delta",
         delta: { stop_reason: convertFinishReason(overrideFinishReason) },

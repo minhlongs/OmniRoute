@@ -28,7 +28,7 @@ git push -u origin feat/your-feature
 
 **Husky hooks**:
 
-- **pre-commit**: lint-staged + `check-docs-sync` + `check:any-budget:t11` + `check:tracked-artifacts`
+- **pre-commit**: lint-staged + `check-docs-sync` + `check-agent-rules` + `check:any-budget:t11` + `check:tracked-artifacts`
 - **pre-push**: intentionally light (PATH/npm sanity only). `any-budget` + `tracked-artifacts`
   already run on pre-commit; re-running them on every push was pure double-pay. CI still
   enforces both. (Was Fase 6A.12 full pre-push gate; folded into pre-commit in #6716.)
