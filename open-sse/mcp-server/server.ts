@@ -84,6 +84,8 @@ import { obsidianTools } from "./tools/obsidianTools.ts";
 import { localCorpusTools } from "./tools/localCorpusTools.ts";
 import { compressMcpRegistryMetadata } from "./descriptionCompressor.ts";
 import { reduceToolManifest, readMcpToolProfileFromEnv } from "./toolCardinality.ts";
+import type { ToolManifestEntry, ToolProfile } from "./toolCardinality.ts";
+import { getAllToolDefinitions } from "./toolSearch/catalog.ts";
 import { smartFilterText } from "../services/compression/engines/mcpAccessibility/index.ts";
 import {
   DEFAULT_MCP_ACCESSIBILITY_CONFIG,
@@ -723,14 +725,24 @@ async function handleWebFetch(args: {
 
 export interface CreateMcpServerOptions {
   blockedProviders?: string[] | (() => string[]);
+  /**
+   * Tool-manifest filter for this server instance.
+   *
+   * - `undefined` (default): historical behaviour — `MCP_TOOL_ALLOW` / `MCP_TOOL_DENY`
+   *   from the environment, `null` when neither is set (all tools announced).
+   * - `null`: announce every tool regardless of the environment.
+   * - `ToolProfile`: apply this profile (the HTTP transports pass the curated
+   *   read-only profile by default — see `readOnlyToolProfile.ts`).
+   */
+  toolProfile?: ToolProfile | null;
 }
 
-export function createMcpServer(options?: CreateMcpServerOptions): McpServer {
+export function createMcpServer(options: CreateMcpServerOptions = {}): McpServer {
   const resolveBlockedProviders = (): string[] => {
-    if (typeof options?.blockedProviders === "function") {
+    if (typeof options.blockedProviders === "function") {
       return options.blockedProviders();
     }
-    if (Array.isArray(options?.blockedProviders)) {
+    if (Array.isArray(options.blockedProviders)) {
       return options.blockedProviders;
     }
     return [];
@@ -746,7 +758,24 @@ export function createMcpServer(options?: CreateMcpServerOptions): McpServer {
   const mcpDescriptionCompressionEnabled = readMcpDescriptionCompressionEnabled();
   const mcpAccessibilityConfig = readMcpAccessibilityConfig();
   // F4.3 tool-cardinality: opt-in tool profile (MCP_TOOL_DENY / MCP_TOOL_ALLOW). null = no filter.
-  const toolProfile = readMcpToolProfileFromEnv(process.env);
+  // The HTTP transports override this with the curated read-only profile.
+  const toolProfile =
+    options.toolProfile !== undefined
+      ? options.toolProfile
+      : readMcpToolProfileFromEnv(process.env);
+  // Catalog entries give the profile real scopes (so allowScopes filtering works) and feed the
+  // tool-search allow-list so deferred discovery never advertises a disabled tool.
+  const catalogEntries: ToolManifestEntry[] = toolProfile
+    ? getAllToolDefinitions().map((tool) => ({
+        name: tool.name,
+        description: tool.description,
+        scopes: tool.scopes,
+      }))
+    : [];
+  const toolScopesByName = new Map(catalogEntries.map((tool) => [tool.name, tool.scopes]));
+  const announcedToolNames = toolProfile
+    ? new Set(reduceToolManifest(catalogEntries, toolProfile).map((tool) => tool.name))
+    : null;
   const registerTool = server.registerTool.bind(server);
   server.registerTool = ((name: string, config: Record<string, unknown>, handler: unknown) => {
     const metadata = compressMcpRegistryMetadata(config, {
@@ -769,7 +798,11 @@ export function createMcpServer(options?: CreateMcpServerOptions): McpServer {
         }
       : handler;
     const registered = registerTool(name, metadata, filteredHandler as never);
-    if (toolProfile && reduceToolManifest([{ name, scopes: [] }], toolProfile).length === 0) {
+    const toolScopes = toolScopesByName.get(name) ?? [];
+    if (
+      toolProfile &&
+      reduceToolManifest([{ name, scopes: toolScopes }], toolProfile).length === 0
+    ) {
       // Denied by the cardinality profile: keep the registration valid but disable it so the tool
       // is not announced in tools/list (token savings). The default profile never reaches here.
       const disablable = registered as unknown as { disable?: () => void };
@@ -1151,7 +1184,7 @@ export function createMcpServer(options?: CreateMcpServerOptions): McpServer {
     )
   );
 
-  registerToolSearchTool(server, withScopeEnforcement);
+  registerToolSearchTool(server, withScopeEnforcement, announcedToolNames);
 
   // ── Memory Tools ──────────────────────────────
   Object.values(memoryTools).forEach((toolDef: any) => {

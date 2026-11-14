@@ -223,12 +223,17 @@ export function estimateManifestTokens(
   }, 0);
 }
 
+/** `MCP_TOOL_ALLOW` values that explicitly restore the full catalog (no allow-list filter). */
+const ALL_TOOLS_SENTINEL = new Set(["all", "*"]);
+
 /**
  * Build an opt-in {@link ToolProfile} from environment variables, or `null` when unset (no
  * filtering — the default). Used by the MCP server to disable tools it should not announce.
  *
  *   MCP_TOOL_DENY  — comma-separated tool names to always drop
- *   MCP_TOOL_ALLOW — comma-separated tool names to keep exclusively (allow-list mode)
+ *   MCP_TOOL_ALLOW — comma-separated tool names to keep exclusively (allow-list mode).
+ *                    `all` or `*` means "no allow-list filter" (the full catalog), so the same
+ *                    value restores the full set on both the stdio and HTTP transports.
  *
  * Scope-based (`allowScopes`) and `maxTools` filtering need the full manifest at registration
  * and are intentionally not env-exposed here (a tools/list-level hook is a tracked follow-up).
@@ -244,7 +249,9 @@ export function readMcpToolProfileFromEnv(
           .filter(Boolean)
       : [];
   const denyTools = parse(env["MCP_TOOL_DENY"]);
-  const allowTools = parse(env["MCP_TOOL_ALLOW"]);
+  const rawAllowTools = parse(env["MCP_TOOL_ALLOW"]);
+  const allowAll = rawAllowTools.some((name) => ALL_TOOLS_SENTINEL.has(name.toLowerCase()));
+  const allowTools = allowAll ? [] : rawAllowTools;
   if (denyTools.length === 0 && allowTools.length === 0) return null;
   return {
     name: "env",

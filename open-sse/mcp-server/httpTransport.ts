@@ -11,6 +11,7 @@
 
 import { randomUUID } from "node:crypto";
 import { createMcpServer } from "./server.ts";
+import { readMcpHttpToolProfile } from "./readOnlyToolProfile.ts";
 import { resolveMcpCallerAuthInfo, withMcpHttpAuthContext } from "./httpAuthContext.ts";
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -78,6 +79,18 @@ function closeAllStreamableSessions(): void {
   }
 }
 
+/**
+ * Create the MCP server for an HTTP transport session.
+ *
+ * The HTTP transports default to the curated READ-ONLY context-retrieval profile so a Claude Code
+ * (or any HTTP MCP client) connect does not pull ~105 tool schemas into context. `MCP_TOOL_ALLOW`
+ * / `MCP_TOOL_DENY` still override (see `readOnlyToolProfile.ts`); the stdio transport keeps its
+ * historical full-catalog default.
+ */
+function createHttpMcpServer(): McpServer {
+  return createMcpServer({ toolProfile: readMcpHttpToolProfile(process.env) });
+}
+
 function ensureSseServer(): {
   server: McpServer;
   transport: WebStandardStreamableHTTPServerTransport;
@@ -88,7 +101,7 @@ function ensureSseServer(): {
 
   closeAllStreamableSessions();
 
-  _sseServer = createMcpServer();
+  _sseServer = createHttpMcpServer();
   _sseTransport = new WebStandardStreamableHTTPServerTransport({
     sessionIdGenerator: () => randomUUID(),
   });
@@ -104,7 +117,7 @@ function createStreamableSession(): StreamableSession {
   closeSseTransport();
 
   const sessionId = randomUUID();
-  const server = createMcpServer();
+  const server = createHttpMcpServer();
   const transport = new WebStandardStreamableHTTPServerTransport({
     sessionIdGenerator: () => sessionId,
   });

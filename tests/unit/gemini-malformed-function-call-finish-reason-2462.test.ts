@@ -70,6 +70,11 @@ function runGeminiToClaude(geminiChunk) {
     const converted = openaiToClaudeResponse(chunk, claudeState);
     if (converted) claudeEvents.push(...converted);
   }
+  // The OpenAI → Claude translator defers message_delta/message_stop until usage is
+  // known (spec-compliant OpenAI upstreams send it in a trailing `choices: []` chunk).
+  // This synthetic hub path has no trailing usage chunk, so flush like stream.ts does.
+  const flushed = openaiToClaudeResponse(null, claudeState);
+  if (flushed) claudeEvents.push(...flushed);
   return { openaiEvents, claudeEvents };
 }
 
