@@ -891,6 +891,8 @@ async function patchedFetch(
           msg.includes("fetch failed") ||
           errCode === "ECONNREFUSED" ||
           msg.includes("ECONNREFUSED") ||
+          errCode === "ECONNRESET" ||
+          msg.includes("ECONNRESET") ||
           errCode === "EAI_AGAIN" ||
           msg.includes("EAI_AGAIN") ||
           errCode === "ENOTFOUND" ||
@@ -943,16 +945,17 @@ async function patchedFetch(
               }
             }
           }
+          const targetSuffix = targetHostForLogs ? ` [target=${targetHostForLogs}]` : "";
           // Preserve the original monitoring phrase and append the transport cause.
           console.warn(
-            `[ProxyFetch] Undici dispatcher failed, falling back to native fetch (after retry): ${describeFetchCause(dispatcherError)}`
+            `[ProxyFetch] Undici dispatcher failed, falling back to native fetch (after retry): ${describeFetchCause(dispatcherError)}${targetSuffix}`
           );
           try {
             return await _nativeFallback(input, options);
           } catch (nativeError) {
             // Surface both dispatcher and native causes immediately.
             const detail = `dispatcher=[${describeFetchCause(dispatcherError)}] native=[${describeFetchCause(nativeError)}]`;
-            console.warn(`[ProxyFetch] native fetch fallback ALSO failed: ${detail}`);
+            console.warn(`[ProxyFetch] native fetch fallback ALSO failed: ${detail}${targetSuffix}`);
             if (nativeError instanceof Error) {
               (nativeError as Error & { proxyFetchDetail?: string }).proxyFetchDetail = detail;
             }

@@ -11,6 +11,7 @@
  * Uses Promise.allSettled so one slow/down node doesn't block others.
  */
 
+import { runWithDirectFetchContext } from "@omniroute/open-sse/utils/proxyFetch.ts";
 import { getCachedProviderNodes } from "@/lib/db/readCache";
 import { isAutomatedTestProcess } from "@/shared/utils/testProcess";
 
@@ -115,7 +116,9 @@ async function checkNode(node: {
   const prev = healthCache.get(node.id);
 
   try {
-    const res = await fetch(url, { signal: AbortSignal.timeout(CHECK_TIMEOUT_MS) });
+    const res = await runWithDirectFetchContext(() =>
+      fetch(url, { signal: AbortSignal.timeout(CHECK_TIMEOUT_MS) })
+    );
     // Consume/cancel response body to free resources
     res.body?.cancel().catch(() => {});
     const isHealthy = res.ok || res.status === 401; // 401 = server up but auth required
