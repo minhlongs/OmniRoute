@@ -199,6 +199,9 @@ export async function handleRerank({
   return_documents,
   credentials,
   connectionId = null,
+  apiKeyId = null,
+  apiKeyName = null,
+  resolvedProvider = null,
 }) {
   const startTime = Date.now();
   if (!model) return errorResponse(400, "model is required");
@@ -208,7 +211,8 @@ export async function handleRerank({
   }
 
   const { provider: providerId, model: modelId } = parseRerankModel(model);
-  const providerConfig = providerId ? getRerankProvider(providerId) : null;
+  const providerConfig =
+    resolvedProvider || (providerId ? getRerankProvider(providerId) : null);
 
   if (!providerConfig) {
     const availableProviders = Object.keys(RERANK_PROVIDERS).join(", ");
@@ -217,10 +221,13 @@ export async function handleRerank({
       `No rerank provider found for model "${model}". Available: ${availableProviders}`
     );
   }
+  // When a derived/generic provider is injected, its id is authoritative for
+  // logging and cost attribution even though parseRerankModel returned null.
+  const effectiveProviderId = providerConfig.id || providerId;
 
   const token = credentials?.apiKey || credentials?.accessToken;
   if (!token) {
-    return errorResponse(401, `No credentials for rerank provider: ${providerId}`);
+    return errorResponse(401, `No credentials for rerank provider: ${effectiveProviderId}`);
   }
 
   const requestBody = transformRequestForProvider(providerConfig, {
@@ -267,10 +274,23 @@ export async function handleRerank({
 
     if (!res.ok) {
       const errData = await res.json().catch(() => ({}));
-      return errorResponse(
-        res.status,
-        errData.message || errData.error?.message || `Provider returned HTTP ${res.status}`
-      );
+      const errorMessage =
+        errData.message || errData.error?.message || `Provider returned HTTP ${res.status}`;
+      saveCallLog({
+        method: "POST",
+        path: "/v1/rerank",
+        status: res.status,
+        model: `${effectiveProviderId}/${modelId}`,
+        provider: effectiveProviderId,
+        connectionId: connectionId || undefined,
+        duration: Date.now() - startTime,
+        requestBody,
+        responseBody: errData,
+        error: errorMessage,
+        apiKeyId: apiKeyId || undefined,
+        apiKeyName: apiKeyName || undefined,
+      }).catch(() => {});
+      return errorResponse(res.status, errorMessage);
     }
 
     const data = await res.json();
@@ -281,22 +301,26 @@ export async function handleRerank({
     });
 
     const searchUnits = Number(result?.meta?.billed_units?.search_units) || 0;
-    const costUsd = await calculateModalCost("rerank", providerId, modelId, { searchUnits });
+    const costUsd = await calculateModalCost("rerank", effectiveProviderId, modelId, { searchUnits });
 
     saveCallLog({
       method: "POST",
       path: "/v1/rerank",
       status: 200,
-      model: `${providerId}/${modelId}`,
-      provider: providerId,
+      model: `${effectiveProviderId}/${modelId}`,
+      provider: effectiveProviderId,
+      connectionId: connectionId || undefined,
       duration: Date.now() - startTime,
       tokens: { prompt_tokens: 0, completion_tokens: 0 },
-      responseBody: { results_count: Array.isArray(result?.results) ? result.results.length : 0 },
+      requestBody,
+      responseBody: result,
+      apiKeyId: apiKeyId || undefined,
+      apiKeyName: apiKeyName || undefined,
     }).catch(() => {});
 
     const headers = new Headers({ ...CORS_HEADERS, "Content-Type": "application/json" });
     attachOmniRouteMetaHeaders(headers, {
-      provider: providerId,
+      provider: effectiveProviderId,
       model: modelId,
       costUsd,
       latencyMs: Date.now() - startTime,

@@ -51,9 +51,16 @@ function extractSummaryLine(text: string): string | null {
     if (/={3,}\s+\d+\s+passed/.test(line)) return line.trim();
   }
 
-  // jest / vitest: "Tests: N passed, N total" or "Test Suites: ... Tests: ..."
+  // jest: "Tests: N passed, N total" or "Test Suites: ... Tests: ..."
   for (const line of lines) {
     if (/Tests:\s+\d+\s+passed/.test(line)) return line.trim();
+  }
+
+  // vitest: "Tests  N passed (N)" or "Test Files  N passed (N)"
+  const vitestTests = lines.find((l) => /^\s*Tests\s+\d+\s+passed/i.test(l));
+  const vitestFiles = lines.find((l) => /^\s*Test Files\s+\d+\s+passed/i.test(l));
+  if (vitestTests) {
+    return `✓ Vitest: ${vitestFiles ? vitestFiles.trim() + ", " : ""}${vitestTests.trim()}`;
   }
 
   // vitest / jest run summary line: "✓ N tests passed"
@@ -61,9 +68,34 @@ function extractSummaryLine(text: string): string | null {
     if (/\d+\s+tests?\s+passed/i.test(line)) return line.trim();
   }
 
-  // eslint / build-eslint: empty output = clean; if we reach here with no failures, synthesize
+  // Node.js native test runner: "# pass N" or "ℹ pass N"
+  const nodePass = lines.find((l) => /^[#ℹ]\s*pass\s+\d+/i.test(l.trim()));
+  if (nodePass) {
+    const match = nodePass.match(/\bpass\s+(\d+)/i);
+    return `✓ Node Test: ${match ? match[1] : ""} passed`.trim();
+  }
+
+  // mocha: "N passing (Xs)"
+  for (const line of lines) {
+    if (/^\s*\d+\s+passing\b/i.test(line)) return `✓ ${line.trim()}`;
+  }
+
+  // cargo test: "test result: ok. N passed; 0 failed; ..."
+  for (const line of lines) {
+    if (/test result:\s+ok\.\s+\d+\s+passed/i.test(line)) return `✓ ${line.trim()}`;
+  }
+
+  // go test: "PASS" and lines like "ok  <package>  0.123s"
+  if (text.includes("PASS") || lines.some((l) => /^ok\s+\S+\s+[\d.]+s/i.test(l.trim()))) {
+    const okLines = lines.filter((l) => /^ok\s+\S+\s+[\d.]+s/i.test(l.trim()));
+    if (okLines.length > 0) {
+      return `✓ Go Test: ok (${okLines.length} package${okLines.length > 1 ? "s" : ""})`;
+    }
+  }
+
+  // eslint / build-eslint / build-typescript: empty output = clean; if we reach here with no failures, synthesize
   if (text.trim() === "" || text.trim().startsWith("\n")) {
-    return "ESLint: 0 problems found";
+    return "ESLint / TypeScript: 0 problems found";
   }
 
   return null;

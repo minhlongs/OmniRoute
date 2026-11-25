@@ -7,9 +7,9 @@ const { getExecutor, hasSpecializedExecutor } = await import("../../open-sse/exe
 
 // ─── Registration ───────────────────────────────────────────────────────────
 
-test("GeminiWebExecutor is registered in executor index", () => {
+test("GeminiWebExecutor is registered in executor index", async () => {
   assert.ok(hasSpecializedExecutor("gemini-web"));
-  const executor = getExecutor("gemini-web");
+  const executor = await getExecutor("gemini-web");
   assert.ok(executor instanceof GeminiWebExecutor);
 });
 
@@ -23,7 +23,7 @@ test("GeminiWebExecutor sets correct provider name", () => {
 test("Returns 401 when no cookies provided", async () => {
   const executor = new GeminiWebExecutor();
   const result = await executor.execute({
-    model: "gemini-3.1-pro",
+    model: "gemini-4-argon",
     body: { messages: [{ role: "user", content: "hi" }], stream: false },
     stream: false,
     credentials: {},
@@ -38,7 +38,7 @@ test("Returns 401 when no cookies provided", async () => {
 test("Returns 400 when no user message", async () => {
   const executor = new GeminiWebExecutor();
   const result = await executor.execute({
-    model: "gemini-3.1-pro",
+    model: "gemini-4-argon",
     body: { messages: [{ role: "system", content: "You are helpful" }], stream: false },
     stream: false,
     credentials: { apiKey: "test-cookie" },
@@ -65,7 +65,7 @@ test("Reads bulk-imported cookie credentials from providerSpecificData.cookie", 
   try {
     const executor = new GeminiWebExecutor();
     const result = await executor.execute({
-      model: "gemini-3.1-pro",
+      model: "gemini-4-argon",
       body: { messages: [{ role: "user", content: "hello" }], stream: false },
       stream: false,
       credentials: {
@@ -88,7 +88,7 @@ test("Reads bulk-imported cookie credentials from providerSpecificData.cookie", 
 test("Ignores array-valued providerSpecificData when resolving cookies", async () => {
   const executor = new GeminiWebExecutor();
   const result = await executor.execute({
-    model: "gemini-3.1-pro",
+    model: "gemini-4-argon",
     body: { messages: [{ role: "user", content: "hello" }], stream: false },
     stream: false,
     credentials: {
@@ -131,7 +131,7 @@ test("Normalizes a bare __Secure-1PSID value before adding browser cookies", asy
   try {
     const executor = new GeminiWebExecutor();
     const result = await executor.execute({
-      model: "gemini-3.1-pro",
+      model: "gemini-4-argon",
       body: { messages: [{ role: "user", content: "hello" }], stream: false },
       stream: false,
       credentials: { apiKey: "raw-psid-value" },
@@ -167,14 +167,71 @@ test("Provider: gemini-web in providerRegistry", async () => {
 test("Provider: gemini-web has correct models", async () => {
   const { REGISTRY } = await import("../../open-sse/config/providerRegistry.ts");
   const models = REGISTRY["gemini-web"].models;
-  assert.deepEqual(
-    models.map((m: any) => [m.id, m.name]),
-    [
-      ["gemini-3.1-pro", "Gemini 3.1 Pro"],
-      ["gemini-3.5-flash", "Gemini 3.5 Flash"],
-      ["gemini-3.1-flash-lite", "Gemini 3.1 Flash-Lite"],
-    ]
+  // Gemini Web retired "4 Argon"; the Ultra top mode is now Gemini 4 Carbon (only model advertised).
+  assert.ok(models.some((m: { id: string }) => m.id === "gemini-4-carbon"));
+  assert.equal(
+    models.some((m: { id: string }) => m.id === "gemini-4-argon"),
+    false
   );
+  assert.equal(
+    models.some((m: { id: string }) => m.id === "gemini-3.1-pro"),
+    false
+  );
+  assert.equal(
+    models.some((m: { id: string }) => m.id === "gemini-3.5-flash"),
+    false
+  );
+  assert.equal(
+    models.some((m: { id: string }) => m.id === "gemini-3.1-flash-lite"),
+    false
+  );
+  // Effort tiers are a router concept, not gemini-web models: the provider has no
+  // thinking control, so `-high/-medium/-low` must not be advertised. The
+  // executor normalizes a stale tier id onto the base model instead.
+  for (const tier of [
+    "gemini-4-carbon-high",
+    "gemini-4-carbon-medium",
+    "gemini-4-carbon-low",
+    "gemini-4-argon-high",
+  ]) {
+    assert.equal(
+      models.some((m: { id: string }) => m.id === tier),
+      false,
+      `${tier} must not be advertised — gemini-web cannot honor a thinking tier`
+    );
+  }
+});
+
+test("GeminiWebExecutor rejects non-Carbon, non-3.8 models with HTTP 400", async () => {
+  const executor = new GeminiWebExecutor();
+  for (const invalidModel of ["gemini-3.1-pro", "gemini-3.5-flash", "gemini-2.5-pro", "gpt-4o"]) {
+    const result = await executor.execute({
+      model: invalidModel,
+      body: { messages: [{ role: "user", content: "hi" }], stream: false },
+      stream: false,
+      credentials: { apiKey: "__Secure-1PSID=test" },
+      signal: AbortSignal.timeout(5000),
+      log: null,
+    });
+    assert.equal(result.response.status, 400);
+    const json = (await result.response.json()) as any;
+    assert.equal(json.error.code, "unsupported_model_for_provider");
+    assert.match(json.error.message, /Only Gemini 4 Carbon and 3\.8 Flash models are supported/);
+  }
+});
+
+test("GeminiWebExecutor defaults to gemini-4-carbon when model is omitted", async () => {
+  const executor = new GeminiWebExecutor();
+  const result = await executor.execute({
+    model: undefined,
+    body: { messages: [{ role: "user", content: "hi" }], stream: false },
+    stream: false,
+    credentials: {},
+    signal: AbortSignal.timeout(5000),
+    log: null,
+  });
+  // Missing credentials -> 401 proves model validation passed and defaulted to Carbon
+  assert.equal(result.response.status, 401);
 });
 
 // ─── Regression: #2832 / #3516 — Playwright missing in Docker (runner-base) ──
@@ -208,7 +265,7 @@ test("#2832/#3516: missing Playwright browser returns an actionable 503 with coo
   try {
     const executor = new GeminiWebExecutor();
     const result = await executor.execute({
-      model: "gemini-3.1-pro",
+      model: "gemini-4-argon",
       body: { messages: [{ role: "user", content: "hello" }], stream: false },
       stream: false,
       credentials: { apiKey: "fake-cookie=abc" },
@@ -237,6 +294,47 @@ test("#2832/#3516: missing Playwright browser returns an actionable 503 with coo
   }
 });
 
+test("GeminiWebExecutor: Strict 4 Carbon requirement failure returns 503 with connection_cooldown hint", async () => {
+  const playwright = await import("playwright");
+  const originalLaunch = playwright.chromium.launch;
+
+  playwright.chromium.launch = (async () => ({
+    newContext: async () => ({
+      addCookies: async () => {},
+      newPage: async () => {
+        throw new Error(
+          "[gemini-web] Strict 4 Carbon requirement failed: 4 Carbon menu option is disabled for this account/session"
+        );
+      },
+    }),
+    close: async () => {},
+  })) as any;
+
+  try {
+    const executor = new GeminiWebExecutor();
+    const result = await executor.execute({
+      model: "gemini-4-carbon",
+      body: { messages: [{ role: "user", content: "hello" }], stream: false },
+      stream: false,
+      credentials: { apiKey: "__Secure-1PSID=test-cookie" },
+      signal: AbortSignal.timeout(5000),
+      log: null,
+      transport: "browser",
+    });
+
+    assert.equal(result.response.status, 503, "strict requirement failure must return 503");
+    assert.equal(
+      result.response.headers.get("X-Omni-Fallback-Hint"),
+      "connection_cooldown",
+      "must set X-Omni-Fallback-Hint to connection_cooldown"
+    );
+    const json = (await result.response.json()) as any;
+    assert.ok(json.error.includes("Strict 4 Carbon requirement failed"));
+  } finally {
+    playwright.chromium.launch = originalLaunch;
+  }
+});
+
 test("#2832: GeminiWebExecutor catch block sanitizes Playwright launch errors (integration path)", async () => {
   // This test verifies the actual catch block in GeminiWebExecutor.execute()
   // handles the Playwright "Executable doesn't exist" error shape correctly.
@@ -248,7 +346,7 @@ test("#2832: GeminiWebExecutor catch block sanitizes Playwright launch errors (i
   controller.abort(new Error("Request aborted"));
 
   const result = await executor.execute({
-    model: "gemini-3.1-pro",
+    model: "gemini-4-argon",
     body: { messages: [{ role: "user", content: "hello" }], stream: false },
     stream: false,
     credentials: { apiKey: "fake-cookie=abc" },

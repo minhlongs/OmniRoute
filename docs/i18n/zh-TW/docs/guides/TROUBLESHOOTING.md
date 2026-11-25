@@ -8,7 +8,7 @@ lastUpdated: 2026-07-15
 
 > **給使用者**：想要快速解決問題？請參考下方的[快速參考](#快速參考)。
 
-🌐 **語言：** 🇺🇸 [English](../../../../guides/TROUBLESHOOTING.md) | 🇧🇷 [Português (Brasil)](../../pt-BR/docs/guides/TROUBLESHOOTING.md) | 🇪🇸 [Español](../../es/docs/guides/TROUBLESHOOTING.md) | 🇫🇷 [Français](../../fr/docs/guides/TROUBLESHOOTING.md) | 🇮🇹 [Italiano](../../it/docs/guides/TROUBLESHOOTING.md) | 🇷🇺 [Русский](../../ru/docs/guides/TROUBLESHOOTING.md) | 🇨🇳 [中文 (简体)](../../zh-CN/docs/guides/TROUBLESHOOTING.md) | 🇩🇪 [Deutsch](../../de/docs/guides/TROUBLESHOOTING.md) | 🇮🇳 [हिन्दी](../../in/docs/guides/TROUBLESHOOTING.md) | 🇹🇭 [ไทย](../../th/docs/guides/TROUBLESHOOTING.md) | 🇺🇦 [Українська](../../uk-UA/docs/guides/TROUBLESHOOTING.md) | 🇸🇦 [العربية](../../ar/docs/guides/TROUBLESHOOTING.md) | 🇯🇵 [日本語](../../ja/docs/guides/TROUBLESHOOTING.md) | 🇻🇳 [Tiếng Việt](../../vi/docs/guides/TROUBLESHOOTING.md) | 🇧🇬 [Български](../../bg/docs/guides/TROUBLESHOOTING.md) | 🇩🇰 [Dansk](../../da/docs/guides/TROUBLESHOOTING.md) | 🇫🇮 [Suomi](../../fi/docs/guides/TROUBLESHOOTING.md) | 🇮🇱 [עברית](../../he/docs/guides/TROUBLESHOOTING.md) | 🇭🇺 [Magyar](../../hu/docs/guides/TROUBLESHOOTING.md) | 🇮🇩 [Bahasa Indonesia](../../id/docs/guides/TROUBLESHOOTING.md) | 🇰🇷 [한국어](../../ko/docs/guides/TROUBLESHOOTING.md) | 🇲🇾 [Bahasa Melayu](../../ms/docs/guides/TROUBLESHOOTING.md) | 🇳🇱 [Nederlands](../../nl/docs/guides/TROUBLESHOOTING.md) | 🇳🇴 [Norsk](../../no/docs/guides/TROUBLESHOOTING.md) | 🇵🇹 [Português (Portugal)](../../pt/docs/guides/TROUBLESHOOTING.md) | 🇷🇴 [Română](../../ro/docs/guides/TROUBLESHOOTING.md) | 🇵🇱 [Polski](../../pl/docs/guides/TROUBLESHOOTING.md) | 🇸🇰 [Slovenčina](../../sk/docs/guides/TROUBLESHOOTING.md) | 🇸🇪 [Svenska](../../sv/docs/guides/TROUBLESHOOTING.md) | 🇵🇭 [Filipino](../../phi/docs/guides/TROUBLESHOOTING.md) | 🇨🇿 [Čeština](../../cs/docs/guides/TROUBLESHOOTING.md)
+🌐 **Languages:** 🇺🇸 [English](../../../../guides/TROUBLESHOOTING.md) · 🇸🇦 [ar](../../../ar/docs/guides/TROUBLESHOOTING.md) · 🇦🇿 [az](../../../az/docs/guides/TROUBLESHOOTING.md) · 🇧🇬 [bg](../../../bg/docs/guides/TROUBLESHOOTING.md) · 🇧🇩 [bn](../../../bn/docs/guides/TROUBLESHOOTING.md) · 🇨🇿 [cs](../../../cs/docs/guides/TROUBLESHOOTING.md) · 🇩🇰 [da](../../../da/docs/guides/TROUBLESHOOTING.md) · 🇩🇪 [de](../../../de/docs/guides/TROUBLESHOOTING.md) · 🇪🇸 [es](../../../es/docs/guides/TROUBLESHOOTING.md) · 🇮🇷 [fa](../../../fa/docs/guides/TROUBLESHOOTING.md) · 🇫🇮 [fi](../../../fi/docs/guides/TROUBLESHOOTING.md) · 🇫🇷 [fr](../../../fr/docs/guides/TROUBLESHOOTING.md) · 🇮🇳 [gu](../../../gu/docs/guides/TROUBLESHOOTING.md) · 🇮🇱 [he](../../../he/docs/guides/TROUBLESHOOTING.md) · 🇮🇳 [hi](../../../hi/docs/guides/TROUBLESHOOTING.md) · 🇭🇺 [hu](../../../hu/docs/guides/TROUBLESHOOTING.md) · 🇮🇩 [id](../../../id/docs/guides/TROUBLESHOOTING.md) · 🇮🇹 [it](../../../it/docs/guides/TROUBLESHOOTING.md) · 🇯🇵 [ja](../../../ja/docs/guides/TROUBLESHOOTING.md) · 🇰🇷 [ko](../../../ko/docs/guides/TROUBLESHOOTING.md) · 🇮🇳 [mr](../../../mr/docs/guides/TROUBLESHOOTING.md) · 🇲🇾 [ms](../../../ms/docs/guides/TROUBLESHOOTING.md) · 🇳🇱 [nl](../../../nl/docs/guides/TROUBLESHOOTING.md) · 🇳🇴 [no](../../../no/docs/guides/TROUBLESHOOTING.md) · 🇵🇭 [phi](../../../phi/docs/guides/TROUBLESHOOTING.md) · 🇵🇱 [pl](../../../pl/docs/guides/TROUBLESHOOTING.md) · 🇵🇹 [pt](../../../pt/docs/guides/TROUBLESHOOTING.md) · 🇧🇷 [pt-BR](../../../pt-BR/docs/guides/TROUBLESHOOTING.md) · 🇷🇴 [ro](../../../ro/docs/guides/TROUBLESHOOTING.md) · 🇷🇺 [ru](../../../ru/docs/guides/TROUBLESHOOTING.md) · 🇸🇰 [sk](../../../sk/docs/guides/TROUBLESHOOTING.md) · 🇸🇪 [sv](../../../sv/docs/guides/TROUBLESHOOTING.md) · 🇰🇪 [sw](../../../sw/docs/guides/TROUBLESHOOTING.md) · 🇮🇳 [ta](../../../ta/docs/guides/TROUBLESHOOTING.md) · 🇮🇳 [te](../../../te/docs/guides/TROUBLESHOOTING.md) · 🇹🇭 [th](../../../th/docs/guides/TROUBLESHOOTING.md) · 🇹🇷 [tr](../../../tr/docs/guides/TROUBLESHOOTING.md) · 🇺🇦 [uk-UA](../../../uk-UA/docs/guides/TROUBLESHOOTING.md) · 🇵🇰 [ur](../../../ur/docs/guides/TROUBLESHOOTING.md) · 🇻🇳 [vi](../../../vi/docs/guides/TROUBLESHOOTING.md) · 🇨🇳 [zh-CN](../../../zh-CN/docs/guides/TROUBLESHOOTING.md)
 
 OmniRoute 的常見問題與解決方案。
 
@@ -431,25 +431,6 @@ curl http://localhost:20128/api/monitoring/health
 ## v3.8.0 已知問題
 
 v3.8.0 版本特有的問題及其目前的解決方法。如果後續修補版本中提供了修復，本條目將會更新或移除。
-
-### Windsurf OAuth 流程失敗，顯示 401
-
-**症狀：**
-
-- 從儀表板完成 Windsurf OAuth 流程時出現「401 unauthorized」
-- 回呼後 Windsurf 提供者卡片仍停留在「需要重新連線」狀態
-
-**原因：**
-
-- `WINDSURF_FIREBASE_API_KEY` 環境變數遺失或為空
-- `WINDSURF_API_KEY` 設定錯誤或指向過期的 Token
-- 本地防火牆/Proxy 阻擋了 OAuth 回呼
-
-**修復方式：**
-
-1. 確認 `.env` 中已設定 `WINDSURF_FIREBASE_API_KEY` 和 `WINDSURF_API_KEY`
-2. 重新啟動 OmniRoute 以載入新的環境變數值
-3. 從**儀表板 → 提供者 → Windsurf → 重新連線**重新執行 OAuth 流程
 
 ### Devin CLI 認證失敗
 

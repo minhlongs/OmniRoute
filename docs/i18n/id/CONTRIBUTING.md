@@ -1,6 +1,6 @@
 # Berkontribusi ke OmniRoute (Bahasa Indonesia)
 
-🌐 **Languages:** 🇺🇸 [English](../../../CONTRIBUTING.md) · 🇸🇦 [ar](../ar/CONTRIBUTING.md) · 🇧🇬 [bg](../bg/CONTRIBUTING.md) · 🇧🇩 [bn](../bn/CONTRIBUTING.md) · 🇨🇿 [cs](../cs/CONTRIBUTING.md) · 🇩🇰 [da](../da/CONTRIBUTING.md) · 🇩🇪 [de](../de/CONTRIBUTING.md) · 🇪🇸 [es](../es/CONTRIBUTING.md) · 🇮🇷 [fa](../fa/CONTRIBUTING.md) · 🇫🇮 [fi](../fi/CONTRIBUTING.md) · 🇫🇷 [fr](../fr/CONTRIBUTING.md) · 🇮🇳 [gu](../gu/CONTRIBUTING.md) · 🇮🇱 [he](../he/CONTRIBUTING.md) · 🇮🇳 [hi](../hi/CONTRIBUTING.md) · 🇭🇺 [hu](../hu/CONTRIBUTING.md) · 🇮🇩 [id](../id/CONTRIBUTING.md) · 🇮🇹 [it](../it/CONTRIBUTING.md) · 🇯🇵 [ja](../ja/CONTRIBUTING.md) · 🇰🇷 [ko](../ko/CONTRIBUTING.md) · 🇮🇳 [mr](../mr/CONTRIBUTING.md) · 🇲🇾 [ms](../ms/CONTRIBUTING.md) · 🇳🇱 [nl](../nl/CONTRIBUTING.md) · 🇳🇴 [no](../no/CONTRIBUTING.md) · 🇵🇭 [phi](../phi/CONTRIBUTING.md) · 🇵🇱 [pl](../pl/CONTRIBUTING.md) · 🇵🇹 [pt](../pt/CONTRIBUTING.md) · 🇧🇷 [pt-BR](../pt-BR/CONTRIBUTING.md) · 🇷🇴 [ro](../ro/CONTRIBUTING.md) · 🇷🇺 [ru](../ru/CONTRIBUTING.md) · 🇸🇰 [sk](../sk/CONTRIBUTING.md) · 🇸🇪 [sv](../sv/CONTRIBUTING.md) · 🇰🇪 [sw](../sw/CONTRIBUTING.md) · 🇮🇳 [ta](../ta/CONTRIBUTING.md) · 🇮🇳 [te](../te/CONTRIBUTING.md) · 🇹🇭 [th](../th/CONTRIBUTING.md) · 🇹🇷 [tr](../tr/CONTRIBUTING.md) · 🇺🇦 [uk-UA](../uk-UA/CONTRIBUTING.md) · 🇵🇰 [ur](../ur/CONTRIBUTING.md) · 🇻🇳 [vi](../vi/CONTRIBUTING.md) · 🇨🇳 [zh-CN](../zh-CN/CONTRIBUTING.md)
+🌐 **Languages:** 🇺🇸 [English](../../../CONTRIBUTING.md) · 🇸🇦 [ar](../ar/CONTRIBUTING.md) · 🇦🇿 [az](../az/CONTRIBUTING.md) · 🇧🇬 [bg](../bg/CONTRIBUTING.md) · 🇧🇩 [bn](../bn/CONTRIBUTING.md) · 🇨🇿 [cs](../cs/CONTRIBUTING.md) · 🇩🇰 [da](../da/CONTRIBUTING.md) · 🇩🇪 [de](../de/CONTRIBUTING.md) · 🇪🇸 [es](../es/CONTRIBUTING.md) · 🇮🇷 [fa](../fa/CONTRIBUTING.md) · 🇫🇮 [fi](../fi/CONTRIBUTING.md) · 🇫🇷 [fr](../fr/CONTRIBUTING.md) · 🇮🇳 [gu](../gu/CONTRIBUTING.md) · 🇮🇱 [he](../he/CONTRIBUTING.md) · 🇮🇳 [hi](../hi/CONTRIBUTING.md) · 🇭🇺 [hu](../hu/CONTRIBUTING.md) · 🇮🇹 [it](../it/CONTRIBUTING.md) · 🇯🇵 [ja](../ja/CONTRIBUTING.md) · 🇰🇷 [ko](../ko/CONTRIBUTING.md) · 🇮🇳 [mr](../mr/CONTRIBUTING.md) · 🇲🇾 [ms](../ms/CONTRIBUTING.md) · 🇳🇱 [nl](../nl/CONTRIBUTING.md) · 🇳🇴 [no](../no/CONTRIBUTING.md) · 🇵🇭 [phi](../phi/CONTRIBUTING.md) · 🇵🇱 [pl](../pl/CONTRIBUTING.md) · 🇵🇹 [pt](../pt/CONTRIBUTING.md) · 🇧🇷 [pt-BR](../pt-BR/CONTRIBUTING.md) · 🇷🇴 [ro](../ro/CONTRIBUTING.md) · 🇷🇺 [ru](../ru/CONTRIBUTING.md) · 🇸🇰 [sk](../sk/CONTRIBUTING.md) · 🇸🇪 [sv](../sv/CONTRIBUTING.md) · 🇰🇪 [sw](../sw/CONTRIBUTING.md) · 🇮🇳 [ta](../ta/CONTRIBUTING.md) · 🇮🇳 [te](../te/CONTRIBUTING.md) · 🇹🇭 [th](../th/CONTRIBUTING.md) · 🇹🇷 [tr](../tr/CONTRIBUTING.md) · 🇺🇦 [uk-UA](../uk-UA/CONTRIBUTING.md) · 🇵🇰 [ur](../ur/CONTRIBUTING.md) · 🇻🇳 [vi](../vi/CONTRIBUTING.md) · 🇨🇳 [zh-CN](../zh-CN/CONTRIBUTING.md) · 🇹🇼 [zh-TW](../zh-TW/CONTRIBUTING.md)
 
 ---
 
@@ -37,22 +37,22 @@ echo "API_KEY_SECRET=$(openssl rand -hex 32)" >> .env
 
 Variabel-variabel utama untuk pengembangan:
 
-| Variable               | Development Default      | Deskripsi                         |
-| ---------------------- | ------------------------ | --------------------------------- |
-| `PORT`                 | `20128`                  | Port server                       |
-| `NEXT_PUBLIC_BASE_URL` | `http://localhost:20128` | URL dasar untuk frontend          |
-| `JWT_SECRET`           | (generate above)         | Kunci penandatanganan JWT         |
-| `INITIAL_PASSWORD`     | `CHANGEME`               | Kata sandi login pertama          |
-| `APP_LOG_LEVEL`        | `info`                   | Tingkat verbositas log            |
+| Variable               | Development Default      | Deskripsi                 |
+| ---------------------- | ------------------------ | ------------------------- |
+| `PORT`                 | `20128`                  | Port server               |
+| `NEXT_PUBLIC_BASE_URL` | `http://localhost:20128` | URL dasar untuk frontend  |
+| `JWT_SECRET`           | (generate above)         | Kunci penandatanganan JWT |
+| `INITIAL_PASSWORD`     | `CHANGEME`               | Kata sandi login pertama  |
+| `APP_LOG_LEVEL`        | `info`                   | Tingkat verbositas log    |
 
 ### Pengaturan Dashboard
 
 Dashboard menyediakan tombol UI untuk fitur-fitur yang juga dapat dikonfigurasi melalui variabel lingkungan:
 
-| Lokasi Pengaturan   | Tombol             | Deskripsi                                |
-| ------------------- | ------------------ | ---------------------------------------- |
-| Settings → Advanced | Debug Mode         | Aktifkan log permintaan debug (UI)       |
-| Settings → General  | Sidebar Visibility | Tampilkan/sembunyikan bagian sidebar     |
+| Lokasi Pengaturan   | Tombol             | Deskripsi                            |
+| ------------------- | ------------------ | ------------------------------------ |
+| Settings → Advanced | Debug Mode         | Aktifkan log permintaan debug (UI)   |
+| Settings → General  | Sidebar Visibility | Tampilkan/sembunyikan bagian sidebar |
 
 Pengaturan ini disimpan di database dan tetap ada setelah restart, menggantikan nilai default variabel lingkungan jika sudah diatur.
 
@@ -91,14 +91,14 @@ git push -u origin feat/your-feature-name
 
 ### Penamaan Cabang
 
-| Awalan      | Tujuan                         |
-| ----------- | ------------------------------ |
-| `feat/`     | Fitur baru                     |
-| `fix/`      | Perbaikan bug                  |
-| `refactor/` | Restrukturisasi kode           |
-| `docs/`     | Perubahan dokumentasi          |
-| `test/`     | Penambahan/perbaikan tes       |
-| `chore/`    | Perkakas, CI, dependensi       |
+| Awalan      | Tujuan                   |
+| ----------- | ------------------------ |
+| `feat/`     | Fitur baru               |
+| `fix/`      | Perbaikan bug            |
+| `refactor/` | Restrukturisasi kode     |
+| `docs/`     | Perubahan dokumentasi    |
+| `test/`     | Penambahan/perbaikan tes |
+| `chore/`    | Perkakas, CI, dependensi |
 
 ### Pesan Commit
 
@@ -170,7 +170,7 @@ Status tes saat ini: **122 file tes unit** yang mencakup:
 - Penerjemah penyedia dan konversi format
 - Pembatasan laju, pemutus sirkuit, dan ketahanan
 - Cache semantik, idempoten, pelacakan progres
-- Operasi database dan skema (21 modul DB)
+- Operasi database dan skema (110 modul tingkat atas, 130 migrasi)
 - Alur OAuth dan autentikasi
 - Validasi endpoint API (Zod v4)
 - Alat server MCP dan penegakan cakupan
@@ -202,7 +202,7 @@ src/                        # TypeScript (.ts / .tsx)
 │   ├── a2a/                # Server protokol Agent-to-Agent v0.3
 │   ├── acp/                # Registri Agent Communication Protocol
 │   ├── compliance/         # Mesin kebijakan kepatuhan
-│   ├── db/                 # Lapisan database SQLite (21 modul + 16 migrasi)
+│   ├── db/                 # Lapisan database SQLite (110 modul tingkat atas + 130 migrasi)
 │   ├── memory/             # Memori percakapan persisten
 │   ├── oauth/              # Penyedia, layanan, dan utilitas OAuth
 │   ├── skills/             # Kerangka skill yang dapat diperluas
@@ -212,16 +212,16 @@ src/                        # TypeScript (.ts / .tsx)
 ├── mitm/                   # Proxy MITM (sertifikat, DNS, perutean target)
 ├── shared/
 │   ├── components/         # Komponen React (.tsx)
-│   ├── constants/          # Definisi penyedia (60+), cakupan MCP, strategi perutean
+│   ├── constants/          # Definisi penyedia (329), cakupan MCP, 19 strategi perutean
 │   ├── utils/              # Pemutus sirkuit, sanitizer, pembantu autentikasi
 │   └── validation/         # Skema Zod v4
 └── sse/                    # Pipeline proxy SSE
 
 open-sse/                   # Workspace @omniroute/open-sse
-├── executors/              # 14 eksekutor permintaan khusus penyedia
+├── executors/              # 89 modul implementasi executor
 ├── handlers/               # 11 penangan permintaan (chat, responses, embeddings, images, dll.)
-├── mcp-server/             # Server MCP (25 alat, 3 transport, 10 cakupan)
-├── services/               # 36+ layanan (combo, autoCombo, rateLimitManager, dll.)
+├── mcp-server/             # Server MCP (107 alat, 3 transport, 32 cakupan)
+├── services/               # 178 layanan tingkat atas (combo, autoCombo, rateLimitManager, dll.)
 ├── translator/             # Penerjemah format (OpenAI ↔ Claude ↔ Gemini ↔ Responses ↔ Ollama)
 ├── transformer/            # Transformer Responses API
 └── utils/                  # 22 modul utilitas (stream, TLS, proxy, logging)
@@ -241,7 +241,7 @@ docs/                       # Dokumentasi
 ├── API_REFERENCE.md        # Semua endpoint
 ├── USER_GUIDE.md           # Pengaturan penyedia, integrasi CLI
 ├── TROUBLESHOOTING.md      # Masalah umum
-├── MCP-SERVER.md           # Server MCP (25 alat)
+├── MCP-SERVER.md           # Server MCP (107 alat)
 ├── A2A-SERVER.md           # Protokol agen A2A
 ├── AUTO-COMBO.md           # Mesin auto-combo
 ├── CLI-TOOLS.md            # Integrasi alat CLI

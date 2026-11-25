@@ -8,9 +8,14 @@
 import { LMARENA_DIRECT_IMAGE_MODELS } from "./providers/registry/lmarena/directModels.ts";
 import { SEGMIND_IMAGE_PROVIDER } from "./providers/registry/segmind/imageModels.ts";
 import { KIE_IMAGE_MODELS } from "./providers/registry/kie/imageModels.ts";
-import { FREEPIK_IMAGE_PROVIDER } from "./providers/registry/freepik/index.ts";
+import { MAGNIFIC_IMAGE_PROVIDER } from "./providers/registry/magnific/index.ts";
 import { STABILITY_AI_IMAGE_MODELS } from "./providers/registry/stability-ai/imageModels.ts";
 import { GEMINI_IMAGEN_PROVIDER } from "./providers/registry/gemini/imageModels.ts";
+import { CHEAPERINFERENCE_IMAGE_PROVIDER } from "./providers/registry/cheaperinference/imageModels.ts";
+import {
+  ADOBE_FIREFLY_IMAGE_ROUTING_ALIASES,
+  toRegistryImageModels,
+} from "../services/adobeFireflyModels.ts";
 
 interface ImageModelEntry {
   id: string;
@@ -21,6 +26,8 @@ interface ImageModelEntry {
   imageRequired?: boolean;
   description?: string;
   isMarket?: boolean;
+  supportedSizes?: string[];
+  mediaCapabilities?: Record<string, unknown>;
 }
 
 interface ImageProviderConfig {
@@ -34,6 +41,7 @@ interface ImageProviderConfig {
   authHeader: string;
   format: string;
   models: ImageModelEntry[];
+  routingAliases?: readonly string[];
   supportedSizes: string[];
 }
 
@@ -45,6 +53,7 @@ interface ImageModelAliasEntry {
   inputModalities?: string[];
   imageRequired?: boolean;
   description?: string;
+  mediaCapabilities?: Record<string, unknown>;
 }
 
 interface ImageCatalogModelEntry {
@@ -54,14 +63,51 @@ interface ImageCatalogModelEntry {
   supportedSizes: string[];
   inputModalities: string[];
   description?: string;
+  mediaCapabilities?: Record<string, unknown>;
 }
 
 const IMAGE_MODEL_ALIASES: Record<string, ImageModelAliasEntry> = {
+  "rtk-omni-image": {
+    provider: "antigravity",
+    model: "gemini-3.1-flash-image",
+    name: "RTK Omni Image (Gemini 3.1 Flash Image)",
+    listInCatalog: true,
+  },
+  "gemini-3.1-flash-image": {
+    provider: "antigravity",
+    model: "gemini-3.1-flash-image",
+    name: "Gemini 3.1 Flash Image",
+    listInCatalog: true,
+  },
   "gemini-3.1-flash-image-preview": {
     provider: "antigravity",
     model: "gemini-3.1-flash-image",
     name: "Gemini 3.1 Flash Image",
     listInCatalog: false,
+  },
+  "gemini-3-pro-image": {
+    provider: "antigravity",
+    model: "gemini-3-pro-image",
+    name: "Gemini 3 Pro Image",
+    listInCatalog: true,
+  },
+  "gemini-3-pro-image-preview": {
+    provider: "antigravity",
+    model: "gemini-3-pro-image",
+    name: "Gemini 3 Pro Image",
+    listInCatalog: false,
+  },
+  "gemini-2.5-flash-image": {
+    provider: "antigravity",
+    model: "gemini-3.1-flash-image",
+    name: "Gemini 2.5 Flash Image",
+    listInCatalog: true,
+  },
+  "imagen-3": {
+    provider: "antigravity",
+    model: "imagen-3.0-generate-002",
+    name: "Imagen 3.0",
+    listInCatalog: true,
   },
   "flux-kontext": {
     provider: "black-forest-labs",
@@ -311,12 +357,18 @@ export const IMAGE_PROVIDERS: Record<string, ImageProviderConfig> = {
 
   antigravity: {
     id: "antigravity",
-    baseUrl: "https://daily-cloudcode-pa.googleapis.com/v1internal:generateContent",
+    baseUrl: "https://cloudcode-pa.googleapis.com/v1internal:generateContent",
     authType: "oauth",
     authHeader: "bearer",
     format: "gemini-image", // Special format: uses Gemini generateContent API
-    models: [{ id: "gemini-3.1-flash-image", name: "Gemini 3.1 Flash Image" }],
-    supportedSizes: ["1024x1024"],
+    models: [
+      { id: "gemini-3.1-flash-image", name: "Gemini 3.1 Flash Image" },
+      { id: "gemini-3-pro-image", name: "Gemini 3 Pro Image" },
+      { id: "gemini-3-pro-image-preview", name: "Gemini 3 Pro Image (Preview)" },
+      { id: "gemini-2.5-flash-image", name: "Gemini 2.5 Flash Image" },
+      { id: "imagen-3.0-generate-002", name: "Imagen 3.0 Generate" },
+    ],
+    supportedSizes: ["1024x1024", "1280x720", "720x1280", "1536x1024", "1024x1536"],
   },
 
   // Google AI Studio Imagen family — dedicated :predict endpoint, not generateContent.
@@ -421,7 +473,10 @@ export const IMAGE_PROVIDERS: Record<string, ImageProviderConfig> = {
     ],
     supportedSizes: ["1024x1024", "1024x1792", "1792x1024"],
   },
-  freepik: FREEPIK_IMAGE_PROVIDER,
+  magnific: MAGNIFIC_IMAGE_PROVIDER,
+  // Legacy slug: `freepik/<model>` still resolves (the provider registry keeps the
+  // same alias), so old URLs and saved combos keep working after the Magnific rename.
+  freepik: MAGNIFIC_IMAGE_PROVIDER,
   sdwebui: {
     id: "sdwebui",
     baseUrl: "http://localhost:7860/sdapi/v1/txt2img",
@@ -677,42 +732,17 @@ export const IMAGE_PROVIDERS: Record<string, ImageProviderConfig> = {
     authType: "apikey",
     authHeader: "bearer",
     format: "adobe-firefly-image",
-    models: [
-      {
-        id: "nano-banana-pro",
-        name: "Firefly Gemini 3.0 (Nano Banana Pro)",
-        inputModalities: ["text", "image"],
-      },
-      {
-        id: "nano-banana",
-        name: "Firefly Gemini 2.5 (Nano Banana)",
-        inputModalities: ["text", "image"],
-      },
-      {
-        id: "nano-banana-2",
-        name: "Firefly Gemini 3.1 (Nano Banana 2)",
-        inputModalities: ["text", "image"],
-      },
-      { id: "gpt-image-2", name: "Firefly GPT Image 2", inputModalities: ["text", "image"] },
-      { id: "gpt-image", name: "Firefly GPT Image 2", inputModalities: ["text", "image"] },
-      { id: "gpt-image-1.5", name: "Firefly GPT Image 1.5", inputModalities: ["text", "image"] },
-      { id: "flux-2", name: "Firefly Flux 2", inputModalities: ["text", "image"] },
-      { id: "flux-pro", name: "Firefly Flux 1.1 Pro", inputModalities: ["text", "image"] },
-      { id: "flux-ultra", name: "Firefly Flux 1.1 Ultra", inputModalities: ["text", "image"] },
-      { id: "seedream-4", name: "Firefly Seedream 4.0", inputModalities: ["text", "image"] },
-      {
-        id: "seedream-5-lite",
-        name: "Firefly Seedream 5.0 Lite",
-        inputModalities: ["text", "image"],
-      },
-      {
-        id: "runway-gen4-image",
-        name: "Firefly Runway Gen-4 Image",
-        inputModalities: ["text", "image"],
-      },
-    ],
-    supportedSizes: ["1:1", "16:9", "9:16", "4:3", "3:4", "1024x1024", "1792x1024", "1024x1792"],
+    models: toRegistryImageModels(),
+    routingAliases: ADOBE_FIREFLY_IMAGE_ROUTING_ALIASES,
+    supportedSizes: [],
   },
+
+  // Cheaper Inference (OSS-sponsor gateway). Declared AFTER adobe-firefly on
+  // purpose: it shares the nano-banana-pro / nano-banana-2 ids, and parseImageModel
+  // resolves a bare id by first-match over this object's iteration order, so
+  // Firefly keeps the bare ids and these are prefix-only. See the module for the
+  // full collision note.
+  cheaperinference: CHEAPERINFERENCE_IMAGE_PROVIDER,
 
   // Keep Bailian Coding Plan after existing duplicate model owners so adding
   // explicit `bailian-coding-plan/` and `bcp/` routes does not change
@@ -865,7 +895,7 @@ export function parseImageModel(modelStr) {
 
   // No provider prefix — try to find the model in every provider
   for (const [providerId, config] of Object.entries(IMAGE_PROVIDERS)) {
-    if (config.models.some((m) => m.id === modelStr)) {
+    if (config.routingAliases?.includes(modelStr) || config.models.some((m) => m.id === modelStr)) {
       return { provider: providerId, model: modelStr };
     }
   }
@@ -884,9 +914,10 @@ function imageProviderCatalogEntries(
     id: `${providerId}/${model.id}`,
     name: model.name,
     provider: providerId,
-    supportedSizes: config.supportedSizes,
+    supportedSizes: model.supportedSizes || config.supportedSizes,
     inputModalities: model.inputModalities || ["text"],
     description: model.description || undefined,
+    mediaCapabilities: model.mediaCapabilities,
   }));
 }
 
@@ -935,7 +966,6 @@ export function getImageModelAliases() {
 export function isRegisteredImageModel(providerId, modelId) {
   return Boolean(findImageModelConfig(providerId, modelId));
 }
-
 export function getImageModelEntry(modelStr) {
   if (!modelStr) return null;
 

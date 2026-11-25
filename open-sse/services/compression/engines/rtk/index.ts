@@ -27,7 +27,20 @@ type ToolMeta = { toolName: string; command: string | null };
 // only apply to bash/shell tool results. Non-shell tools (read, glob, grep, edit, write…)
 // skip filter matching to avoid content-based false positives (e.g. a .ts file matching
 // the build-typescript filter).
-const SHELL_TOOL_NAME_RE = /\b(bash|shell|terminal|run_command|execute_command|exec|command)\b/;
+const SHELL_TOOL_NAME_RE =
+  /(?:^|[_\-.])(bash|shell|terminal|run_?command|execute(?:_?command)?|exec|command|zsh|sh|powershell|pwsh)(?:$|[_\-.\d])/i;
+
+// Guard against operator pseudo-stage names (e.g. "dedup", "smart-truncate") accidentally
+// placed into enabledFilters, which would act as an unintended strict allowlist and disable
+// all genuine built-in filters.
+const PSEUDO_STAGE_NAMES = new Set([
+  "dedup",
+  "line-filter",
+  "code-strip",
+  "smart-truncate",
+  "grouping",
+  "renderers",
+]);
 
 /**
  * A content block (or text sub-block) carrying `cache_control` is an explicit upstream
@@ -85,7 +98,9 @@ function mergeRtkConfig(base?: Partial<RtkConfig>, override?: Record<string, unk
         ? merged.intensity
         : DEFAULT_RTK_CONFIG.intensity,
     enabledFilters: Array.isArray(merged.enabledFilters)
-      ? merged.enabledFilters.filter((id): id is string => typeof id === "string")
+      ? merged.enabledFilters
+          .filter((id): id is string => typeof id === "string")
+          .filter((id) => !PSEUDO_STAGE_NAMES.has(id.trim().toLowerCase()))
       : [],
     disabledFilters: Array.isArray(merged.disabledFilters)
       ? merged.disabledFilters.filter((id): id is string => typeof id === "string")
@@ -232,11 +247,17 @@ export function processRtkText(
   // generic-output filter keys on — then skip the truncating fallbacks. Genuine logs
   // detect as a known command type (or carry a command / error markers), so RTK's
   // value on those is preserved.
-  const hasGenericErrorMarkers = /Error:|Exception:|Traceback \(most recent call last\):/.test(
-    text
-  );
+  // #4559: A document/file read (e.g. view_file tool, or shell commands like cat/head/sed)
+  // must NOT be truncated. Distinguish real crash logs (which carry stack frames)
+  // from source code that merely mentions Error or Exception.
+  const hasRealStacktrace =
+    /Traceback \(most recent call last\):|^\s*at\s+(?:async\s+)?[\w$.<>]+\s+\(|^panic:\s+runtime error:|^fatal error:\s+/m.test(
+      text
+    );
   const isDocumentLikeRead =
-    detection.type === "unknown" && !detection.command && !hasGenericErrorMarkers;
+    detection.type === "code-read" ||
+    (options.skipFilters && !hasRealStacktrace) ||
+    (detection.type === "unknown" && !detection.command && !hasRealStacktrace);
   let matchedFilterPatterns: string[] = [];
   if (!options.skipFilters && !isDocumentLikeRead) {
     const filter = matchRtkFilter(text, detection.command, {
@@ -247,7 +268,10 @@ export function processRtkText(
       if (config.enabledFilters.length === 0 || config.enabledFilters.includes(filter.id)) {
         const filtered = applyLineFilter(result, {
           ...filter,
-          maxLines: effectiveMaxLines(filter.maxLines || config.maxLinesPerResult, config.intensity),
+          maxLines: effectiveMaxLines(
+            filter.maxLines || config.maxLinesPerResult,
+            config.intensity
+          ),
         });
         result = filtered.text;
         if (filtered.appliedRules.length > 0) {
@@ -315,7 +339,15 @@ export function processRtkText(
     }
   }
 
-  const defaultPriorityPatterns: RegExp[] = [/error|failed|exception|traceback|TS\d{4}|FAIL|✖/i];
+  const defaultPriorityPatterns: RegExp[] = [
+    /\b(?:error|failed|failure|fatal|panic|exception|traceback)\b/i,
+    /error\s*TS\d{4,5}:|TS\d{4,5}/i,
+    /error\[E\d{4}\]|warning\[E\d{4}\]/i,
+    /^\s*at\s+[\w$.<>]+\s+\(/i,
+    /^\s*File\s+"[^"]+",\s+line\s+\d+/i,
+    /\bFAIL\b|✖|\bAssertionError\b|\bSyntaxError\b|\bTypeError\b/i,
+    /\b\d+:\d+\s+error\b/i,
+  ];
   const filterPriorityPatterns: RegExp[] = matchedFilterPatterns.flatMap((pattern) => {
     try {
       return [new RegExp(pattern, "i")];
@@ -517,6 +549,24 @@ function processRtkContent(
  * failure lines survive at EVERY intensity. (Include/collapse filters like docker-logs
  * compress by content, not line budget, so they are intensity-independent by nature.)
  */
+/**
+ * Extract the command string from tool call arguments across OpenAI, Anthropic,
+ * Google/Antigravity and Cursor formats.
+ */
+function extractToolCommand(args: unknown): string | null {
+  if (!args || typeof args !== "object") return null;
+  const record = args as Record<string, unknown>;
+  const val =
+    record.command ??
+    record.cmd ??
+    record.CommandLine ??
+    record.command_line ??
+    record.cmdLine ??
+    record.script ??
+    record.input;
+  return typeof val === "string" && val.trim().length > 0 ? val.trim() : null;
+}
+
 export function effectiveMaxLines(base: number, intensity: string | undefined): number {
   const factor = intensity === "aggressive" ? 0.5 : intensity === "minimal" ? 1.5 : 1;
   return Math.max(1, Math.round(base * factor));
@@ -566,15 +616,12 @@ export function applyRtkCompression(
         if (typeof fn.arguments === "string") {
           try {
             const args = JSON.parse(fn.arguments);
-            command =
-              typeof args.command === "string"
-                ? args.command
-                : typeof args.cmd === "string"
-                  ? args.cmd
-                  : null;
+            command = extractToolCommand(args);
           } catch {
             // non-JSON arguments
           }
+        } else if (fn.arguments && typeof fn.arguments === "object") {
+          command = extractToolCommand(fn.arguments);
         }
         toolCallLookup.set(id, { toolName, command });
       }
@@ -586,16 +633,7 @@ export function applyRtkCompression(
         const id = typeof part.id === "string" ? part.id : null;
         if (!id) continue;
         const toolName = typeof part.name === "string" ? part.name : "";
-        const input = part.input as Record<string, unknown> | undefined;
-        let command: string | null = null;
-        if (input && typeof input === "object") {
-          command =
-            typeof input.command === "string"
-              ? input.command
-              : typeof input.cmd === "string"
-                ? input.cmd
-                : null;
-        }
+        const command = extractToolCommand(part.input);
         toolCallLookup.set(id, { toolName, command });
       }
     }

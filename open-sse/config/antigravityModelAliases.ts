@@ -1,4 +1,62 @@
 export const ANTIGRAVITY_PUBLIC_MODELS = Object.freeze([
+  // Gemini 4 Carbon tiers (CLI >= 1.5.5 on daily-cloudcode-pa)
+  {
+    id: "gemini-4-carbon-high",
+    name: "Gemini 4 Carbon (High)",
+    contextLength: 1048576,
+    maxOutputTokens: 262144,
+    supportsReasoning: true,
+    supportsVision: true,
+    toolCalling: true,
+  },
+  {
+    id: "gemini-4-carbon-medium",
+    name: "Gemini 4 Carbon (Medium)",
+    contextLength: 1048576,
+    maxOutputTokens: 262144,
+    supportsReasoning: true,
+    supportsVision: true,
+    toolCalling: true,
+  },
+  {
+    id: "gemini-4-carbon-low",
+    name: "Gemini 4 Carbon (Low)",
+    contextLength: 1048576,
+    maxOutputTokens: 262144,
+    supportsReasoning: true,
+    supportsVision: true,
+    toolCalling: true,
+  },
+
+  // Gemini 4 Argon tiers
+  {
+    id: "gemini-4-argon-high",
+    name: "Gemini 4 Argon (High)",
+    contextLength: 1048576,
+    maxOutputTokens: 65536,
+    supportsReasoning: true,
+    supportsVision: true,
+    toolCalling: true,
+  },
+  {
+    id: "gemini-4-argon-medium",
+    name: "Gemini 4 Argon (Medium)",
+    contextLength: 1048576,
+    maxOutputTokens: 65536,
+    supportsReasoning: true,
+    supportsVision: true,
+    toolCalling: true,
+  },
+  {
+    id: "gemini-4-argon-low",
+    name: "Gemini 4 Argon (Low)",
+    contextLength: 1048576,
+    maxOutputTokens: 65536,
+    supportsReasoning: true,
+    supportsVision: true,
+    toolCalling: true,
+  },
+
   // Gemini 3.6 Flash tiers returned by the live model selector for both the IDE 2.1.1
   // and CLI 1.1.x client identities. High is the current defaultAgentModelId.
   {
@@ -54,15 +112,6 @@ export const ANTIGRAVITY_PUBLIC_MODELS = Object.freeze([
   // Gemini 3.1 Pro budget tiers. Live streamGenerateContent validation uses
   // `gemini-pro-agent` for High; the separately advertised `gemini-3.1-pro-high`
   // discovery slot currently returns HTTP 400 and is intentionally not public.
-  {
-    id: "gemini-pro-agent",
-    name: "Gemini 3.1 Pro (High)",
-    contextLength: 1048576,
-    maxOutputTokens: 65535,
-    supportsReasoning: true,
-    supportsVision: true,
-    toolCalling: true,
-  },
   {
     id: "gemini-3.1-pro-low",
     name: "Gemini 3.1 Pro (Low)",
@@ -140,16 +189,215 @@ export const ANTIGRAVITY_PUBLIC_MODELS = Object.freeze([
     supportsReasoning: true,
     toolCalling: true,
   },
+  {
+    id: "claude-sonnet-5-5-high", name: "Claude Sonnet 5.5 (High)", contextLength: 1048576, maxOutputTokens: 65536, supportsReasoning: true, supportsVision: true, toolCalling: true },
+  { id: "claude-sonnet-5-5-medium", name: "Claude Sonnet 5.5 (Medium)", contextLength: 1048576, maxOutputTokens: 65536, supportsReasoning: true, supportsVision: true, toolCalling: true },
+  { id: "claude-sonnet-5-5-low", name: "Claude Sonnet 5.5 (Low)", contextLength: 1048576, maxOutputTokens: 65536, supportsReasoning: true, supportsVision: true, toolCalling: true },
+  { id: "claude-opus-5-5-high", name: "Claude Opus 5.5 (High)", contextLength: 1048576, maxOutputTokens: 65536, supportsReasoning: true, supportsVision: true, toolCalling: true },
+  { id: "claude-opus-5-5-medium", name: "Claude Opus 5.5 (Medium)", contextLength: 1048576, maxOutputTokens: 65536, supportsReasoning: true, supportsVision: true, toolCalling: true },
+  { id: "claude-opus-5-5-low", name: "Claude Opus 5.5 (Low)", contextLength: 1048576, maxOutputTokens: 65536, supportsReasoning: true, supportsVision: true, toolCalling: true },
+  { id: "gemini-3.8-flash-high", name: "Gemini 3.8 Flash (High)", contextLength: 1048576, maxOutputTokens: 65536, supportsReasoning: true, supportsVision: true, toolCalling: true },
+  { id: "gemini-3.8-flash-medium", name: "Gemini 3.8 Flash (Medium)", contextLength: 1048576, maxOutputTokens: 65536, supportsReasoning: true, supportsVision: true, toolCalling: true },
+  { id: "gemini-3.8-flash-low", name: "Gemini 3.8 Flash (Low)", contextLength: 1048576, maxOutputTokens: 65536, supportsReasoning: true, supportsVision: true, toolCalling: true },
+  {
+    id: "gemini-3.8-flash-tiered",
+    name: "Gemini 3.8 Flash (Tiered)",
+    contextLength: 1048576,
+    maxOutputTokens: 65536,
+    supportsReasoning: true,
+    supportsVision: true,
+    toolCalling: true,
+  },
+  {
+    id: "gemini-3.6-flash-tiered",
+    name: "Gemini 3.6 Flash (Tiered)",
+    contextLength: 1048576,
+    maxOutputTokens: 65536,
+    supportsReasoning: true,
+    supportsVision: true,
+    toolCalling: true,
+  },
+  {
+    id: "gemini-3.5-flash-lite",
+    name: "Gemini 3.5 Flash Lite",
+    contextLength: 1048576,
+    maxOutputTokens: 65536,
+    supportsReasoning: true,
+    supportsVision: true,
+    toolCalling: true,
+  },
+  {
+    id: "gemini-3-flash",
+    name: "Gemini 3 Flash",
+    contextLength: 1048576,
+    maxOutputTokens: 65536,
+    supportsReasoning: true,
+    supportsVision: true,
+    toolCalling: true,
+  },
+  {
+    id: "gemini-3.1-flash-image",
+    name: "Gemini 3.1 Flash Image",
+    contextLength: 1048576,
+    maxOutputTokens: 65536,
+    supportsReasoning: false,
+    supportsVision: true,
+    supportsImageGeneration: true,
+    toolCalling: true,
+  },
+  {
+    id: "gemini-3-pro-image",
+    name: "Gemini 3 Pro Image",
+    contextLength: 1048576,
+    maxOutputTokens: 65536,
+    supportsReasoning: false,
+    supportsVision: true,
+    supportsImageGeneration: true,
+    toolCalling: true,
+  },
+  {
+    id: "gemini-3-pro-image-preview",
+    name: "Gemini 3 Pro Image (Preview)",
+    contextLength: 1048576,
+    maxOutputTokens: 65536,
+    supportsReasoning: false,
+    supportsVision: true,
+    supportsImageGeneration: true,
+    toolCalling: true,
+  },
+  {
+    id: "gemini-2.5-flash-image",
+    name: "Gemini 2.5 Flash Image",
+    contextLength: 1048576,
+    maxOutputTokens: 65536,
+    supportsReasoning: false,
+    supportsVision: true,
+    supportsImageGeneration: true,
+    toolCalling: true,
+  },
+  {
+    id: "imagen-3.0-generate-002",
+    name: "Imagen 3.0 Generate",
+    contextLength: 32768,
+    maxOutputTokens: 8192,
+    supportsReasoning: false,
+    supportsVision: false,
+    supportsImageGeneration: true,
+    toolCalling: false,
+  },
+  {
+    id: "claude-sonnet-4-6-high",
+    name: "Claude Sonnet 4.6 (High)",
+    contextLength: 1048576,
+    maxOutputTokens: 65536,
+    supportsReasoning: true,
+    supportsVision: true,
+    toolCalling: true,
+  },
+  {
+    id: "claude-sonnet-4-6-medium",
+    name: "Claude Sonnet 4.6 (Medium)",
+    contextLength: 1048576,
+    maxOutputTokens: 65536,
+    supportsReasoning: true,
+    supportsVision: true,
+    toolCalling: true,
+  },
+  {
+    id: "claude-sonnet-4-6-low",
+    name: "Claude Sonnet 4.6 (Low)",
+    contextLength: 1048576,
+    maxOutputTokens: 65536,
+    supportsReasoning: true,
+    supportsVision: true,
+    toolCalling: true,
+  },
+  {
+    id: "claude-opus-4-6-thinking-high",
+    name: "Claude Opus 4.6 (Thinking High)",
+    contextLength: 1048576,
+    maxOutputTokens: 65536,
+    supportsReasoning: true,
+    supportsVision: true,
+    toolCalling: true,
+  },
+  {
+    id: "claude-opus-4-6-thinking-medium",
+    name: "Claude Opus 4.6 (Thinking Medium)",
+    contextLength: 1048576,
+    maxOutputTokens: 65536,
+    supportsReasoning: true,
+    supportsVision: true,
+    toolCalling: true,
+  },
+  {
+    id: "claude-opus-4-6-thinking-low",
+    name: "Claude Opus 4.6 (Thinking Low)",
+    contextLength: 1048576,
+    maxOutputTokens: 65536,
+    supportsReasoning: true,
+    supportsVision: true,
+    toolCalling: true,
+  },
 ]);
 
 export const ANTIGRAVITY_MODEL_ALIASES = Object.freeze({
-  // gemini-3.1-pro-low is not aliased: the upstream accepts it verbatim.
+  "gemini-4": "gemini-4-carbon-high",
+  "gemini-4-high": "gemini-4-carbon-high",
+  "gemini-4-medium": "gemini-4-carbon-medium",
+  "gemini-4-low": "gemini-4-carbon-low",
+  "4-carbon": "gemini-4-carbon-high",
+  "gemini-4-carbon": "gemini-4-carbon-high",
+  "gemini-4-carbon-high": "gemini-4-carbon-high",
+  "gemini-4-carbon-medium": "gemini-4-carbon-medium",
+  "gemini-4-carbon-low": "gemini-4-carbon-low",
+  "4-argon": "gemini-4-argon-high",
+  "gemini-4-argon": "gemini-4-argon-high",
+  "gemini-4-argon-high": "gemini-4-argon-high",
+  "gemini-4-argon-medium": "gemini-4-argon-medium",
+  "gemini-4-argon-low": "gemini-4-argon-low",
+  "gemini-3.8": "gemini-3.8-flash-tiered",
+  "gemini-3.8-flash": "gemini-3.8-flash-tiered",
+  "gemini-3.8-flash-high": "gemini-3.8-flash-high",
+  "gemini-3.8-flash-medium": "gemini-3.8-flash-medium",
+  "gemini-3.8-flash-low": "gemini-3.8-flash-low",
+  "gemini-3.1-pro-high": "gemini-4-carbon-high",
+  "gemini-3.1-pro-low": "gemini-3.8-flash-tiered",
+  "gemini-pro-agent": "gemini-4-carbon-high",
+  "gemini-3.6-flash-tiered": "gemini-3.8-flash-tiered",
+  "gemini-3.6-flash-high": "gemini-3.8-flash-tiered",
+  "gemini-3.6-flash-medium": "gemini-3.8-flash-tiered",
+  "gemini-3.6-flash-low": "gemini-3.8-flash-tiered",
+  "gemini-3.7-flash-tiered": "gemini-3.8-flash-tiered",
+  "gemini-3.7-flash-high": "gemini-3.8-flash-tiered",
+  "gemini-3.7-flash-medium": "gemini-3.8-flash-tiered",
+  "gemini-3.7-flash-low": "gemini-3.8-flash-tiered",
+  // Claude 5.5 is served natively by Antigravity (own claude_gpt quota buckets) —
+  // do NOT remap it to Gemini 4 Argon, which silently burned Argon quota instead.
+  "claude-opus-5-5": "claude-opus-5-5-high",
+  "claude-opus-5-0": "gemini-4-carbon-high",
+  "claude-opus-4-8": "gemini-4-carbon-high",
+  "claude-opus-4-7": "gemini-4-carbon-high",
+  "claude-opus-4-6": "gemini-4-carbon-high",
+  "claude-opus-4-6-thinking": "claude-opus-4-6-thinking",
+  "claude-opus-4-6-thinking-high": "claude-opus-4-6-thinking",
+  "claude-opus-4-6-thinking-medium": "claude-opus-4-6-thinking",
+  "claude-opus-4-6-thinking-low": "claude-opus-4-6-thinking",
+  "claude-sonnet-5-5": "claude-sonnet-5-5-medium",
+  "claude-sonnet-5-0": "gemini-4-carbon-medium",
+  "claude-sonnet-4-6": "claude-sonnet-4-6",
+  "claude-sonnet-4-6-high": "claude-sonnet-4-6",
+  "claude-sonnet-4-6-medium": "claude-sonnet-4-6",
+  "claude-sonnet-4-6-low": "claude-sonnet-4-6",
+  "claude-sonnet-4-5": "gemini-4-carbon-medium",
+  "claude-haiku-4-5": "gemini-3.8-flash-high",
+  "claude-haiku-5-5": "gemini-3.8-flash-high",
   "gemini-3-pro-image-preview": "gemini-3-pro-image",
-  // Legacy Claude display ids → current upstream ids. NOTE: an earlier comment here
-  // assumed Claude was removed from Antigravity 2.0 and would 404; discussion #3184
-  // disproved that — the Antigravity OAuth backend still serves claude-opus-4-6-thinking
-  // and claude-sonnet-4-6 (now listed in ANTIGRAVITY_PUBLIC_MODELS above). These aliases
-  // remap the old gemini-claude-* ids to the live upstream ids.
+  "gemini-3-flash": "gemini-3-flash",
+  "gemini-3.5-flash": "gemini-3.8-flash-tiered",
+  "gemini-3.5-flash-lite": "gemini-3.1-flash-lite",
+  "gemini-2.5-flash-image": "gemini-3.1-flash-image",
+  "imagen-3": "imagen-3.0-generate-002",
   "gemini-claude-sonnet-4-5": "claude-sonnet-4-6",
   "gemini-claude-sonnet-4-5-thinking": "claude-sonnet-4-6",
   "gemini-claude-opus-4-5-thinking": "claude-opus-4-6-thinking",
@@ -161,10 +409,7 @@ type AntigravityModelAliasMap = Record<string, string>;
  * Per-request upstream-id fallback chains for callable Gemini 3.1 Pro tiers.
  * Each chain starts with its own key and every candidate is listed at most once.
  */
-export const ANTIGRAVITY_PRO_FALLBACK_CHAINS: Readonly<Record<string, readonly string[]>> =
-  Object.freeze({
-    "gemini-3.1-pro-low": Object.freeze(["gemini-3.1-pro-low", "gemini-3-pro-low"]),
-  });
+export const ANTIGRAVITY_PRO_FALLBACK_CHAINS: Readonly<Record<string, readonly string[]>> = Object.freeze({});
 
 /**
  * Return the ordered upstream-id fallback chain for `modelId` (the requested id first), or
@@ -231,3 +476,48 @@ export function isUserCallableAntigravityModelId(modelId: string): boolean {
   const upstreamId = resolveAntigravityModelId(modelId);
   return PUBLIC_MODEL_IDS.has(clientId) || UPSTREAM_PUBLIC_MODEL_IDS.has(upstreamId);
 }
+
+const ANTIGRAVITY_NON_CHAT_MODEL_IDS = new Set<string>([
+  "gemini-3.1-flash-image",
+  "gemini-3-pro-image",
+  "gemini-3-pro-image-preview",
+  "gemini-2.5-flash-image",
+  "imagen-3.0-generate-002",
+]);
+
+const ANTIGRAVITY_RETIRED_MODEL_IDS = new Set([
+  "gemini-3-pro-preview",
+  "gemini-3.1-pro",
+  "gemini-3.6-flash-high",
+  "gemini-3.6-flash-medium",
+  "gemini-3.6-flash-low",
+  "gemini-3-flash-agent",
+  "gemini-3.5-flash",
+  "gemini-3.5-flash-extra-low",
+  "gemini-3.5-flash-low",
+  "gemini-3.5-flash-high",
+  "gemini-3.5-flash-medium",
+  "gemini-3.5-flash-preview",
+  "gemini-2.5-pro",
+  "gemini-2.5-flash-thinking",
+  "gemini-2.5-flash",
+  "gemini-2.5-flash-lite",
+  "gemini-2.5-computer-use-preview-10-2025",
+]);
+
+const ANTIGRAVITY_NON_CHAT_MODEL_PATTERN =
+  /(?:^|[-_])(image|imagen|audio|tts|embedding|embed|video|veo)(?:[-_]|$)/i;
+
+/**
+ * Return whether a model reported by Antigravity's authenticated live catalog is eligible for
+ * chat discovery. The upstream response already applies account/subscription gating and marks
+ * internal entries with `isInternal`; this predicate only excludes known non-chat surfaces.
+ */
+export function isDiscoverableAntigravityModelId(modelId: string): boolean {
+  const id = modelId.trim();
+  if (!id || ANTIGRAVITY_NON_CHAT_MODEL_IDS.has(id) || ANTIGRAVITY_RETIRED_MODEL_IDS.has(id)) {
+    return false;
+  }
+  return !ANTIGRAVITY_NON_CHAT_MODEL_PATTERN.test(id);
+}
+

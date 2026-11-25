@@ -329,6 +329,7 @@ const LOBE_PROVIDER_ALIASES = {
   "black-forest-labs": "Bfl",
   cerebras: "Cerebras",
   "chatgpt-web": "OpenAI",
+  "chatgpt-web-codex": "OpenAI",
   claude: "ClaudeCode",
   "claude-web": "Claude",
   cline: "Cline",
@@ -369,7 +370,6 @@ const LOBE_PROVIDER_ALIASES = {
   "gemini-web": "Gemini",
   "gemini-business": "Gemini",
   github: "GithubCopilot",
-  "github-models": "Github",
   "github-copilot": "GithubCopilot",
   "ghe-copilot": "GithubCopilot",
   glm: "Zhipu",
@@ -402,7 +402,6 @@ const LOBE_PROVIDER_ALIASES = {
   "meta-llama": "Meta",
   minimax: "Minimax",
   "minimax-cn": "Minimax",
-  mimocode: "XiaomiMiMo",
   mistral: "Mistral",
   mistralai: "Mistral",
   moonshot: "Moonshot",
@@ -431,7 +430,6 @@ const LOBE_PROVIDER_ALIASES = {
   pollinations: "Pollinations",
   qoder: "Qoder",
   qwen: "Qwen",
-  "qwen-web": "Qwen",
   recraft: "Recraft",
   replicate: "Replicate",
   roo: "RooCode",
@@ -468,10 +466,13 @@ const LOBE_PROVIDER_ALIASES = {
   voyage: "Voyage",
   "voyage-ai": "Voyage",
   watsonx: "IBM",
-  windsurf: "Windsurf",
+  "devin-desktop": "Devin",
   "workers-ai": "WorkersAI",
   workersai: "WorkersAI",
   xai: "XAI",
+  "xai-oauth": "XAI",
+  xao: "XAI",
+  "x-search": "XAI",
   "xiaomi-mimo": "XiaomiMiMo",
   xiaomimimo: "XiaomiMiMo",
   xinference: "Xinference",
@@ -484,9 +485,17 @@ export function getLobeProviderIcon(
   providerId: string,
   type: "mono" | "color" = "color"
 ): LobeIconComponent | null {
-  const iconKey = LOBE_PROVIDER_ALIASES[providerId.toLowerCase()];
-  if (!iconKey) return null;
+  if (typeof providerId !== "string") return null;
+  const aliasKey = providerId.toLowerCase();
+  // Own-property guards: a providerId such as "constructor" or "__proto__"
+  // otherwise resolves through Object.prototype, yielding a truthy iconKey
+  // whose LOBE_ICON_COMPONENTS lookup is undefined -> `entry.color` throws and
+  // takes down the whole providers dashboard via the error boundary.
+  if (!Object.hasOwn(LOBE_PROVIDER_ALIASES, aliasKey)) return null;
+  const iconKey = LOBE_PROVIDER_ALIASES[aliasKey];
+  if (!iconKey || !Object.hasOwn(LOBE_ICON_COMPONENTS, iconKey)) return null;
 
   const entry = LOBE_ICON_COMPONENTS[iconKey];
+  if (!entry) return null;
   return type === "color" && entry.color ? entry.color : entry.mono;
 }

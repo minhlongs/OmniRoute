@@ -5,14 +5,17 @@
  * Supports local providers plus hosted task-based APIs such as Runway.
  */
 
-import { parseModelFromRegistry, getAllModelsFromRegistry } from "./registryUtils.ts";
+import { parseModelFromRegistry } from "./registryUtils.ts";
 import { RUNWAYML_SUPPORTED_VIDEO_MODELS } from "./runway.ts";
 import { SEGMIND_VIDEO_MODELS } from "./providers/registry/segmind/videoModels.ts";
+import { toRegistryVideoModels } from "../services/adobeFireflyModels.ts";
 
 interface VideoModel {
   id: string;
   name: string;
   isMarket?: boolean;
+  supportedSizes?: string[];
+  mediaCapabilities?: Record<string, unknown>;
 }
 
 interface VideoProvider {
@@ -24,9 +27,30 @@ interface VideoProvider {
   authHeader: string;
   format: string;
   models: VideoModel[];
+  // #10285 — set when a provider is registered (so parseVideoModel/getVideoProvider
+  // still resolve it for a clear diagnostic) but must NOT be advertised as a working
+  // model in /v1/models or getAllVideoModels(). Keep unsupportedReason short and
+  // stable — handlers may surface it verbatim in the fail-fast error message.
+  unsupported?: boolean;
+  unsupportedReason?: string;
 }
 
 export const VIDEO_PROVIDERS: Record<string, VideoProvider> = {
+  agnes: {
+    id: "agnes",
+    baseUrl: "https://apihub.agnes-ai.com",
+    statusUrl: "https://apihub.agnes-ai.com/agnesapi",
+    authType: "apikey",
+    authHeader: "bearer",
+    format: "agnes-video-job",
+    models: [
+      {
+        id: "agnes-video-v2.0",
+        name: "Agnes Video V2.0",
+      },
+    ],
+  },
+
   "qwen-cloud-token-plan": {
     id: "qwen-cloud-token-plan",
     alias: "qct",
@@ -70,6 +94,22 @@ export const VIDEO_PROVIDERS: Record<string, VideoProvider> = {
     ],
   },
 
+  "fal-ai": {
+    id: "fal-ai",
+    baseUrl: "https://queue.fal.run",
+    authType: "apikey",
+    authHeader: "key",
+    format: "fal-ai-video",
+    models: [
+      { id: "veo3.1/lite", name: "Veo 3.1 Lite" },
+      { id: "google/gemini-omni-flash", name: "Gemini Omni Flash" },
+      {
+        id: "xai/grok-imagine-video/text-to-video",
+        name: "Grok Imagine Video",
+      },
+    ],
+  },
+
   googleflow: {
     id: "googleflow",
     alias: "flow",
@@ -85,6 +125,18 @@ export const VIDEO_PROVIDERS: Record<string, VideoProvider> = {
       { id: "veo-3.1-fast-generate", name: "Veo 3.1 Fast (Google Flow)" },
       { id: "veo-3.0-generate", name: "Veo 3.0 (Google Flow)" },
     ],
+    // #10285 — live-validated: the submit/poll paths above (/v1:generateVideo,
+    // /v1:fetchOperation) are 404 on aisandbox-pa; the reporter's measured working
+    // path (POST /v1/video:batchAsyncGenerateVideoText) is undocumented and, even
+    // reached, rejects the stored Cloud Code OAuth bearer (401 UNAUTHENTICATED —
+    // the cclog/cloud-platform scopes do not grant aisandbox-pa). gflow-cli confirms
+    // only a headed-browser reCAPTCHA session works for mutation endpoints. De-listed
+    // until a viable server-side transport is confirmed live (see plan-file #10285).
+    unsupported: true,
+    unsupportedReason:
+      "Google Flow video generation requires a browser-session transport " +
+      "(Flow/Cloud Code session with reCAPTCHA) and is not supported over the stored " +
+      "OAuth bearer. Generate video via labs.google/flow directly for now.",
   },
 
   kie: {
@@ -138,6 +190,13 @@ export const VIDEO_PROVIDERS: Record<string, VideoProvider> = {
     authType: "apikey",
     authHeader: "bearer",
     format: "pollinations-video",
+    // Живая проверка 2026-08-30: диспетчер videoGeneration.ts не разбирает
+    // "pollinations-video" и отвечает 400 Unsupported video format — модель
+    // висела в выдаче каталога, но не исполнялась ни при каких ключах.
+    unsupported: true,
+    unsupportedReason:
+      "Pollinations video has no submit/poll transport in the dispatcher yet. " +
+      "Use an image model or another video provider until one is added.",
     models: [{ id: "default", name: "Pollinations Video (Free)" }],
   },
 
@@ -148,6 +207,12 @@ export const VIDEO_PROVIDERS: Record<string, VideoProvider> = {
     authType: "apikey",
     authHeader: "bearer",
     format: "minimax-video",
+    // Живая проверка 2026-08-30: 400 Unsupported video format на всех трёх
+    // моделях Hailuo. Свой submit → query API, не покрытый job-пресетами.
+    unsupported: true,
+    unsupportedReason:
+      "MiniMax video uses its own submit/query transport that the dispatcher " +
+      "does not implement yet. Generate video via another provider for now.",
     models: [
       { id: "MiniMax-Hailuo-2.3", name: "Hailuo 2.3" },
       { id: "MiniMax-Hailuo-02", name: "Hailuo 02" },
@@ -162,6 +227,12 @@ export const VIDEO_PROVIDERS: Record<string, VideoProvider> = {
     authType: "apikey",
     authHeader: "bearer",
     format: "together-video",
+    // Не рекламируется по той же причине, что pollinations/minimax: формат
+    // объявлен, ветки в диспетчере нет (проверено разбором 2026-08-30).
+    unsupported: true,
+    unsupportedReason:
+      "Together video has no transport in the dispatcher yet. " +
+      "Use another video provider until one is added.",
     models: [
       { id: "wan-ai/wan2.1-t2v-480p", name: "Wan 2.1 T2V 480p" },
       { id: "wan-ai/wan2.7-t2v", name: "Wan 2.7 T2V" },
@@ -175,6 +246,12 @@ export const VIDEO_PROVIDERS: Record<string, VideoProvider> = {
     authType: "apikey",
     authHeader: "bearer",
     format: "replicate-video",
+    // Не рекламируется: формат объявлен, ветки в диспетчере нет
+    // (проверено разбором 2026-08-30).
+    unsupported: true,
+    unsupportedReason:
+      "Replicate video has no prediction submit/poll transport in the " +
+      "dispatcher yet. Use another video provider until one is added.",
     models: [
       { id: "minimax/video-01", name: "MiniMax Video 01" },
       { id: "wan-ai/wan2.1-t2v-480p", name: "Wan 2.1 T2V" },
@@ -325,9 +402,42 @@ export const VIDEO_PROVIDERS: Record<string, VideoProvider> = {
     models: [{ id: "grok-imagine-video", name: "Grok Imagine Video" }],
   },
 
+  // UC (uncensored.com) video generation. One handler (handleUcVideoGeneration)
+  // serves BOTH surfaces, picking by credential: PERSONA web (un-metered, Clerk
+  // JWT -> internal.chatuncensored.ai/{text,image}_to_video + moveinwater result
+  // CDN HEAD poll 403->200) and uc-direct REST (metered, X-api-key ->
+  // api.uncensored.com, async submit + status poll). authType is "apikey" so the
+  // route resolves credentials for the metered path; the persona path pulls its
+  // durable Clerk credential out of providerSpecificData inside the handler.
+  uc: {
+    id: "uc",
+    baseUrl: "https://internal.chatuncensored.ai/image_to_video",
+    statusUrl: "https://api.uncensored.com/api/v1/videos/generations",
+    authType: "apikey",
+    authHeader: "bearer",
+    format: "uc-video",
+    models: [
+      // Persona web picker default + catalog.
+      { id: "wan-2.2-spicy", name: "Wan 2.2 Spicy (UC)" },
+      // uc-direct REST metered catalog (§2.3).
+      { id: "t2v-turbo", name: "Text-to-Video Turbo (UC)" },
+      { id: "t2v-standard", name: "Text-to-Video Standard (UC)" },
+      { id: "i2v-turbo", name: "Image-to-Video Turbo (UC)" },
+      { id: "i2v-standard", name: "Image-to-Video Standard (UC)" },
+      { id: "i2v-pro", name: "Image-to-Video Pro (UC)" },
+      { id: "i2v-sora", name: "Image-to-Video Sora (UC)" },
+      { id: "i2v-sora-pro", name: "Image-to-Video Sora Pro (UC)" },
+      { id: "cosmos-predict", name: "Cosmos Predict (UC)" },
+      { id: "av-gen", name: "AV Gen (UC)" },
+      { id: "ltx-distilled", name: "LTX Distilled (UC)" },
+      { id: "seedance-2.0", name: "Seedance 2.0 (UC)" },
+      { id: "seedance-2.0-fast", name: "Seedance 2.0 Fast (UC)" },
+      { id: "happyhorse", name: "HappyHorse (UC)" },
+    ],
+  },
+
   // Adobe Firefly (unofficial) — same IMS/cookie credential as the image entry.
-  // Async 3P video generate + poll (Sora 2, Veo 3.1, Kling …). Fallback list
-  // from models/discovery capture (adobe/get_models.txt).
+  // Exact async video models and capabilities from the verified discovery snapshot.
   "adobe-firefly": {
     id: "adobe-firefly",
     alias: "firefly",
@@ -335,18 +445,29 @@ export const VIDEO_PROVIDERS: Record<string, VideoProvider> = {
     authType: "apikey",
     authHeader: "bearer",
     format: "adobe-firefly-video",
-    models: [
-      { id: "sora-2", name: "Firefly Sora 2" },
-      { id: "sora-2-pro", name: "Firefly Sora 2 Pro" },
-      { id: "veo-3.1", name: "Firefly Veo 3.1" },
-      { id: "veo-3.1-fast", name: "Firefly Veo 3.1 Fast" },
-      { id: "veo-3.1-ref", name: "Firefly Veo 3.1 Reference" },
-      { id: "kling-3", name: "Firefly Kling v3 Standard I2V" },
-      { id: "kling-v3-t2v", name: "Firefly Kling v3 Standard T2V" },
-      { id: "kling-v3-pro-i2v", name: "Firefly Kling v3 Pro I2V" },
-      { id: "luma-ray3", name: "Firefly Ray3" },
-      { id: "runway-gen4-turbo", name: "Firefly Runway Gen-4 Video" },
-    ],
+    models: toRegistryVideoModels(),
+  },
+
+  nanogpt: {
+    id: "nanogpt",
+    baseUrl: "https://nano-gpt.com/api/v1/video/generations",
+    authType: "apikey",
+    authHeader: "bearer",
+    // Диспетчер знает формат под именем "openai-video" — под "openai" ветки нет,
+    // и провайдер отдавал 400 Unsupported video format (живая проверка
+    // 2026-08-30). Тот же обработчик обслуживает кастомные OpenAI-совместимые
+    // ноды, а baseUrl выше — ровно их путь.
+    format: "openai-video",
+    // Живая проверка 2026-08-30: адрес выше отдаёт 404 (HTML-страница), как и
+    // вариант во множественном числе /api/v1/videos/generations. Контроль на том
+    // же ключе: /api/v1/images/generations отвечает 401 JSON — то есть 404 здесь
+    // значит «маршрута нет», а не «ключ не тот». Формат исправлен на рабочее имя
+    // заранее, чтобы провайдер ожил правкой одного адреса, когда он появится.
+    unsupported: true,
+    unsupportedReason:
+      "NanoGPT video endpoint returns 404 — no video route is published under " +
+      "/api/v1/video(s)/generations. Use another video provider.",
+    models: [{ id: "default", name: "NanoGPT Video" }],
   },
 };
 
@@ -368,5 +489,19 @@ export function parseVideoModel(modelStr: string | null) {
  * Get all video models as a flat list
  */
 export function getAllVideoModels() {
-  return getAllModelsFromRegistry(VIDEO_PROVIDERS);
+  return Object.entries(VIDEO_PROVIDERS)
+    .filter(([, config]) => !config.unsupported)
+    .flatMap(([providerId, config]) =>
+      [providerId, config.alias]
+        .filter((prefix): prefix is string => Boolean(prefix))
+        .flatMap((prefix) =>
+          config.models.map((model) => ({
+            id: `${prefix}/${model.id}`,
+            name: model.name,
+            provider: providerId,
+            supportedSizes: model.supportedSizes || [],
+            mediaCapabilities: model.mediaCapabilities,
+          }))
+        )
+    );
 }

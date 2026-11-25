@@ -4,6 +4,9 @@
  * Extracted verbatim from openai-responses.ts. Registration stays in the host.
  */
 import { isOpenAIResponsesStoreEnabled } from "@/lib/providers/requestDefaults";
+import { isInternalReasoningPlaceholder, NON_ANTHROPIC_THINKING_PLACEHOLDER } from "../../../utils/reasoningPlaceholder.ts";
+import { getReadableReasoningValue } from "../../../utils/reasoningFields.ts";
+import { isThinkingMessageModel } from "../../../utils/reasoningContentInjector.ts";
 import { generateToolCallId } from "../../helpers/toolCallHelper.ts";
 import {
   JsonRecord,
@@ -27,11 +30,15 @@ import {
 const DEFAULT_RESPONSES_REASONING_SUMMARY = "auto";
 const RESPONSES_REASONING_ENCRYPTED_CONTENT_INCLUDE = "reasoning.encrypted_content";
 
-// Chat Completions `response_format: { type: "json_schema" }` → Responses API `text.format`.
+// Chat Completions JSON `response_format` → Responses API `text.format`.
 // Merges into any existing `result.text` (e.g. verbosity) so structured-output schemas from
 // Chat clients survive the translation to the Responses/Codex upstream (#5933).
 function mapChatResponseFormatToResponsesText(body: JsonRecord, result: JsonRecord): void {
   const responseFormat = toRecord(body.response_format);
+  if (responseFormat.type === "json_object") {
+    result.text = { ...toRecord(result.text), format: { type: "json_object" } };
+    return;
+  }
   if (responseFormat.type !== "json_schema") return;
 
   const jsonSchema = toRecord(responseFormat.json_schema);
@@ -47,6 +54,20 @@ function mapChatResponseFormatToResponsesText(body: JsonRecord, result: JsonReco
   if (jsonSchema.strict !== undefined) format.strict = jsonSchema.strict;
 
   result.text = { ...existingText, format };
+}
+
+// Flatten a Chat-Completions content block into the single string the Responses
+// API `instructions` field takes. `instructions` is a string, not a part array,
+// so the text parts are joined; anything non-textual has no representation there
+// and is dropped, exactly as a string-only client would have sent it.
+function buildInstructionsText(content: unknown): string {
+  if (typeof content === "string") {
+    return content;
+  }
+  return buildResponsesTextParts(content)
+    .map((partValue) => toString(toRecord(partValue).text))
+    .filter((text) => text.length > 0)
+    .join("\n\n");
 }
 
 // Convert a Chat-Completions content block (string or text-part array) into the
@@ -84,6 +105,7 @@ export function openaiToOpenAIResponsesRequest(
   void stream;
 
   const root = toRecord(body);
+  const targetModelStr = String(model ?? root.model ?? "");
   const credentialRecord = toRecord(credentials);
   const storeEnabled = isOpenAIResponsesStoreEnabled(credentialRecord.providerSpecificData);
   const result: JsonRecord = {
@@ -107,7 +129,12 @@ export function openaiToOpenAIResponsesRequest(
 
     if (role === "system" || role === "developer") {
       if (!hasSystemMessage) {
-        result.instructions = typeof msg.content === "string" ? msg.content : "";
+        // A content-part array is valid Chat Completions for `system` too, and
+        // clients that cache their prompt (Anthropic `cache_control`) always
+        // send that shape. Reading only the string case turned the entire
+        // system prompt into "" — accepted upstream, so the model answered
+        // with no instructions at all and nothing in the response said so.
+        result.instructions = buildInstructionsText(msg.content);
         hasSystemMessage = true;
         continue;
       }
@@ -192,12 +219,32 @@ export function openaiToOpenAIResponsesRequest(
 
     // Convert assistant messages
     if (role === "assistant") {
-      // Skip reasoning_content — OpenAI Responses API requires server-generated
-      // rs_* IDs for reasoning items. Synthesizing client-side IDs (e.g. reasoning_N)
-      // causes 400 errors from Responses-compatible upstreams. (#224)
+      const reasoning = getReadableReasoningValue(msg).trim();
+      if (reasoning && !isInternalReasoningPlaceholder(reasoning)) {
+        // Compatibility is decided before protocol translation; this adapter
+        // only encodes the surviving portable plaintext state.
+        input.push({
+          type: "reasoning",
+          content: [{ type: "reasoning_text", text: reasoning }],
+          // Strict Responses-API upstreams (e.g. opencode/zen) require `summary`
+          // on every `input[]` item of type "reasoning", plaintext or opaque —
+          // omitting it rejects the request with `input[N] missing required
+          // field summary`. This item is always freshly built from a chat
+          // client's plaintext reasoning, so there is no source summary to
+          // preserve; default to an empty array like the replay sanitizer does
+          // for opaque items in reasoningInputPolicy.ts (#11108).
+          summary: [],
+        });
+      } else if (isThinkingMessageModel(targetModelStr)) {
+        input.push({
+          type: "reasoning",
+          content: [{ type: "reasoning_text", text: NON_ANTHROPIC_THINKING_PLACEHOLDER }],
+          summary: [],
+        });
+      }
 
-      // Skip thinking blocks in array content — same rs_* ID constraint applies
-
+      // Thinking blocks remain display-only here. They do not prove that the
+      // selected target accepts their provider-specific replay representation.
       // Build assistant output content
       const outputContent: unknown[] = [];
       if (typeof msg.content === "string" && msg.content) {
@@ -371,7 +418,9 @@ export function openaiToOpenAIResponsesRequest(
   // Translate max_tokens / max_completion_tokens → max_output_tokens for Responses API.
   // The Responses API does not accept max_tokens or max_completion_tokens; it requires
   // max_output_tokens. max_completion_tokens takes priority as the newer Chat Completions field.
-  if (root.max_completion_tokens !== undefined) {
+  if (root.max_output_tokens !== undefined) {
+    result.max_output_tokens = root.max_output_tokens;
+  } else if (root.max_completion_tokens !== undefined) {
     result.max_output_tokens = root.max_completion_tokens;
   } else if (root.max_tokens !== undefined) {
     result.max_output_tokens = root.max_tokens;

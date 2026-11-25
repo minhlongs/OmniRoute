@@ -3,6 +3,7 @@ import { CORS_HEADERS, handleCorsOptions } from "@/shared/utils/cors";
 import { callCloudWithMachineId } from "@/shared/utils/cloud";
 import { handleChat } from "@/sse/handlers/chat";
 import { generateRequestId } from "@/shared/utils/requestId";
+import { resolveIncomingCorrelationId } from "@/shared/utils/correlationPreserve.ts";
 import { errorResponse } from "@omniroute/open-sse/utils/error.ts";
 import { initTranslators } from "@omniroute/open-sse/translator/index.ts";
 import { createInjectionGuard } from "@/middleware/promptInjectionGuard";
@@ -17,18 +18,30 @@ import { resolveKeepaliveThreshold } from "@omniroute/open-sse/utils/keepaliveTh
 import {
   admitChatRequest,
   admitChatStructure,
+  CHAT_ADMISSION_QUEUE_MAX_MS,
   releaseChatAdmissionAfterHandler,
   releaseChatAdmissionWhenDone,
+  resolveSessionId,
 } from "@/shared/middleware/chatBodyAdmission";
 import {
   readCompressionRequestHeader,
   withCompressionHeaderEcho,
 } from "@/shared/utils/compressionHeaderEcho";
+import { resolveModelAliasWithSeedFallbackOnBody } from "@/lib/modelAliasResolver";
+import {
+  assertRuntimeModelProviderAvailable,
+  isRuntimeProviderRetirementError,
+} from "@/shared/constants/providerRetirement";
+import {
+  assertCommonChatGptWebModelAvailable,
+  isCommonChatGptWebRetirementError,
+} from "@/shared/constants/chatgptWebRetirement";
 
 let initPromise = null;
 
-// Singleton injection guard instance
-const injectionGuard = createInjectionGuard();
+// Singleton injection guard instance. `logger: null` — the guardrail registry
+// re-evaluates this request inside handleChat with the pino logger (#11936 dedupe).
+const injectionGuard = createInjectionGuard({ logger: null });
 
 /**
  * Initialize translators once (Promise-based singleton — no race condition)
@@ -82,6 +95,7 @@ export async function POST(request) {
   // OpenAI/Anthropic reject `text/plain` or missing Content-Type at the edge; matching
   // that behavior prevents a text/plain body from silently reaching provider lookup.
   const contentType = request.headers.get("content-type") ?? "";
+  const requestContentLengthHeader = request.headers.get("content-length");
   if (!contentType.toLowerCase().split(";")[0].trim().startsWith("application/json")) {
     return new Response(
       JSON.stringify({
@@ -98,7 +112,11 @@ export async function POST(request) {
   // Reserve heavyweight capacity atomically and ingest the body with a hard byte bound
   // BEFORE JSON parsing. Missing or dishonest Content-Length values cannot bypass
   // the actual-byte limit. Capacity exhaustion is retryable rather than process-fatal.
-  const admissionResult = await admitChatRequest(request);
+  const sessionId = resolveSessionId(request);
+  const admissionResult = await admitChatRequest(request, {
+    sessionId,
+    queueMs: CHAT_ADMISSION_QUEUE_MAX_MS,
+  });
   if (admissionResult.admit === false) return admissionResult.response;
   const admission = admissionResult;
   request = admission.request;
@@ -108,10 +126,10 @@ export async function POST(request) {
   try {
     // One-line marker for diagnosing 413 / Server-Action interceptions.
     // Logs only when Content-Length is present so debug noise stays low for
-    // typical chat payloads. Toggle off via OMNIROUTE_LOG_REQUEST_SHAPE=0.
-    if (process.env.OMNIROUTE_LOG_REQUEST_SHAPE !== "0") {
-      const ct = request.headers.get("content-type") ?? "";
-      const cl = request.headers.get("content-length");
+    // typical chat payloads. Opt-in via OMNIROUTE_LOG_REQUEST_SHAPE=1.
+    if (process.env.OMNIROUTE_LOG_REQUEST_SHAPE === "1") {
+      const ct = contentType;
+      const cl = requestContentLengthHeader;
       if (cl && Number(cl) > 256 * 1024) {
         console.error(`[CHAT-ROUTE] large body content-type="${ct}" content-length=${cl}`);
       }
@@ -135,16 +153,60 @@ export async function POST(request) {
           if (!shapeCheck.success) {
             const issue = shapeCheck.error.issues[0];
             const field = issue?.path?.length ? issue.path.join(".") : "body";
-            return finishAdmission(errorResponse(400, `${field}: ${issue?.message ?? "Invalid request"}`));
+            return finishAdmission(
+              errorResponse(400, `${field}: ${issue?.message ?? "Invalid request"}`)
+            );
+          }
+
+          try {
+            assertCommonChatGptWebModelAvailable(parsedBody.model);
+          } catch (error) {
+            if (isCommonChatGptWebRetirementError(error)) {
+              return finishAdmission(
+                errorResponse(error.status, error.message, {
+                  type: "provider_error",
+                  code: error.code,
+                })
+              );
+            }
+            throw error;
           }
         }
 
-        const structuralAdmission = admitChatStructure(parsedBody, admission.lease);
+        const structuralAdmission = await admitChatStructure(parsedBody, admission.lease, {
+          sessionId,
+          queueMs: CHAT_ADMISSION_QUEUE_MAX_MS,
+          signal: request.signal,
+        });
         if (structuralAdmission.admit === false) {
           admission.lease?.release();
-          return structuralAdmission.response;
+          return finishAdmission(structuralAdmission.response);
         }
         admission.lease = structuralAdmission.lease;
+
+        // Preserve the caller-supplied provider identity long enough to enforce
+        // retirement. A persisted alias can otherwise rewrite felo-web/... to a
+        // healthy provider before getModelInfo or the executor tombstones see it.
+        try {
+          assertRuntimeModelProviderAvailable(parsedBody.model);
+        } catch (error) {
+          if (isRuntimeProviderRetirementError(error)) {
+            return finishAdmission(
+              errorResponse(error.status, error.message, {
+                type: "provider_error",
+                code: error.code,
+              })
+            );
+          }
+          throw error;
+        }
+
+        // Resolve model alias before forwarding to handleChat
+        if (parsedBody && typeof parsedBody === "object") {
+          await resolveModelAliasWithSeedFallbackOnBody(parsedBody).catch(() => {
+            /* swallow — fall through with original model */
+          });
+        }
 
         const { blocked, result } = injectionGuard(parsedBody);
         if (blocked) {
@@ -183,8 +245,13 @@ export async function POST(request) {
     // paths) drop the meta the docs promise.
     const compressionRequestHeader = readCompressionRequestHeader(request);
 
+    // #11739: preserve caller-provided X-Correlation-Id when present; generate only when absent.
+    const callerCorrelationId = resolveIncomingCorrelationId(
+      request.headers.get("x-correlation-id")
+    );
+
     if (wantsStreaming) {
-      const reqId = generateRequestId();
+      const reqId = callerCorrelationId ?? generateRequestId();
       // Wrap the real handler response, not the synthetic early-keepalive response. If the
       // client cancels while handleChat is still pending, earlyStreamKeepalive will cancel the
       // eventual handler body; only that confirmed cleanup releases heavyweight capacity.
@@ -205,12 +272,19 @@ export async function POST(request) {
 
     return finishAdmission(
       withCompressionHeaderEcho(
-        await handleChat(request, null, parsedBody),
+        await handleChat(request, null, parsedBody, callerCorrelationId ?? undefined),
         compressionRequestHeader
       )
     );
   } catch (error) {
     admission.lease?.release();
+    const code = (error as { code?: unknown } | null)?.code;
+    if (code === "SEMAPHORE_TIMEOUT" || code === "SEMAPHORE_QUEUE_FULL") {
+      return errorResponse(429, error instanceof Error ? error.message : "Semaphore timeout", {
+        type: "rate_limit_error",
+        code: String(code),
+      });
+    }
     throw error;
   }
 }

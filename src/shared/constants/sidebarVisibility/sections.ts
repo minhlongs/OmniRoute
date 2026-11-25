@@ -244,6 +244,22 @@ const TOOLS_GROUP: SidebarItemGroup = {
       icon: "cloud",
     },
     {
+      id: "conductor",
+      href: "/dashboard/conductor",
+      i18nKey: "conductor",
+      subtitleKey: "conductorSubtitle",
+      icon: "account_tree",
+      labelFallback: "Conductor",
+      subtitleFallback: "CLI-agent fleet",
+    },
+    {
+      id: "orchestration",
+      href: "/dashboard/orchestration",
+      i18nKey: "orchestration",
+      subtitleKey: "orchestrationSubtitle",
+      icon: "account_tree",
+    },
+    {
       id: "agent-bridge",
       href: "/dashboard/tools/agent-bridge",
       i18nKey: "agentBridge",
@@ -286,6 +302,15 @@ const INTEGRATIONS_GROUP: SidebarItemGroup = {
       i18nKey: "webhooks",
       subtitleKey: "webhooksSubtitle",
       icon: "webhook",
+    },
+    {
+      id: "log-export",
+      href: "/dashboard/log-export",
+      i18nKey: "logExport",
+      subtitleKey: "logExportSubtitle",
+      icon: "cloud_upload",
+      labelFallback: "Log export",
+      subtitleFallback: "Ship call logs out",
     },
   ],
 };
@@ -401,6 +426,13 @@ const LOGS_GROUP: SidebarItemGroup = {
       subtitleKey: "logsTimelineSubtitle",
       icon: "view_timeline",
     },
+    {
+      id: "conversations",
+      href: "/dashboard/conversations",
+      i18nKey: "conversations",
+      subtitleKey: "conversationsSubtitle",
+      icon: "forum",
+    },
   ],
 };
 
@@ -423,6 +455,13 @@ const SYSTEM_GROUP: SidebarItemGroup = {
       i18nKey: "runtime",
       subtitleKey: "runtimeSubtitle",
       icon: "bolt",
+    },
+    {
+      id: "resilience-connections",
+      href: "/dashboard/resilience/connections",
+      i18nKey: "resilienceConnections",
+      subtitleKey: "resilienceConnectionsSubtitle",
+      icon: "shield",
     },
   ],
 };
@@ -462,6 +501,14 @@ const COSTS_ITEMS: readonly SidebarItemDefinition[] = [
     i18nKey: "freeProviderRankings",
     subtitleKey: "freeProviderRankingsSubtitle",
     icon: "leaderboard",
+  },
+  {
+    id: "radar",
+    href: "/dashboard/radar",
+    i18nKey: "radar",
+    subtitleKey: "radarSubtitle",
+    icon: "radar",
+    featureFlagKey: "RADAR_ENABLED",
   },
 ];
 
@@ -602,6 +649,13 @@ const GAMIFICATION_GROUP: SidebarItemGroup = {
       subtitleKey: "tokensSubtitle",
       icon: "toll",
     },
+    {
+      id: "gamification-admin",
+      href: "/dashboard/gamification/admin",
+      i18nKey: "gamificationAdmin",
+      subtitleKey: "gamificationAdminSubtitle",
+      icon: "admin_panel_settings",
+    },
   ],
 };
 
@@ -659,6 +713,13 @@ const CONFIGURATION_ITEMS: readonly SidebarItemDefinition[] = [
     i18nKey: "settingsAi",
     subtitleKey: "settingsAiSubtitle",
     icon: "auto_awesome",
+  },
+  {
+    id: "settings-modality-bridge",
+    href: "/dashboard/settings/modality-bridge",
+    i18nKey: "settingsModalityBridge",
+    subtitleKey: "settingsModalityBridgeSubtitle",
+    icon: "image_search",
   },
   {
     id: "settings-routing",

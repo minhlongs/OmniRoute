@@ -2,6 +2,16 @@
 
 import fs from "node:fs";
 import http from "node:http";
+import net from "node:net";
+import dns from "node:dns";
+
+if (typeof net.setDefaultAutoSelectFamily === "function") {
+  net.setDefaultAutoSelectFamily(false);
+}
+if (typeof dns.setDefaultResultOrder === "function") {
+  dns.setDefaultResultOrder("ipv4first");
+}
+
 import path from "node:path";
 import next from "next";
 import { bootstrapEnv } from "../build/bootstrap-env.mjs";
@@ -15,6 +25,60 @@ import { ensureNativeSqlite } from "./ensure-native-sqlite.mjs";
 import { isTurbopackCacheCorruption, purgeAllTurbopackCaches } from "./turbopackCacheHeal.mjs";
 import { randomUUID } from "node:crypto";
 import { getMainServerTimeoutConfig } from "./main-server-timeouts.mjs";
+
+process.on("unhandledRejection", (reason) => {
+  const detail =
+    reason instanceof Error ? `${reason.message}\n${reason.stack ?? ""}` : String(reason);
+  console.error("[unhandledRejection]", detail);
+});
+
+process.on("uncaughtException", (error) => {
+  const code = error && typeof error === "object" ? error.code : undefined;
+  if (code === "SEMAPHORE_TIMEOUT" || code === "SEMAPHORE_QUEUE_FULL") {
+    console.error("[uncaughtException][semaphore]", error);
+    return;
+  }
+  console.error("[uncaughtException]", error);
+  process.exit(1);
+});
+import { SocksProxyAgent } from "socks-proxy-agent";
+import { request as __pmvHttpsRequest } from "node:https";
+import { request as __pmvHttpRequest } from "node:http";
+
+// ── PMV egress hook: phanmemvip.shop must egress via SOCKS tunnel 1080 (IP lock) ──
+const __pmvSocks = new SocksProxyAgent("socks5h://127.0.0.1:1080");
+globalThis.__pmvFetch = (url, opts = {}) => {
+  const u = String(url);
+  if (!u.includes("phanmemvip.shop")) return fetch(u, opts);
+  return fetch(u, opts); // FIX: egress DIRECT — key lock IP 104.28.163.233 (direct), SOCKS 1080 gây IP-lock mismatch
+  const uObj = new URL(u);
+  const reqFn = uObj.protocol === "https:" ? __pmvHttpsRequest : __pmvHttpRequest;
+  const headers = { ...(opts.headers || {}) };
+  const isForm = headers["Content-Type"] && String(headers["Content-Type"]).includes("form");
+  let bodyBuf = null;
+  if (opts.body) {
+    bodyBuf = typeof opts.body === "string" ? Buffer.from(opts.body) : opts.body;
+    if (bodyBuf && !headers["Content-Length"]) headers["Content-Length"] = bodyBuf.length;
+  }
+  return new Promise((resolve, reject) => {
+    const req = reqFn(
+      {
+        hostname: uObj.hostname,
+        port: uObj.port || (uObj.protocol === "https:" ? 443 : 80),
+        path: uObj.pathname + uObj.search,
+        method: opts.method || "POST",
+        headers,
+        agent: __pmvSocks,
+      },
+      (res) => {
+        resolve(new Response(res, { status: res.statusCode, headers: res.headers }));
+      }
+    );
+    req.on("error", reject);
+    if (bodyBuf) req.write(bodyBuf);
+    req.end();
+  });
+};
 
 const { maybeHandleDisallowedMethod } = methodGuard;
 const { wrapRequestListenerWithHeadResponseGuard } = headResponseGuard;

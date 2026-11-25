@@ -1,12 +1,16 @@
 import { handleChat } from "@/sse/handlers/chat";
 import { initTranslators } from "@omniroute/open-sse/translator/index.ts";
 import { withInjectionGuard } from "@/middleware/promptInjectionGuard";
+import { withChatAdmission } from "@/shared/middleware/withChatAdmission";
 import { requireJsonContentType } from "@/shared/middleware/requireJsonContentType";
 import {
   withEarlyStreamKeepalive,
   ANTHROPIC_PING_FRAME,
 } from "@omniroute/open-sse/utils/earlyStreamKeepalive";
 import { resolveKeepaliveThreshold } from "@omniroute/open-sse/utils/keepaliveThreshold";
+import { resolveStreamFlag } from "@omniroute/open-sse/utils/aiSdkCompat";
+import { errorResponse } from "@omniroute/open-sse/utils/error.ts";
+import { isSemaphoreCapacityError } from "@omniroute/open-sse/handlers/chatCore/streamErrorResult.ts";
 
 let initialized = false;
 
@@ -39,7 +43,7 @@ export async function OPTIONS() {
  * `preParsedBody` is threaded from withInjectionGuard (#4041) so the body is
  * parsed at most once per request.
  */
-async function postHandler(request: any, context: any, preParsedBody: any = null) {
+async function postHandlerInner(request: any, context: any, preParsedBody: any = null) {
   // Reject non-JSON Content-Type with 415 before touching the body — mirrors OpenAI's
   // reference API and matches /v1/chat/completions (#6414).
   const ctRejection = requireJsonContentType(request);
@@ -54,22 +58,43 @@ async function postHandler(request: any, context: any, preParsedBody: any = null
   // /v1/responses (#2544). Anthropic clients ignore SSE comments for their watchdog, so
   // emit a real `event: ping` (ANTHROPIC_PING_FRAME). Non-streaming callers keep the
   // verbatim path.
-  const accept = String(request.headers?.get?.("accept") || "").toLowerCase();
-  if (accept.includes("text/event-stream")) {
-    let model;
+  let body = preParsedBody;
+  if (body == null) {
     try {
-      const body = preParsedBody ?? (await request.clone().json().catch(() => null));
-      model = body?.model;
+      body = await request
+        .clone()
+        .json()
+        .catch(() => null);
     } catch {
-      // body unavailable / non-JSON — fall back to the default keepalive threshold
+      // body unavailable / non-JSON — handleChat will return its normal validation error
     }
-    return await withEarlyStreamKeepalive(handleChat(request, null, preParsedBody), {
+  }
+  const accept = String(request.headers?.get?.("accept") || "");
+  const wantsStreaming = resolveStreamFlag(body?.stream, accept, "claude");
+  if (wantsStreaming) {
+    return await withEarlyStreamKeepalive(handleChat(request, null, body), {
       signal: request.signal,
-      thresholdMs: resolveKeepaliveThreshold(model),
+      thresholdMs: resolveKeepaliveThreshold(body?.model),
       keepaliveFrame: ANTHROPIC_PING_FRAME,
     });
   }
-  return await handleChat(request, null, preParsedBody);
+  return await handleChat(request, null, body);
 }
 
-export const POST = withInjectionGuard(postHandler);
+async function postHandler(request: any, context: any, preParsedBody: any = null) {
+  try {
+    return await postHandlerInner(request, context, preParsedBody);
+  } catch (error) {
+    if (isSemaphoreCapacityError(error)) {
+      return errorResponse(429, error.message, {
+        type: "rate_limit_error",
+        code: error.code,
+      });
+    }
+    throw error;
+  }
+}
+
+// `logger: null` — the guardrail registry re-evaluates this request inside
+// handleChat with the pino logger (#11936 dedupe).
+export const POST = withChatAdmission(withInjectionGuard(postHandler, { logger: null }));

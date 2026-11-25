@@ -4,6 +4,7 @@ import { Agent, fetch as undiciFetch } from "undici";
 import {
   type OutboundUrlGuardMode,
   isPrivateHost,
+  parseAndValidateNonMetadataUrl,
   parseAndValidatePublicUrl,
   parseOutboundUrl,
 } from "@/shared/network/outboundUrlGuard";
@@ -23,6 +24,8 @@ export type RemoteImageLookup = (
 ) => Promise<Array<{ address: string; family: number }>>;
 
 export interface RemoteImageFetchOptions {
+  /** Require HTTPS for the initial URL and every redirect hop. Default false for compatibility. */
+  enforceHttps?: boolean;
   fetchImpl?: typeof fetch;
   /** Pin the network connection to a DNS answer that passed validation. */
   pinDns?: boolean;
@@ -44,8 +47,21 @@ export interface RemoteImageFetchResult {
   url: string;
 }
 
+/** Generic aliases for non-image callers that need the same SSRF/bounds policy. */
+export type RemoteMediaFetchOptions = RemoteImageFetchOptions;
+export type RemoteMediaFetchResult = RemoteImageFetchResult;
+
 function validateRemoteImageUrl(input: string | URL, guard: OutboundUrlGuardMode) {
-  return guard === "public-only" ? parseAndValidatePublicUrl(input) : parseOutboundUrl(input);
+  if (guard === "public-only") return parseAndValidatePublicUrl(input);
+  if (guard === "block-metadata") return parseAndValidateNonMetadataUrl(input);
+  return parseOutboundUrl(input);
+}
+
+function requireHttps(url: URL, enabled: boolean): URL {
+  if (enabled && url.protocol !== "https:") {
+    throw new Error("Remote media requires HTTPS at every redirect hop");
+  }
+  return url;
 }
 
 const defaultLookup: RemoteImageLookup = (hostname) => dns.promises.lookup(hostname, { all: true });
@@ -166,10 +182,10 @@ async function readResponseBuffer(response: Response, maxBytes: number) {
   return Buffer.concat(chunks, totalBytes);
 }
 
-export async function fetchRemoteImage(
+export async function fetchRemoteMedia(
   input: string | URL,
-  options: RemoteImageFetchOptions = {}
-): Promise<RemoteImageFetchResult> {
+  options: RemoteMediaFetchOptions = {}
+): Promise<RemoteMediaFetchResult> {
   const injectedFetch = options.fetchImpl;
   // Default off: production callers that need connection pinning opt in. This keeps
   // globalThis.fetch mockable for image-generation tests and preserves the previous
@@ -181,7 +197,10 @@ export async function fetchRemoteImage(
   const signal = combineSignals(options.signal, options.timeoutMs ?? DEFAULT_TIMEOUT_MS);
   const lookup = options.lookup ?? defaultLookup;
 
-  let currentUrl = validateRemoteImageUrl(input, guard);
+  let currentUrl = requireHttps(
+    validateRemoteImageUrl(input, guard),
+    options.enforceHttps === true
+  );
   for (let redirectCount = 0; redirectCount <= maxRedirects; redirectCount++) {
     // DNS-rebinding guard: validate every hop's hostname against its resolved
     // IPs before issuing the request (GHSA-cmhj-wh2f-9cgx).
@@ -205,7 +224,10 @@ export async function fetchRemoteImage(
       if (redirectCount >= maxRedirects) {
         throw new Error(`Remote image exceeded ${maxRedirects} redirect limit`);
       }
-      currentUrl = validateRemoteImageUrl(new URL(location, currentUrl), guard);
+      currentUrl = requireHttps(
+        validateRemoteImageUrl(new URL(location, currentUrl), guard),
+        options.enforceHttps === true
+      );
       continue;
     }
 
@@ -221,4 +243,12 @@ export async function fetchRemoteImage(
   }
 
   throw new Error(`Remote image exceeded ${maxRedirects} redirect limit`);
+}
+
+/** Backward-compatible image-specific entry point. */
+export async function fetchRemoteImage(
+  input: string | URL,
+  options: RemoteImageFetchOptions = {}
+): Promise<RemoteImageFetchResult> {
+  return fetchRemoteMedia(input, options);
 }

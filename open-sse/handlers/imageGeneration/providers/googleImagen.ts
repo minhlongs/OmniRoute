@@ -97,7 +97,8 @@ export async function handleGoogleImagenGeneration({
     if (!response.ok) {
       const errorText = await response.text();
       const safeError = sanitizeErrorMessage(errorText);
-      if (log) log.error("IMAGE", `${provider} error ${response.status}: ${safeError.slice(0, 200)}`);
+      if (log)
+        log.error("IMAGE", `${provider} error ${response.status}: ${safeError.slice(0, 200)}`);
 
       saveCallLog({
         method: "POST",

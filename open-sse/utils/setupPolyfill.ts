@@ -31,3 +31,16 @@ if (typeof Promise.withResolvers === "undefined") {
 if (typeof globalThis.WebSocket === "undefined") {
   (globalThis as any).WebSocket = WebSocket;
 }
+
+// Ensure Node.js networking prioritizes IPv4 and avoids broken Happy Eyeballs
+// ETIMEDOUT hangs when local interfaces have IPv6 link-local/ULA without global routing.
+import net from "node:net";
+import dns from "node:dns";
+
+if (typeof (net as any).setDefaultAutoSelectFamily === "function") {
+  (net as any).setDefaultAutoSelectFamily(false);
+}
+
+if (typeof (dns as any).setDefaultResultOrder === "function") {
+  (dns as any).setDefaultResultOrder("ipv4first");
+}

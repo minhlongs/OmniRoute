@@ -70,8 +70,8 @@ describe("migrationRunner/constants — exact small-table snapshots", () => {
 // ── large tables — count + shape + spot-checks (corruption guard) ─────────────
 
 describe("migrationRunner/constants — large-table integrity", () => {
-  it("RENAMED_MIGRATION_COMPATIBILITY has 10 well-formed entries", () => {
-    assert.equal(RENAMED_MIGRATION_COMPATIBILITY.length, 10);
+  it("RENAMED_MIGRATION_COMPATIBILITY has 32 well-formed entries", () => {
+    assert.equal(RENAMED_MIGRATION_COMPATIBILITY.length, 32);
     for (const e of RENAMED_MIGRATION_COMPATIBILITY) {
       assert.equal(typeof e.fromVersion, "string");
       assert.equal(typeof e.fromName, "string");
@@ -91,6 +91,82 @@ describe("migrationRunner/constants — large-table integrity", () => {
     // both manifest_routing collisions (052→059 and 056→059) must survive
     const manifest = RENAMED_MIGRATION_COMPATIBILITY.filter((e) => e.toName === "manifest_routing");
     assert.deepEqual(manifest.map((e) => e.fromVersion).sort(), ["052", "056"]);
+    const devin = RENAMED_MIGRATION_COMPATIBILITY.filter(
+      (e) => e.toName === "windsurf_to_devin_desktop"
+    );
+    assert.deepEqual(
+      devin.map((e) => e.fromVersion),
+      [
+        "123",
+        "124",
+        "125",
+        "126",
+        "127",
+        "128",
+        "131",
+        "133",
+        "135",
+        "136",
+        "139",
+        "140",
+        "143",
+        "144",
+      ]
+    );
+    assert.deepEqual(
+      RENAMED_MIGRATION_COMPATIBILITY.find(
+        (e) => e.fromVersion === "074" && e.fromName === "inspector_custom_hosts"
+      ),
+      {
+        fromVersion: "074",
+        fromName: "inspector_custom_hosts",
+        toVersion: "081",
+        toName: "inspector_custom_hosts",
+      }
+    );
+    assert.deepEqual(RENAMED_MIGRATION_COMPATIBILITY.at(-7), {
+      fromVersion: "134",
+      fromName: "ccr_blocks",
+      toVersion: "139",
+      toName: "ccr_blocks",
+    });
+    assert.deepEqual(RENAMED_MIGRATION_COMPATIBILITY.at(-6), {
+      fromVersion: "139",
+      fromName: "job_registry",
+      toVersion: "146",
+      toName: "job_registry",
+    });
+    assert.deepEqual(RENAMED_MIGRATION_COMPATIBILITY.at(-5), {
+      fromVersion: "143",
+      fromName: "radar_local_model_state",
+      toVersion: "153",
+      toName: "radar_local_model_state",
+    });
+    // #12036: renamed migrations 056/073/077/101 appended as compatibility renames
+    assert.deepEqual(RENAMED_MIGRATION_COMPATIBILITY.at(-4), {
+      fromVersion: "056",
+      fromName: "provider_default",
+      toVersion: "056",
+      toName: "mcp_accessibility_compression",
+    });
+    assert.deepEqual(RENAMED_MIGRATION_COMPATIBILITY.at(-3), {
+      fromVersion: "073",
+      fromName: "discovery_results",
+      toVersion: "073",
+      toName: "per_model_token_limits",
+    });
+    assert.deepEqual(RENAMED_MIGRATION_COMPATIBILITY.at(-2), {
+      fromVersion: "077",
+      fromName: "plugin_metrics",
+      toVersion: "077",
+      toName: "api_key_stream_default_mode",
+    });
+    assert.deepEqual(RENAMED_MIGRATION_COMPATIBILITY.at(-1), {
+      fromVersion: "101",
+      fromName: "proxy_pool_rotation",
+      toVersion: "101",
+      toName: "api_key_usage_limits",
+    });
   });
 
   it("PHYSICAL_SCHEMA_SENTINELS has 15 well-formed entries incl. the newest 064", () => {

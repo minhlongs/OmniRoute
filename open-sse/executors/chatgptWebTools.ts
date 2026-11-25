@@ -1,6 +1,6 @@
 // Tool-call emulation helpers for web-cookie executors (#5240, #5927).
 //
-// Web-cookie providers (chatgpt-web, perplexity-web, ...) have no native
+// Web-cookie providers (Perplexity Web, Gemini Web, etc.) may have no native
 // function calling. When the OpenAI request carries `tools`, the prompt-side
 // shim (`prepareToolMessages` in ../translator/webTools.ts) injects a `<tool>`
 // contract; on the response side we parse `<tool>{...}</tool>` blocks back
@@ -92,10 +92,19 @@ function toolCompletionToSseStream(
   return new ReadableStream<Uint8Array>({
     start(controller) {
       controller.enqueue(chunk({ role: "assistant" }, null));
-      const delta = message.tool_calls
-        ? { tool_calls: message.tool_calls }
-        : { content: (message.content as string) ?? "" };
-      controller.enqueue(chunk(delta, finishReason));
+      const hasContent = typeof message.content === "string" && message.content.trim().length > 0;
+      if (hasContent) {
+        controller.enqueue(chunk({ content: message.content }, null));
+      }
+      if (Array.isArray(message.tool_calls) && message.tool_calls.length > 0) {
+        const indexedToolCalls = message.tool_calls.map((tc: any, index: number) => ({
+          ...tc,
+          index: typeof tc.index === "number" ? tc.index : index,
+        }));
+        controller.enqueue(chunk({ tool_calls: indexedToolCalls }, finishReason));
+      } else if (!hasContent) {
+        controller.enqueue(chunk({ content: "" }, finishReason));
+      }
       controller.enqueue(encoder.encode("data: [DONE]\n\n"));
       controller.close();
     },

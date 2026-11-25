@@ -37,6 +37,7 @@ const COMMAND_PREFIXES = [
   "npm",
   "pnpm",
   "yarn",
+  "node",
   "vitest",
   "jest",
   "pytest",
@@ -78,11 +79,26 @@ const COMMAND_PREFIXES = [
   "ps",
   "df",
   "du",
+  "cat",
+  "head",
+  "tail",
+  "sed",
+  "bat",
+  "view",
+  "less",
+  "more",
+  "nl",
 ];
 
 const COMMAND_PREFIX_PATTERN = new RegExp(`^(?:${COMMAND_PREFIXES.join("|")})\\b`);
 
 const DETECTORS: Detector[] = [
+  {
+    type: "code-read",
+    category: "shell",
+    commandPatterns: [/^(?:cat|head|tail|sed|bat|view|less|more|nl)\b/i],
+    contentPatterns: [],
+  },
   {
     type: "git-status",
     category: "git",
@@ -158,6 +174,12 @@ const DETECTORS: Detector[] = [
     category: "test",
     commandPatterns: [/^jest\b/i, /^npm\s+(?:run\s+)?test\b/i],
     contentPatterns: [/Test Suites:\s+\d+/i, /Tests:\s+\d+/i, /^PASS\s+/m, /^FAIL\s+/m],
+  },
+  {
+    type: "test-node",
+    category: "test",
+    commandPatterns: [/^node\s+(?:--\S+\s+)*--test\b/i],
+    contentPatterns: [/^[#ℹ]\s*pass\s+\d+/m, /^[#ℹ]\s*tests\s+\d+/m],
   },
   {
     type: "test-pytest",

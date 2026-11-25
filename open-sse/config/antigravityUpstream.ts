@@ -1,6 +1,6 @@
 export const ANTIGRAVITY_RUNTIME_BASE_URLS = Object.freeze([
-  "https://daily-cloudcode-pa.googleapis.com",
   "https://cloudcode-pa.googleapis.com",
+  "https://daily-cloudcode-pa.googleapis.com",
 ]);
 
 export const ANTIGRAVITY_DISCOVERY_BASE_URLS = Object.freeze([
@@ -11,6 +11,12 @@ export const ANTIGRAVITY_DISCOVERY_BASE_URLS = Object.freeze([
 export const ANTIGRAVITY_BOOTSTRAP_BASE_URLS = Object.freeze([
   "https://cloudcode-pa.googleapis.com",
 ]);
+
+export const ANTIGRAVITY_ONBOARD_PATH = "/v1internal:onboardUser";
+
+export function getAntigravityOnboardUrls(): string[] {
+  return ANTIGRAVITY_BOOTSTRAP_BASE_URLS.map((base) => `${base}${ANTIGRAVITY_ONBOARD_PATH}`);
+}
 
 const ANTIGRAVITY_MODELS_PATH = "/v1internal:models";
 const ANTIGRAVITY_FETCH_AVAILABLE_MODELS_PATH = "/v1internal:fetchAvailableModels";

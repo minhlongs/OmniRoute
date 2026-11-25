@@ -291,7 +291,9 @@ function ComboAutopilotPanel({ report }: { report: ComboAutopilotReport }) {
             icon="monitor_heart"
             label={t("comboHealthIssues")}
             value={report.summary.issueCount.toLocaleString()}
-            subValue={t("comboHealthActionable", { count: report.summary.actionableCount })}
+            subValue={t("comboHealthActionable", {
+              count: report.summary.suggestionCount ?? report.summary.actionableCount ?? 0,
+            })}
           />
           <MetricBlock
             icon="error"
@@ -850,7 +852,9 @@ export default function ComboHealthTab() {
 
   useEffect(() => {
     const controller = new AbortController();
-    fetchData(controller, false);
+    void (async () => {
+      await fetchData(controller, false);
+    })();
     return () => controller.abort();
   }, [fetchData]);
 

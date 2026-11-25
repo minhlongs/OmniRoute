@@ -244,7 +244,7 @@ test("#7286: executor integration — tools[] present reaches tool_calls end to 
   await withMockedGeminiBrowser(responseText, async () => {
     const executor = new GeminiWebExecutor();
     const result = await executor.execute({
-      model: "gemini-3.1-pro",
+      model: "gemini-4-argon",
       body: {
         messages: [{ role: "user", content: "what's the weather in Berlin?" }],
         stream: false,
@@ -268,7 +268,7 @@ test("#7286: no-tool passthrough regression — unchanged prompt derivation + re
   await withMockedGeminiBrowser("Just chatting, no tools here.", async (typedPrompt) => {
     const executor = new GeminiWebExecutor();
     const result = await executor.execute({
-      model: "gemini-3.1-pro",
+      model: "gemini-4-argon",
       body: {
         messages: [{ role: "user", content: "hello there" }],
         stream: false,

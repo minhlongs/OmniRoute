@@ -16,6 +16,45 @@ import { evaluateResponseValidation, type ResponseValidationConfig } from "./res
 import { getReasoningTokens } from "../../../src/lib/usage/tokenAccounting.ts";
 import type { ComboRetryAfter } from "./types.ts";
 
+/**
+ * Detects tool_calls entries within one assistant message that repeat the
+ * exact same function name + arguments verbatim -- always a bug (no
+ * legitimate use calls one tool twice with identical arguments in the same
+ * turn), and a real observed failure mode of at least one free-tier
+ * streaming model (minimax-m3:free via OpenRouter/GMICloud, 2026-09-02:
+ * duplicated a heartbeat_respond call byte-for-byte, confirmed at the raw
+ * SSE wire level -- an upstream bug, not an OmniRoute reconstruction
+ * artifact). Used two ways: to fail a non-streaming response over to a
+ * sibling combo target (see validateResponseQuality below), and, post-
+ * stream, to flag an already-relayed streaming response as an on-spec
+ * violation despite its clean HTTP 200 (see attemptLogging.ts's
+ * persistAttemptLogs) -- a streaming response can't be retried once real
+ * content has started reaching the client (the quality-gate peek below only
+ * ever validates the START of a stream, by design, to avoid buffering the
+ * whole response and defeating streaming's latency purpose), so flagging it
+ * after the fact is what's actually achievable for that path.
+ */
+export function findToolCallSpecViolation(responseBody: unknown): string | null {
+  const json = isRecord(responseBody) ? responseBody : null;
+  const choices = json?.choices;
+  const firstChoice = Array.isArray(choices) ? choices[0] : null;
+  const message = isRecord(firstChoice) ? firstChoice.message : null;
+  const toolCalls = isRecord(message) ? message.tool_calls : null;
+  if (!Array.isArray(toolCalls) || toolCalls.length < 2) return null;
+
+  const seen = new Set<string>();
+  for (const call of toolCalls) {
+    const fn = isRecord(call) ? call.function : null;
+    if (!isRecord(fn) || typeof fn.name !== "string" || typeof fn.arguments !== "string") {
+      continue;
+    }
+    const signature = `${fn.name}\u0000${fn.arguments}`;
+    if (seen.has(signature)) return `duplicate tool_calls entry for "${fn.name}"`;
+    seen.add(signature);
+  }
+  return null;
+}
+
 export function toRetryAfterDisplayValue(value: ComboRetryAfter): string | Date {
   if (typeof value !== "number") return value;
   if (value > 0 && value < 1_000_000_000) {
@@ -190,10 +229,26 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === "object" && !Array.isArray(value);
 }
 
+/**
+ * Whether an `error` field carries a real failure signal. A key-presence check
+ * (`!= null`) false-positives on benign values some backends emit on every
+ * chunk (`{}`, `""`, `false`, `0`) — e.g. tool-call turns where a chunk with
+ * real tool_calls content also carries `"error": {}`. Only substantive values
+ * are treated as upstream failures.
+ */
+function isSubstantiveError(value: unknown): boolean {
+  if (value === null || value === undefined) return false;
+  if (typeof value === "string") return value.trim().length > 0;
+  if (typeof value === "object" && !Array.isArray(value)) {
+    return Object.keys(value as Record<string, unknown>).length > 0;
+  }
+  return value === true;
+}
+
 function isStreamingUpstreamError(parsed: unknown, eventType: string): boolean {
   if (eventType === "response.failed" || eventType === "error") return true;
   if (!isRecord(parsed)) return false;
-  if (parsed.error != null) return true;
+  if (isSubstantiveError(parsed.error)) return true;
 
   const nestedResponse = isRecord(parsed.response) ? parsed.response : null;
   return nestedResponse?.status === "failed" && nestedResponse.error != null;
@@ -311,9 +366,9 @@ export async function validateResponseQuality(
     function isTerminalUsageOnlyChunk(parsed: Record<string, unknown>, eventType: string): boolean {
       return Boolean(
         parsed.usage &&
-          typeof parsed.usage === "object" &&
-          !Array.isArray(parsed.choices) &&
-          !eventType.startsWith("response.")
+        typeof parsed.usage === "object" &&
+        !Array.isArray(parsed.choices) &&
+        !eventType.startsWith("response.")
       );
     }
 
@@ -500,6 +555,24 @@ export async function validateResponseQuality(
             return { valid: false, reason: "streaming openai truncated without finish_reason" };
           }
 
+          // Issue #10404: an OpenAI-shape stream that DOES reach a terminal
+          // marker (finish_reason / [DONE]) but never carried any real
+          // content, reasoning, or tool_calls in any chunk — an upstream
+          // that burns the whole generation budget and returns
+          // completion_tokens:0 with an HTTP 200. `anyContentFound` only
+          // flips true via `isKnownNonClaudeStreamPayload` detecting
+          // content/reasoning/tool_calls (`hasOpenAICompatibleStreamValue`),
+          // so a tool_calls-only stream already exits early via the
+          // `outcome === "content"` branch above and never reaches here —
+          // this branch only fires on genuinely empty completions.
+          if (openAi.hasChoicePayload && openAi.hasTerminalMarker && !anyContentFound) {
+            log.warn?.(
+              "COMBO",
+              "Streaming OpenAI-shape response reached finish_reason/[DONE] with no content, reasoning, or tool_calls — marking as invalid for combo failover"
+            );
+            return { valid: false, reason: "streaming openai terminated with empty completion" };
+          }
+
           // Incomplete lifecycle or non-Claude stream — replay all buffered
           // bytes. The reader is exhausted so the forwarding reader will
           // immediately signal done.
@@ -583,7 +656,18 @@ export async function validateResponseQuality(
   try {
     json = JSON.parse(text);
   } catch {
-    if (text.startsWith("data:") || text.startsWith("event:")) return { valid: true };
+    // An SSE stream body is expected for streamed upstreams. Besides `data:` and
+    // `event:` frames, the SSE spec also allows comment lines that begin with a
+    // colon (`:`), which providers use for keep-alives while the model is still
+    // generating — e.g. OpenRouter emits `: OPENROUTER PROCESSING` on slower /
+    // reasoning responses. A stream that opens with such a comment (or with
+    // leading whitespace/newlines) is still a valid stream, not malformed JSON,
+    // so trim and recognize the comment prefix before rejecting. Without this,
+    // otherwise-good streamed completions get failed as "not valid JSON".
+    const trimmed = text.trimStart();
+    if (trimmed.startsWith("data:") || trimmed.startsWith("event:") || trimmed.startsWith(":")) {
+      return { valid: true };
+    }
     return { valid: false, reason: "response is not valid JSON" };
   }
 
@@ -689,6 +773,11 @@ export async function validateResponseQuality(
   }
   const hasToolCalls = Array.isArray(toolCalls) && toolCalls.length > 0;
 
+  const specViolation = findToolCallSpecViolation(json);
+  if (specViolation) {
+    return { valid: false, reason: specViolation };
+  }
+
   if (!hasContent && !hasToolCalls) {
     return { valid: false, reason: "empty content and no tool_calls in response" };
   }
@@ -700,6 +789,24 @@ export async function validateResponseQuality(
   // tokens or falls back to a non-reasoning model.
   const contentIsEmpty = content === null || content === undefined || content === "";
   if (contentIsEmpty && hasReasoningContent && !hasToolCalls) {
+    // The 90%-of-completion-tokens ratio below is a proxy for "the request was
+    // truncated mid-reasoning" for providers that don't report finish_reason
+    // reliably. When finish_reason IS reported as "length" (or the Anthropic-shape
+    // "max_tokens"), that's a direct, unambiguous signal of truncation — trust it
+    // over the ratio instead of requiring reasoning to also clear 90%. A response
+    // truncated at, say, 60% reasoning still has zero usable content for the
+    // caller. This does not affect the deliberate-tiny-probe case (e.g.
+    // `max_tokens: 1` connectivity pings, see errorClassifier.ts's
+    // LEGIT_EMPTY_OPENAI_FINISH): those produce no reasoning_content at all, so
+    // hasReasoningContent is already false and this branch never runs for them.
+    const finishReason =
+      typeof firstChoice.finish_reason === "string" ? firstChoice.finish_reason : "";
+    if (finishReason === "length" || finishReason === "max_tokens") {
+      return {
+        valid: false,
+        reason: `reasoning truncated at token limit (finish_reason: ${finishReason}) — no content output`,
+      };
+    }
     const usage = json?.usage as Record<string, unknown> | undefined;
     if (usage) {
       const completionTokens = Number(usage.completion_tokens) || 0;

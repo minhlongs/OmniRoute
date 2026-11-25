@@ -11,6 +11,7 @@ import {
 } from "./transport";
 import { SafeOutboundFetchError } from "@/shared/network/safeOutboundFetch";
 import { normalizeSessionCookieHeader } from "@/lib/providers/webCookieAuth";
+import { normalizeGeminiCookieInput } from "@omniroute/open-sse/utils/geminiCookies.ts";
 import { buildJulesApiUrl } from "@/lib/cloudAgent/julesApi.ts";
 import {
   META_AI_ASBD_ID,
@@ -50,14 +51,14 @@ export async function validateMuseSparkWebProvider({ apiKey, providerSpecificDat
     if (response.status === 401 || response.status === 403) {
       return {
         valid: false,
-        error: "Invalid Meta AI session cookie — re-paste abra_sess from meta.ai",
+        error: "Invalid Meta AI session cookie — re-paste ecto_1_sess from meta.ai",
       };
     }
 
     if (/authentication required to send messages|login is required|sign in/i.test(responseText)) {
       return {
         valid: false,
-        error: "Invalid Meta AI session cookie — re-paste abra_sess from meta.ai",
+        error: "Invalid Meta AI session cookie — re-paste ecto_1_sess from meta.ai",
       };
     }
 
@@ -65,7 +66,10 @@ export async function validateMuseSparkWebProvider({ apiKey, providerSpecificDat
       response.status === 429 ||
       /limit exceeded|rate limit|too many requests/i.test(responseText)
     ) {
-      return { valid: true, error: null };
+      return {
+        valid: false,
+        error: "Meta AI rate limited (429) — wait before retrying",
+      };
     }
 
     if (response.ok) {
@@ -186,7 +190,10 @@ export async function validateClaudeWebProvider({ apiKey, providerSpecificData =
     }
 
     if (response.status === 429) {
-      return { valid: true, error: null };
+      return {
+        valid: false,
+        error: "Claude Web API rate limited (429) — wait before retrying",
+      };
     }
 
     if (response.status >= 500) {
@@ -207,11 +214,8 @@ export async function validateGeminiWebProvider({ apiKey, providerSpecificData =
       return { valid: false, error: "Paste your __Secure-1PSID cookie from gemini.google.com" };
     }
 
-    // Accept full cookie blob or bare value
-    let cookieHeader = raw;
-    if (!raw.includes("=")) {
-      cookieHeader = `__Secure-1PSID=${raw}`;
-    }
+    // Accept full cookie blob, bare value, or browser-export JSON.
+    const cookieHeader = normalizeGeminiCookieInput(raw);
 
     const response = await validationRead("https://gemini.google.com/app", {
       headers: applyCustomUserAgent(
@@ -248,11 +252,33 @@ export async function validateGeminiWebProvider({ apiKey, providerSpecificData =
     // session looks like here, so treat it as success. A redirect to a private/internal
     // host is a genuine SSRF signal and must stay invalid — isSecurityBlockError()
     // already makes that distinction.
+    //
+    // #9407: EXPIRED gemini sessions redirect to accounts.google.com/ServiceLogin,
+    // which is a PUBLIC redirect (not SSRF) but represents a dead session. Inspect
+    // the redirect target to distinguish between:
+    //   - accounts.google.com/ServiceLogin — expired session → valid:false
+    //   - other accounts.google.com paths — ambiguous, warn but treat as valid
+    //   - non-Google redirects (e.g. gemini.google.com redirect loop) — valid
     if (
       error instanceof SafeOutboundFetchError &&
       error.code === "REDIRECT_BLOCKED" &&
       !isSecurityBlockError(error)
     ) {
+      const location = error.location ?? "";
+      if (/accounts\.google\.com\/.*ServiceLogin/i.test(location)) {
+        return {
+          valid: false,
+          error:
+            "Session expired — re-paste __Secure-1PSID from gemini.google.com DevTools → Cookies",
+        };
+      }
+      if (/accounts\.google\.com/i.test(location)) {
+        return {
+          valid: true,
+          error: null,
+          warning: "Cookie accepted. Full verification requires browser test on first chat.",
+        };
+      }
       return { valid: true, error: null };
     }
     return toValidationErrorResult(error);
@@ -266,7 +292,8 @@ export async function validateCopilotWebProvider({ apiKey, providerSpecificData 
     if (!raw) {
       return {
         valid: false,
-        error: "Paste your access_token from copilot.microsoft.com DevTools → Cookies",
+        error:
+          "Paste your access_token from an authenticated copilot.microsoft.com request (DevTools → Network → Authorization)",
       };
     }
 
@@ -298,7 +325,7 @@ export async function validateCopilotWebProvider({ apiKey, providerSpecificData 
       return {
         valid: false,
         error:
-          "Invalid or expired access_token — re-paste from copilot.microsoft.com DevTools → Cookies",
+          "Invalid or expired access_token — capture a fresh Authorization bearer token from copilot.microsoft.com DevTools → Network",
       };
     }
 
@@ -313,7 +340,10 @@ export async function validateCopilotWebProvider({ apiKey, providerSpecificData 
   }
 }
 
-export function extractM365CredentialParts(raw: string, providerSpecificData: Record<string, unknown>) {
+export function extractM365CredentialParts(
+  raw: string,
+  providerSpecificData: Record<string, unknown>
+) {
   const text = raw.trim();
   const parts: Record<string, string> = {};
 
@@ -332,9 +362,10 @@ export function extractM365CredentialParts(raw: string, providerSpecificData: Re
   if (/^wss:\/\//i.test(text)) {
     try {
       const url = new URL(text);
-      const hostOk = /^(?:[\w-]+\.)*(?:m365\.cloud\.microsoft|copilot\.microsoft\.com|substrate\.office\.com)$/i.test(
-        url.hostname
-      );
+      const hostOk =
+        /^(?:[\w-]+\.)*(?:m365\.cloud\.microsoft|copilot\.microsoft\.com|substrate\.office\.com)$/i.test(
+          url.hostname
+        );
       if (hostOk && url.pathname.startsWith("/m365Copilot/Chathub/")) {
         parts.access_token ||= url.searchParams.get("access_token") || "";
         parts.chathubPath ||= decodeURIComponent(
@@ -353,7 +384,9 @@ export function extractM365CredentialParts(raw: string, providerSpecificData: Re
       (typeof providerSpecificData.access_token === "string"
         ? providerSpecificData.access_token
         : "") ||
-      (typeof providerSpecificData.accessToken === "string" ? providerSpecificData.accessToken : ""),
+      (typeof providerSpecificData.accessToken === "string"
+        ? providerSpecificData.accessToken
+        : ""),
     chathubPath:
       parts.chathubPath ||
       parts.userTenant ||
@@ -365,10 +398,7 @@ export function extractM365CredentialParts(raw: string, providerSpecificData: Re
 }
 
 // ── Microsoft 365 Copilot Web token validator ──
-export async function validateCopilotM365WebProvider({
-  apiKey,
-  providerSpecificData = {},
-}: any) {
+export async function validateCopilotM365WebProvider({ apiKey, providerSpecificData = {} }: any) {
   const { accessToken, chathubPath } = extractM365CredentialParts(
     String(apiKey || ""),
     providerSpecificData
@@ -640,6 +670,37 @@ export async function validateInnerAiProvider({ apiKey, providerSpecificData = {
         valid: false,
         error:
           "Token does not look like an Inner.ai session token — re-paste from DevTools → Cookies → .innerai.com",
+      };
+    }
+
+    return { valid: true, error: null };
+  } catch (error: any) {
+    return toValidationErrorResult(error);
+  }
+}
+
+export async function validateTinyCmsWebProvider({ apiKey, providerSpecificData = {} }: any) {
+  try {
+    const raw = typeof apiKey === "string" ? apiKey.trim() : "";
+    if (!raw || !raw.startsWith("R")) {
+      return { valid: false, error: "TinyCMS UUID must start with 'R'" };
+    }
+
+    const response = await validationRead("https://gov.freegpt.win/api/challenge", {
+      headers: applyCustomUserAgent(
+        {
+          uuid: raw,
+          "x-origin": "https://gov.freegpt.win",
+          Accept: "application/json",
+        },
+        providerSpecificData
+      ),
+    });
+
+    if (!response.ok) {
+      return {
+        valid: false,
+        error: `TinyCMS UUID validation status: ${response.status} (invalid/expired UUID)`,
       };
     }
 

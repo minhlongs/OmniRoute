@@ -6,7 +6,7 @@ lastUpdated: 2026-06-28
 
 # OmniRoute — 儀表板功能總覽
 
-🌐 **主要 README 翻譯：** 🇺🇸 [English](../README.md) | 🇧🇷 [Português (Brasil)](../i18n/pt-BR/README.md) | 🇪🇸 [Español](../i18n/es/README.md) | 🇫🇷 [Français](../i18n/fr/README.md) | 🇮🇹 [Italiano](../i18n/it/README.md) | 🇷🇺 [Русский](../i18n/ru/README.md) | 🇨🇳 [中文 (简体)](../i18n/zh-CN/README.md) | 🇩🇪 [Deutsch](../i18n/de/README.md) | 🇮🇳 [हिन्दी](../i18n/in/README.md) | 🇹🇭 [ไทย](../i18n/th/README.md) | 🇺🇦 [Українська](../i18n/uk-UA/README.md) | 🇸🇦 [العربية](../i18n/ar/README.md) | 🇯🇵 [日本語](../i18n/ja/README.md) | 🇻🇳 [Tiếng Việt](../i18n/vi/README.md) | 🇧🇬 [Български](../i18n/bg/README.md) | 🇩🇰 [Dansk](../i18n/da/README.md) | 🇫🇮 [Suomi](../i18n/fi/README.md) | 🇮🇱 [עברית](../i18n/he/README.md) | 🇭🇺 [Magyar](../i18n/hu/README.md) | 🇮🇩 [Bahasa Indonesia](../i18n/id/README.md) | 🇰🇷 [한국어](../i18n/ko/README.md) | 🇲🇾 [Bahasa Melayu](../i18n/ms/README.md) | 🇳🇱 [Nederlands](../i18n/nl/README.md) | 🇳🇴 [Norsk](../i18n/no/README.md) | 🇵🇹 [Português (Portugal)](../i18n/pt/README.md) | 🇷🇴 [Română](../i18n/ro/README.md) | 🇵🇱 [Polski](../i18n/pl/README.md) | 🇸🇰 [Slovenčina](../i18n/sk/README.md) | 🇸🇪 [Svenska](../i18n/sv/README.md) | 🇵🇭 [Filipino](../i18n/phi/README.md) | 🇨🇿 [Čeština](../i18n/cs/README.md)
+🌐 **Languages:** 🇺🇸 [English](../../../../guides/FEATURES.md) · 🇸🇦 [ar](../../../ar/docs/guides/FEATURES.md) · 🇦🇿 [az](../../../az/docs/guides/FEATURES.md) · 🇧🇬 [bg](../../../bg/docs/guides/FEATURES.md) · 🇧🇩 [bn](../../../bn/docs/guides/FEATURES.md) · 🇨🇿 [cs](../../../cs/docs/guides/FEATURES.md) · 🇩🇰 [da](../../../da/docs/guides/FEATURES.md) · 🇩🇪 [de](../../../de/docs/guides/FEATURES.md) · 🇪🇸 [es](../../../es/docs/guides/FEATURES.md) · 🇮🇷 [fa](../../../fa/docs/guides/FEATURES.md) · 🇫🇮 [fi](../../../fi/docs/guides/FEATURES.md) · 🇫🇷 [fr](../../../fr/docs/guides/FEATURES.md) · 🇮🇳 [gu](../../../gu/docs/guides/FEATURES.md) · 🇮🇱 [he](../../../he/docs/guides/FEATURES.md) · 🇮🇳 [hi](../../../hi/docs/guides/FEATURES.md) · 🇭🇺 [hu](../../../hu/docs/guides/FEATURES.md) · 🇮🇩 [id](../../../id/docs/guides/FEATURES.md) · 🇮🇹 [it](../../../it/docs/guides/FEATURES.md) · 🇯🇵 [ja](../../../ja/docs/guides/FEATURES.md) · 🇰🇷 [ko](../../../ko/docs/guides/FEATURES.md) · 🇮🇳 [mr](../../../mr/docs/guides/FEATURES.md) · 🇲🇾 [ms](../../../ms/docs/guides/FEATURES.md) · 🇳🇱 [nl](../../../nl/docs/guides/FEATURES.md) · 🇳🇴 [no](../../../no/docs/guides/FEATURES.md) · 🇵🇭 [phi](../../../phi/docs/guides/FEATURES.md) · 🇵🇱 [pl](../../../pl/docs/guides/FEATURES.md) · 🇵🇹 [pt](../../../pt/docs/guides/FEATURES.md) · 🇧🇷 [pt-BR](../../../pt-BR/docs/guides/FEATURES.md) · 🇷🇴 [ro](../../../ro/docs/guides/FEATURES.md) · 🇷🇺 [ru](../../../ru/docs/guides/FEATURES.md) · 🇸🇰 [sk](../../../sk/docs/guides/FEATURES.md) · 🇸🇪 [sv](../../../sv/docs/guides/FEATURES.md) · 🇰🇪 [sw](../../../sw/docs/guides/FEATURES.md) · 🇮🇳 [ta](../../../ta/docs/guides/FEATURES.md) · 🇮🇳 [te](../../../te/docs/guides/FEATURES.md) · 🇹🇭 [th](../../../th/docs/guides/FEATURES.md) · 🇹🇷 [tr](../../../tr/docs/guides/FEATURES.md) · 🇺🇦 [uk-UA](../../../uk-UA/docs/guides/FEATURES.md) · 🇵🇰 [ur](../../../ur/docs/guides/FEATURES.md) · 🇻🇳 [vi](../../../vi/docs/guides/FEATURES.md) · 🇨🇳 [zh-CN](../../../zh-CN/docs/guides/FEATURES.md)
 
 OmniRoute 儀表板各區塊的視覺化導覽。
 
@@ -18,11 +18,11 @@ OmniRoute 儀表板各區塊的視覺化導覽。
 
 v3.7.x → v3.8.0 版本週期新增了零設定自動路由、新提供者、OAuth 流程、更深的抗災能力以及更豐富的 CLI 體驗。以下為重點功能——完整細節請參閱稍後章節及連結的規格文件。
 
-- 🤖 **Auto Combo / 零設定自動路由** — 使用前綴 `auto/coding`、`auto/fast`、`auto/cheap`、`auto/offline`、`auto/smart`、`auto/lkgp`。由 9 因子評分引擎和 4 個精選**模式包**（快速出貨、節省成本、品質優先、離線友善）驅動
+- 🤖 **Auto Combo / 零設定自動路由** — 使用前綴 `auto/coding`、`auto/fast`、`auto/cheap`、`auto/offline`、`auto/smart`、`auto/lkgp`。由 13 因子評分引擎和 4 個精選**模式包**（快速出貨、節省成本、品質優先、離線友善）驅動
 - 🆕 **Command Code 提供者**（#2199）— 一級支援，含模型目錄及配額追蹤
 - 🆕 **Z.AI 提供者** — 新增免費方案提供者，附配額標籤
 - 🎬 **KIE 媒體擴展** — 擴充目錄，納入影片生成模型
-- 🔐 **Windsurf + Devin CLI OAuth 流程**（#2168）— 端到端瀏覽器登入
+- 🔐 **Devin 驗證** — Desktop 匯入現有的 Devin API 金鑰；CLI 使用本機 `devin auth login` 憑證
 - 🆓 **8 個新的免費提供者** — LLM7、Lepton、UncloseAI、BazaarLink、Completions、Enally、FreeTheAi、Command Code
 - 🎯 **清單感知分層路由 W1–W4** — 提供者清單驅動加權層級選擇
 - 🎨 **Cursor 完整 OpenAI 相容性** — 工具呼叫、串流、階段管理端到端
@@ -61,7 +61,7 @@ OpenRouter 連線可在「進階設定」中儲存各連線的 `preset`。設定
 
 ## 🎨 Combo
 
-使用 17 種策略建立模型路由組合：優先、加權、先填滿、輪詢、p2c（二選一）、隨機、最少使用、成本最佳化、重設感知、重設視窗、餘裕空間、嚴格隨機、自動、lkgp（最後已知良好提供者）、情境最佳化、情境轉接，以及**融合**（並行分發給多個模型，再由評判模型合成一個答案）。每個組合可串聯多個模型並自動備援，內含快速範本與就緒檢查。
+使用 19 種公開策略建立模型路由組合：優先、加權、輪詢、情境轉接、先填滿、p2c（二選一）、隨機、最少使用、成本最佳化、重設感知、重設視窗、餘裕空間、嚴格隨機、自動、lkgp（最後已知良好提供者）、情境最佳化、快取最佳化、**融合**（並行分發給多個模型，再由評判模型合成一個答案）以及 **pipeline**。每個組合可串聯多個模型並自動備援，內含快速範本與就緒檢查。
 
 近期 Combo 改善：
 
@@ -142,7 +142,7 @@ OpenRouter 連線可在「進階設定」中儲存各連線的 `preset`。設定
 - **協定徽章** — stdio、HTTP 等
 - **自訂代理** — 透過表單註冊任何 CLI 工具（名稱、二進位檔、版本指令、啟動參數）
 - **CLI 指紋比對** — 各提供者開關，用於比對原生 CLI 請求特徵，降低被封風險同時保留代理 IP
-- **OAuth 支援代理** — Windsurf 與 Devin CLI 現使用瀏覽器 OAuth 流程進行驗證（v3.8.0+）
+- **本機 Devin 驗證** — Devin CLI 使用 `devin auth login`；不需要瀏覽器 OAuth 流程
 
 ---
 

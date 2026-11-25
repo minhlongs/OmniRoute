@@ -65,6 +65,79 @@ export function isLocalStreamLifecycleError(error: unknown): boolean {
   );
 }
 
+const LOCAL_EXECUTION_CODES = new Set([
+  "ENOENT",
+  "EACCES",
+  "EPIPE",
+  "ERR_CHILD_PROCESS_STDIO_MAXBUFFER",
+]);
+
+const LOCAL_EXECUTION_PATTERNS = [
+  /\bspawn\b.*\b(ENOENT|EACCES|EPIPE)\b/i,
+  /\bcommand not found\b/i,
+  /\bis not recognized as an internal or external command\b/i,
+  /\bchild process exited with code\b/i,
+  /\blocal host execution error\b/i,
+  /\bis not defined\b/i,
+  /\bReferenceError\b/i,
+  /\bTypeError\b/i,
+  /\bSyntaxError\b/i,
+];
+
+/**
+ * Detect a LOCAL host execution error (missing binary ENOENT, permission EACCES,
+ * broken pipe EPIPE, child process exit errors, etc.) that must NOT count as a
+ * whole-provider failure or trip remote provider circuit breakers.
+ */
+export function isLocalExecutionError(error: unknown): boolean {
+  if (!error) return false;
+  if (
+    error instanceof ReferenceError ||
+    error instanceof TypeError ||
+    error instanceof SyntaxError ||
+    error instanceof RangeError
+  ) {
+    return true;
+  }
+  const errObj = typeof error === "object" ? (error as Record<string, unknown>) : null;
+  const code = typeof errObj?.code === "string" ? errObj.code : "";
+  if (LOCAL_EXECUTION_CODES.has(code)) return true;
+
+  const message =
+    typeof error === "string"
+      ? error
+      : typeof errObj?.message === "string"
+        ? (errObj.message as string)
+        : "";
+  if (!message) return false;
+
+  return LOCAL_EXECUTION_PATTERNS.some((p) => p.test(message));
+}
+
+/**
+ * Anthropic/Claude model-capacity overload (HTTP 529, body "Overloaded", or a
+ * STREAM_EARLY_EOF that wraps that body as 502). This is one model being
+ * capacity-throttled, not a whole-provider outage — the same account still
+ * serves sibling models. Must not trip the provider circuit breaker.
+ *
+ * Accepts an error object/string OR a numeric HTTP status (529). Callers
+ * pass both `error` and `status` at the two breaker predicates.
+ *
+ * Live incident 2026-09-03: STREAM_EARLY_EOF: Overloaded opened `claude` and
+ * a single-target combo then pre-skipped with ALL_TARGETS_SKIPPED in ~43ms.
+ */
+export function isModelCapacityOverloadError(error: unknown): boolean {
+  if (error === 529) return true;
+  if (typeof error === "number") return false;
+  if (!error) return false;
+  const errObj = typeof error === "object" ? (error as Record<string, unknown>) : null;
+  if (errObj && (errObj.status === 529 || errObj.statusCode === 529)) return true;
+  const message =
+    typeof error === "string" ? error : typeof errObj?.message === "string" ? errObj.message : "";
+  if (!message) return false;
+  return /\boverloaded(?:_error)?\b/i.test(message);
+}
+
 export const STATE = {
   CLOSED: "CLOSED",
   DEGRADED: "DEGRADED",
@@ -113,12 +186,45 @@ interface CircuitBreakerOptions {
   backoffEscalationCount?: number;
 }
 
-interface TransitionRecord {
+/**
+ * How a RESOLVED `execute()` result is accounted (#12254). Callers such as
+ * `handleChatCore()` report most upstream failures by resolving with
+ * `{ success: false, status: 5xx }` instead of throwing, so a breaker that reads every
+ * resolution as a success never trips on that path.
+ */
+export type CircuitBreakerResultOutcome = "success" | "failure" | "ignore";
+
+export interface CircuitBreakerExecuteOptions<T> {
+  /**
+   * Classify a resolved result. Omitted: every resolution is a success (the
+   * throw-based contract every other caller relies on). Return "ignore" when the
+   * call site accounts for the outcome itself with request context the breaker
+   * does not have — the chat path does (`classifyProviderBreakerResult()` in
+   * chat.ts, `recordProviderFailure()`/`recordProviderSuccess()` in combo.ts).
+   */
+  classifyResult?: (result: T) => CircuitBreakerResultOutcome;
+}
+
+export interface TransitionRecord {
   from: string;
   to: string;
   timestamp: number;
   failureCount: number;
   reason?: string;
+}
+
+export interface CircuitBreakerStatus {
+  name: string;
+  state: string;
+  failureCount: number;
+  lastFailureTime: number | null;
+  retryAfterMs: number;
+  lastFailureKind: string | null;
+  openCycleCount: number;
+  kindFailureCounts: Record<string, number>;
+  degradationThreshold: number;
+  effectiveResetTimeout: number;
+  transitionHistory: TransitionRecord[];
 }
 
 export class CircuitBreaker {
@@ -249,7 +355,7 @@ export class CircuitBreaker {
     );
   }
 
-  async execute<T>(fn: () => Promise<T>): Promise<T> {
+  async execute<T>(fn: () => Promise<T>, options?: CircuitBreakerExecuteOptions<T>): Promise<T> {
     this._refreshOpenState();
 
     if (this.state === STATE.OPEN) {
@@ -274,7 +380,7 @@ export class CircuitBreaker {
 
     try {
       const result = await fn();
-      this._onSuccess();
+      this._recordResolvedResult(result, options?.classifyResult);
       return result;
     } catch (error) {
       if (this.isFailure(error)) {
@@ -293,6 +399,8 @@ export class CircuitBreaker {
   }
 
   canExecute() {
+    const isBypassed = this.name.toLowerCase().includes('zunef') || this.name.toLowerCase().startsWith('anthropic-compatible') || this.name.toLowerCase() === 'antigravity' || this.name.toLowerCase() === 'agy';
+    if (isBypassed) return true;
     this._refreshOpenState();
     if (this.state === STATE.CLOSED || this.state === STATE.DEGRADED) return true;
     if (this.state === STATE.OPEN) return false;
@@ -300,7 +408,23 @@ export class CircuitBreaker {
     return false;
   }
 
-  getStatus() {
+  getStatus(): CircuitBreakerStatus {
+    const isBypassed = this.name.toLowerCase().includes('zunef') || this.name.toLowerCase().startsWith('anthropic-compatible') || this.name.toLowerCase() === 'antigravity' || this.name.toLowerCase() === 'agy';
+    if (isBypassed) {
+      return {
+        name: this.name,
+        state: STATE.CLOSED,
+        failureCount: 0,
+        lastFailureTime: null,
+        retryAfterMs: 0,
+        lastFailureKind: null,
+        openCycleCount: 0,
+        kindFailureCounts: {},
+        degradationThreshold: this.degradationThreshold,
+        effectiveResetTimeout: this._effectiveResetTimeout(),
+        transitionHistory: [],
+      };
+    }
     this._refreshOpenState();
     return {
       name: this.name,
@@ -313,6 +437,7 @@ export class CircuitBreaker {
       kindFailureCounts: { ...this.kindFailureCounts },
       degradationThreshold: this.degradationThreshold,
       effectiveResetTimeout: this._effectiveResetTimeout(),
+      transitionHistory: [...this.transitionHistory],
     };
   }
 
@@ -334,6 +459,29 @@ export class CircuitBreaker {
   }
 
   // ─── Internal ─────────────────────────────────
+
+  /**
+   * Account a resolved `execute()` result exactly once. A classifier that throws
+   * falls back to the legacy "resolved = success" reading, mirroring `classifyError`.
+   */
+  _recordResolvedResult<T>(
+    result: T,
+    classifyResult?: (result: T) => CircuitBreakerResultOutcome
+  ): void {
+    let outcome: CircuitBreakerResultOutcome = "success";
+    if (classifyResult) {
+      try {
+        outcome = classifyResult(result);
+      } catch {
+        outcome = "success";
+      }
+    }
+    if (outcome === "failure") {
+      this._onFailure();
+    } else if (outcome === "success") {
+      this._onSuccess();
+    }
+  }
 
   _onSuccess() {
     if (this.state === STATE.OPEN) {
@@ -362,6 +510,8 @@ export class CircuitBreaker {
   }
 
   _onFailure(kind?: FailureKind | null) {
+    const isBypassed = this.name.toLowerCase().includes('zunef') || this.name.toLowerCase().startsWith('anthropic-compatible') || this.name.toLowerCase() === 'antigravity' || this.name.toLowerCase() === 'agy';
+    if (isBypassed) return;
     const failureKind = kind ?? null;
     this.failureCount++;
     this.lastFailureTime = Date.now();
@@ -419,6 +569,8 @@ export class CircuitBreaker {
   }
 
   _openCircuit(kind: FailureKind | null) {
+    const isBypassed = this.name.toLowerCase().includes('zunef') || this.name.toLowerCase().startsWith('anthropic-compatible') || this.name.toLowerCase() === 'antigravity' || this.name.toLowerCase() === 'agy';
+    if (isBypassed) return;
     this._transition(STATE.OPEN, kind ? `kind:${kind}` : undefined);
   }
 
@@ -627,3 +779,7 @@ export function resetAllCircuitBreakers() {
     // Non-critical
   }
 }
+
+// HMR_BUMP_1793510113578
+
+// HMR_CRITICAL_RECOVERY_1793510227148

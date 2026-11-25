@@ -4,6 +4,7 @@ import {
   buildGeminiThoughtSignatureKey,
   storeGeminiThoughtSignature,
 } from "../../services/geminiThoughtSignatureStore.ts";
+import { caseInsensitiveToolNameLookup } from "../helpers/toolCallHelper.ts";
 import {
   parseTextualToolCallCandidate,
   containsTextualToolCallMarker,
@@ -13,6 +14,7 @@ import {
   isMalformedToolCallFinishReason,
 } from "../../utils/finishReason.ts";
 import { stripAnsiCodes } from "../../utils/streamHelpers.ts";
+import { stripObfuscationZeroWidth } from "../../utils/zeroWidth.ts";
 
 type GeminiToOpenAIState = {
   functionIndex: number;
@@ -256,7 +258,7 @@ function emitFunctionCallPart(
   results: Array<Record<string, unknown>>
 ) {
   const rawToolName = part.functionCall.name;
-  const fcName = state.toolNameMap?.get(rawToolName) || rawToolName;
+  const fcName = caseInsensitiveToolNameLookup(rawToolName, state.toolNameMap) ?? rawToolName;
   const fcArgs = normalizeToolCallArgs(part.functionCall.args || {});
   const toolCallIndex = state.functionIndex++;
   const toolCall = {
@@ -482,7 +484,7 @@ export function geminiToOpenAIResponse(chunk, state) {
         let candidate = parseTextualToolCallCandidate(accumulated);
 
         if (candidate) {
-          accumulated = accumulated.replace(/[\u200B-\u200D\uFEFF]/g, "");
+          accumulated = stripObfuscationZeroWidth(accumulated);
           let toolCallIndex = accumulated.lastIndexOf("(empty)[Tool call:");
           if (toolCallIndex < 0) {
             toolCallIndex = accumulated.lastIndexOf("[Tool call:");

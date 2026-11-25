@@ -5,7 +5,7 @@ import { ANTHROPIC_VERSION_HEADER } from "../config/anthropicHeaders.ts";
 import {
   CLAUDE_CODE_COMPATIBLE_STAINLESS_PACKAGE_VERSION,
   CLAUDE_CODE_COMPATIBLE_STAINLESS_RUNTIME_VERSION,
-  CLAUDE_CODE_COMPATIBLE_USER_AGENT,
+  getClaudeCodeUserAgent,
 } from "../config/claudeCodeCompatibleIdentity.ts";
 import { supportsClaudeMaxEffort, supportsXHighEffort } from "../config/providerModels.ts";
 import { prepareClaudeRequest } from "../translator/helpers/claudeHelper.ts";
@@ -55,14 +55,6 @@ const CLAUDE_CODE_COMPATIBLE_DEFAULT_SYSTEM_BLOCKS = [
     type: "text",
     text: "You are a Claude agent, built on Anthropic's Claude Agent SDK.",
   },
-];
-const CONTEXT_1M_SUPPORTED_MODELS = [
-  "claude-fable-5",
-  "claude-sonnet-5",
-  "claude-sonnet-4-6",
-  "claude-opus-4-8",
-  "claude-opus-4-7",
-  "claude-opus-4-6",
 ];
 export const CLAUDE_CODE_COMPATIBLE_STAINLESS_TIMEOUT_SECONDS = getStainlessTimeoutSeconds(
   process.env
@@ -168,16 +160,9 @@ export function appendAnthropicBetaHeader(
   }
 }
 
-export function modelSupportsContext1mBeta(model: string | null | undefined): boolean {
-  const normalizedModel = String(model || "")
-    .trim()
-    .toLowerCase()
-    .replace(/-\d{8}$/, "");
-
-  return CONTEXT_1M_SUPPORTED_MODELS.some(
-    (supported) => normalizedModel === supported || normalizedModel.startsWith(`${supported}-`)
-  );
-}
+// Re-exported from the shared context1m module so existing importers of this
+// helper (base.ts) keep working; the eligibility list now has one source of truth.
+export { modelSupportsContext1mBeta } from "../config/context1m.ts";
 
 export function buildClaudeCodeCompatibleHeaders(
   apiKey: string,
@@ -198,7 +183,7 @@ export function buildClaudeCodeCompatibleHeaders(
     }),
     "anthropic-dangerous-direct-browser-access": "true",
     "x-app": "cli",
-    "User-Agent": CLAUDE_CODE_COMPATIBLE_USER_AGENT,
+    "User-Agent": getClaudeCodeUserAgent("sdk-cli"),
     "X-Stainless-Retry-Count": "0",
     "X-Stainless-Timeout": String(CLAUDE_CODE_COMPATIBLE_STAINLESS_TIMEOUT_SECONDS),
     "X-Stainless-Lang": "js",
