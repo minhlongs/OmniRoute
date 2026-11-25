@@ -29,6 +29,7 @@ export function isRelayType(type: string | undefined | null): boolean {
 }
 const DEFAULT_PROXY_DISPATCHER_CONNECTIONS = 32;
 const MAX_PROXY_DISPATCHER_CONNECTIONS = 256;
+const DEFAULT_DIRECT_H2_POOL_SIZE = 4;
 
 type SocksDispatcherOptions = {
   type: number;
@@ -155,15 +156,86 @@ function getDefaultDispatcherOptions(env: Record<string, string | undefined> = p
   };
 }
 
-function createRoundRobinDirectDispatcher(connectionLimit: number): Dispatcher {
+/**
+ * Number of independent HTTP/2 Agent pools backing direct egress (default 4).
+ * Consolidating from 32 single-use Agents down to 4 warm multiplexed pools keeps
+ * full concurrency headroom while slashing cold TLS/H2 handshakes.
+ */
+export function getDirectH2PoolSize(
+  env: Record<string, string | undefined> = process.env
+): number {
+  const raw = env.OMNIROUTE_DIRECT_H2_POOL_SIZE;
+  if (raw == null || raw.trim() === "") return DEFAULT_DIRECT_H2_POOL_SIZE;
+
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed) || parsed < 1) {
+    console.warn(
+      `[ProxyDispatcher] Invalid OMNIROUTE_DIRECT_H2_POOL_SIZE="${raw}". Using default ${DEFAULT_DIRECT_H2_POOL_SIZE}.`
+    );
+    return DEFAULT_DIRECT_H2_POOL_SIZE;
+  }
+
+  return Math.min(Math.floor(parsed), MAX_PROXY_DISPATCHER_CONNECTIONS);
+}
+
+function isDirectH2Enabled(
+  env: Record<string, string | undefined> = process.env
+): boolean {
+  const raw = env.OMNIROUTE_DIRECT_H2;
+  if (raw == null || raw.trim() === "") return true;
+  const normalized = raw.trim().toLowerCase();
+  return normalized !== "0" && normalized !== "false" && normalized !== "off" && normalized !== "no";
+}
+
+function getDirectDispatcherPoolMeta(
+  connectionLimit: number,
+  env: Record<string, string | undefined> = process.env
+) {
+  const effectiveLimit =
+    Number.isFinite(connectionLimit) && connectionLimit >= 1
+      ? Math.min(Math.floor(connectionLimit), MAX_PROXY_DISPATCHER_CONNECTIONS)
+      : DEFAULT_PROXY_DISPATCHER_CONNECTIONS;
+  const poolSize = Math.max(1, Math.min(effectiveLimit, getDirectH2PoolSize(env)));
+  const connectionsPerAgent = Math.max(1, Math.floor(effectiveLimit / poolSize));
+  return {
+    poolSize,
+    connectionsPerAgent,
+    keepAliveTimeout: 60_000,
+    keepAliveMaxTimeout: 120_000,
+    keepAliveTimeoutThreshold: 1000,
+    allowH2: isDirectH2Enabled(env),
+    pipelining: 1,
+  };
+}
+
+function createRoundRobinDirectDispatcher(
+  connectionLimit: number,
+  env: Record<string, string | undefined> = process.env
+): Dispatcher {
   const baseOptions = getDispatcherOptions();
+  const meta = getDirectDispatcherPoolMeta(connectionLimit, env);
   const perAgentOptions = {
     ...baseOptions,
-    connections: 1,
-    pipelining: 0,
+    connections: meta.connectionsPerAgent,
+    pipelining: meta.pipelining,
+    allowH2: meta.allowH2,
+    keepAliveTimeout: meta.keepAliveTimeout,
+    keepAliveMaxTimeout: meta.keepAliveMaxTimeout,
+    keepAliveTimeoutThreshold: meta.keepAliveTimeoutThreshold,
   };
-  const dispatchers = Array.from({ length: connectionLimit }, () => new Agent(perAgentOptions));
+  const dispatchers = Array.from({ length: meta.poolSize }, () => new Agent(perAgentOptions));
   return createRoundRobinDispatcher(dispatchers);
+}
+
+/** Test-only: exposes consolidated H2 direct dispatcher pool metadata. */
+export function __getDirectDispatcherPoolMetaForTest(
+  env: Record<string, string | undefined> = process.env,
+  connectionLimit?: number
+) {
+  return getDirectDispatcherPoolMeta(
+    connectionLimit ?? getDefaultDispatcherConnectionLimit(env),
+    env
+  );
 }
 
 export function getDefaultDispatcher(): Dispatcher {
@@ -193,6 +265,7 @@ export function getRetryDispatcher(): Dispatcher {
   if (!dispatcher) {
     dispatcher = new Agent({
       ...getDispatcherOptions(),
+      connections: 1,
       keepAliveTimeout: 1,
       keepAliveMaxTimeout: 1,
       pipelining: 0,

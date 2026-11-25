@@ -1,8 +1,9 @@
 import { getDbInstance } from "../../src/lib/db/core.ts";
 
-const MAX_SIGNATURES = 1000;
-const MAX_PERSISTED_SIGNATURES = 2_000;
-const MEMORY_TTL_MS = 1000 * 60 * 60;
+const MAX_SIGNATURES = 10_000;
+const MAX_PERSISTED_SIGNATURES = 20_000;
+const MEMORY_TTL_MS = 1000 * 60 * 60 * 24;
+const PRUNE_INTERVAL_MS = 60_000;
 const PERSISTED_TTL_MS = 1000 * 60 * 60 * 24 * 30;
 const NAMESPACE = "gemini_thought_signatures";
 
@@ -20,6 +21,7 @@ type PersistedEntry = Entry & {
 const signatures = new Map<string, Entry>();
 let signatureCacheMode: SignatureCacheMode = "enabled";
 let persistedPruneCounter = 0;
+let lastPruneAt = Number.NEGATIVE_INFINITY;
 const MAX_LOGGED_ERRORS = 50;
 const loggedPersistenceErrors = new Set<string>();
 
@@ -47,8 +49,11 @@ export function buildGeminiThoughtSignatureKey(namespace: unknown, toolCallId: u
   return toolCallId;
 }
 
-function pruneExpired() {
-  const now = Date.now();
+function pruneExpired(force = false, now = Date.now()) {
+  if (!force && signatures.size <= MAX_SIGNATURES && now - lastPruneAt < PRUNE_INTERVAL_MS) {
+    return;
+  }
+  lastPruneAt = now;
   for (const [key, value] of signatures.entries()) {
     if (value.expiresAt <= now) {
       signatures.delete(key);
@@ -93,7 +98,7 @@ function parsePersistedEntry(value: string, now = Date.now()) {
 
 function maybePrunePersistedSignatures(db: ReturnType<typeof getDbInstance>) {
   persistedPruneCounter += 1;
-  if (persistedPruneCounter % 100 !== 0) return;
+  if (persistedPruneCounter % 500 !== 0) return;
 
   const rows = db
     .prepare("SELECT key, value FROM key_value WHERE namespace = ?")
@@ -132,11 +137,13 @@ export function storeGeminiThoughtSignature(toolCallId: unknown, signature: unkn
   if (typeof signature !== "string" || !signature) return;
 
   const now = Date.now();
-  pruneExpired();
+  // Re-insert so existing keys move to the MRU tail before bounded eviction runs.
+  signatures.delete(toolCallId);
   signatures.set(toolCallId, {
     signature,
     expiresAt: now + MEMORY_TTL_MS,
   });
+  pruneExpired(false, now);
 
   try {
     const db = getDbInstance();
@@ -154,9 +161,20 @@ export function storeGeminiThoughtSignature(toolCallId: unknown, signature: unkn
 export function getGeminiThoughtSignature(toolCallId: unknown) {
   if (typeof toolCallId !== "string" || !toolCallId) return null;
 
-  pruneExpired();
+  const now = Date.now();
   const entry = signatures.get(toolCallId);
-  if (entry) return entry.signature;
+  if (entry) {
+    if (entry.expiresAt > now) {
+      // Promote active tool_use signatures to MRU so long sessions stay cached.
+      signatures.delete(toolCallId);
+      signatures.set(toolCallId, {
+        signature: entry.signature,
+        expiresAt: now + MEMORY_TTL_MS,
+      });
+      return entry.signature;
+    }
+    signatures.delete(toolCallId);
+  }
 
   try {
     const db = getDbInstance();
@@ -174,10 +192,12 @@ export function getGeminiThoughtSignature(toolCallId: unknown) {
         return null;
       }
 
+      signatures.delete(toolCallId);
       signatures.set(toolCallId, {
         signature: persisted.entry.signature,
         expiresAt: Date.now() + MEMORY_TTL_MS,
       });
+      pruneExpired(false, now);
 
       if (persisted.shouldRewrite) {
         db.prepare("UPDATE key_value SET value = ? WHERE namespace = ? AND key = ?").run(
@@ -310,6 +330,7 @@ export function resolveGeminiThoughtSignature(
 
 export function clearGeminiThoughtSignatures() {
   signatures.clear();
+  lastPruneAt = Number.NEGATIVE_INFINITY;
   signatureCacheMode = "enabled";
   try {
     const db = getDbInstance();
@@ -321,9 +342,19 @@ export function clearGeminiThoughtSignatures() {
 
 export function clearGeminiThoughtSignatureMemoryForTests() {
   signatures.clear();
+  lastPruneAt = Number.NEGATIVE_INFINITY;
 }
 
 export function getGeminiThoughtSignatureMemorySizeForTests() {
-  pruneExpired();
+  pruneExpired(true);
   return signatures.size;
+}
+
+export function __getThoughtSignatureStoreLimitsForTest() {
+  return {
+    maxMemory: MAX_SIGNATURES,
+    maxPersisted: MAX_PERSISTED_SIGNATURES,
+    memoryTtlMs: MEMORY_TTL_MS,
+    pruneIntervalMs: PRUNE_INTERVAL_MS,
+  };
 }
