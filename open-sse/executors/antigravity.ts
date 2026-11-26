@@ -13,10 +13,7 @@ import {
   getAntigravityOAuthUserAgent,
 } from "../services/antigravityHeaders.ts";
 import { classify429, decide429, type Decision } from "../services/antigravity429Engine.ts";
-import {
-  parseRetryFromErrorText,
-  type RetryHintProvenance,
-} from "../services/accountFallback.ts";
+import { parseRetryFromErrorText, type RetryHintProvenance } from "../services/accountFallback.ts";
 import { parseDetailedRetryHintFromJsonBody } from "../services/retryAfterJson.ts";
 import {
   shouldRetryWithCredits,
@@ -28,6 +25,7 @@ import { persistCreditBalance, getAllPersistedCreditBalances } from "@/lib/db/cr
 import { setConnectionRateLimitUntil } from "@/lib/db/providers";
 import { markAntigravityModelQuotaExhausted } from "../services/antigravityFamilyCooldown.ts";
 import { getMitmAlias } from "@/lib/db/models";
+import { getModelSpec } from "../../src/shared/constants/modelSpecs.ts";
 import {
   MAX_ANTIGRAVITY_OUTPUT_TOKENS,
   resolveAntigravityOutputCap,
@@ -328,12 +326,30 @@ function applyAntigravityGenerationDefaults(
       : null;
   const thinkingBudget = Number(thinkingConfig?.thinkingBudget);
   const maxOutputTokens = Number(generationConfig.maxOutputTokens);
-  if (
-    Number.isFinite(thinkingBudget) &&
-    thinkingBudget > 0 &&
-    (!Number.isFinite(maxOutputTokens) || maxOutputTokens <= thinkingBudget)
-  ) {
-    generationConfig.maxOutputTokens = Math.floor(thinkingBudget) + 1;
+  const minThinkingBudget = modelId ? getModelSpec(modelId)?.minThinkingBudget : undefined;
+  const effectiveThinkingFloor =
+    Number.isFinite(thinkingBudget) && thinkingBudget > 0
+      ? Math.floor(thinkingBudget)
+      : typeof minThinkingBudget === "number" && minThinkingBudget > 0
+        ? Math.floor(minThinkingBudget)
+        : 0;
+  const needsVisibleHeadroom =
+    thinkingConfig?.includeThoughts === false ||
+    (typeof minThinkingBudget === "number" && minThinkingBudget > 0);
+  if (effectiveThinkingFloor > 0) {
+    if (needsVisibleHeadroom) {
+      if (!Number.isFinite(maxOutputTokens) || maxOutputTokens <= effectiveThinkingFloor) {
+        const visibleHeadroom =
+          Number.isFinite(maxOutputTokens) && maxOutputTokens > 0
+            ? Math.max(256, Math.floor(maxOutputTokens))
+            : 256;
+        generationConfig.maxOutputTokens = effectiveThinkingFloor + visibleHeadroom;
+      } else if (maxOutputTokens < effectiveThinkingFloor + 256) {
+        generationConfig.maxOutputTokens = effectiveThinkingFloor + 256;
+      }
+    } else if (!Number.isFinite(maxOutputTokens) || maxOutputTokens <= effectiveThinkingFloor) {
+      generationConfig.maxOutputTokens = effectiveThinkingFloor + 1;
+    }
   }
 
   // Final cap (after the thinkingBudget bump may have raised the value):
@@ -379,7 +395,9 @@ const COMPETITIVE_AGENT_PROMPT_PATTERNS: RegExp[] = [
  */
 export function stripCompetitiveAgentPrompts(systemInstruction: unknown): unknown {
   const record = asRecord(systemInstruction);
-  const parts = Array.isArray(record?.parts) ? (record.parts as Array<Record<string, unknown>>) : [];
+  const parts = Array.isArray(record?.parts)
+    ? (record.parts as Array<Record<string, unknown>>)
+    : [];
   if (parts.length === 0) return systemInstruction;
 
   let changed = false;
@@ -387,7 +405,10 @@ export function stripCompetitiveAgentPrompts(systemInstruction: unknown): unknow
     if (typeof part.text !== "string" || part.text.length === 0) return part;
     let text = part.text;
     for (const pattern of COMPETITIVE_AGENT_PROMPT_PATTERNS) {
-      const stripped = text.replace(pattern, "").replace(/\n{3,}/g, "\n\n").trimStart();
+      const stripped = text
+        .replace(pattern, "")
+        .replace(/\n{3,}/g, "\n\n")
+        .trimStart();
       if (stripped !== text) {
         changed = true;
         text = stripped;
@@ -498,7 +519,9 @@ function isAntigravityGeminiChatModel(upstreamModel: string): boolean {
   if (/(?:^|-)image(?:-|$)/.test(normalizedModel)) {
     return false;
   }
-  return /^gemini-(?:3(?:\.\d+)?(?:-[a-z0-9-]+)?|pro-agent)$/.test(normalizedModel);
+  return /^gemini-(?:3(?:\.\d+)?(?:-[a-z0-9-]+)?|4-[a-z0-9-]+|pro-(?:orchestrator(?:-[a-z]+)?|agent)|flash-worker(?:-[a-z]+)?)$/.test(
+    normalizedModel
+  );
 }
 
 // Test-only export so the unit suite can exercise the strip logic directly.
@@ -556,8 +579,7 @@ export class AntigravityExecutor extends BaseExecutor {
 
   override shouldRetry(status: number, urlIndex: number): boolean {
     return (
-      (status === HTTP_STATUS.RATE_LIMITED ||
-        status === HTTP_STATUS.NOT_FOUND ||
+      (status === HTTP_STATUS.NOT_FOUND ||
         status === HTTP_STATUS.BAD_GATEWAY ||
         status === HTTP_STATUS.SERVICE_UNAVAILABLE ||
         status === HTTP_STATUS.GATEWAY_TIMEOUT) &&
@@ -566,8 +588,24 @@ export class AntigravityExecutor extends BaseExecutor {
   }
 
   buildUrl(model: string, _stream: boolean, urlIndex = 0): string {
-    void model;
-    const baseUrls = this.getBaseUrls();
+    const rawBaseUrls = this.getBaseUrls();
+    const prefersDaily =
+      !/argon/i.test(String(model || "")) &&
+      /gemini-4-(?:carbon|hydrogen|neon)|gemini-pro-(?:orchestrator(?:-[a-z]+)?|agent)|gemini-flash-worker(?:-[a-z]+)?|(?:^|\/)(?:orchestrator-neon|4-(?:carbon|hydrogen|neon))/i.test(
+        String(model || "")
+      );
+    const hasDaily = rawBaseUrls.some((u) => u.includes("daily-cloudcode-pa"));
+    const baseUrls = hasDaily
+      ? prefersDaily
+        ? [
+            ...rawBaseUrls.filter((u) => u.includes("daily-cloudcode-pa")),
+            ...rawBaseUrls.filter((u) => !u.includes("daily-cloudcode-pa")),
+          ]
+        : [
+            ...rawBaseUrls.filter((u) => !u.includes("daily-cloudcode-pa")),
+            ...rawBaseUrls.filter((u) => u.includes("daily-cloudcode-pa")),
+          ]
+      : rawBaseUrls;
     const baseUrl = baseUrls[urlIndex] || baseUrls[0];
     // Always use streaming endpoint — the non-streaming `generateContent` causes
     // upstream 400 errors for some models (e.g. gpt-oss-120b-medium) because the
@@ -783,7 +821,13 @@ export class AntigravityExecutor extends BaseExecutor {
       ...(contents.length > 0 && { contents }),
       sessionId: getAntigravitySessionId(
         credentials,
-        typeof normalizedRequest?.sessionId === "string" ? normalizedRequest.sessionId : undefined
+        typeof (credentials as { clientSessionKey?: unknown } | null)?.clientSessionKey ===
+          "string" &&
+          String((credentials as { clientSessionKey?: unknown }).clientSessionKey).trim().length > 0
+          ? undefined
+          : typeof normalizedRequest?.sessionId === "string"
+            ? normalizedRequest.sessionId
+            : undefined
       ),
       ...(safetySettings !== undefined && { safetySettings }),
       toolConfig:
@@ -1170,7 +1214,9 @@ export class AntigravityExecutor extends BaseExecutor {
    * exactly the same single call as before (zero extra upstream requests).
    */
   async execute(input: ExecuteInput) {
-    await resolveAntigravityClientVersion(getAntigravityClientProfile(input.credentials, input.model));
+    await resolveAntigravityClientVersion(
+      getAntigravityClientProfile(input.credentials, input.model)
+    );
 
     // Look up the chain by the NORMALLY-resolved upstream id (honours MITM/static aliases).
     // If a MITM alias remapped the id away from a known Pro tier, no chain applies → fast path.
@@ -1527,7 +1573,11 @@ export class AntigravityExecutor extends BaseExecutor {
     // Auto retry for 429 (no Retry-After) or transient 5xx errors.
     // For 5xx we read the body to detect known transient patterns
     // ("Agent execution terminated due to error", "high traffic", "capacity").
-    if ((!retryMs || retryMs === 0) && !switchAuth && retryAttemptsByUrl[urlIndex] < MAX_AUTO_RETRIES) {
+    if (
+      (!retryMs || retryMs === 0) &&
+      !switchAuth &&
+      retryAttemptsByUrl[urlIndex] < MAX_AUTO_RETRIES
+    ) {
       const shouldAutoRetry = await this.shouldAutoRetryTransient(response);
       if (shouldAutoRetry) {
         retryAttemptsByUrl[urlIndex]++;
@@ -1548,10 +1598,10 @@ export class AntigravityExecutor extends BaseExecutor {
 
     log.debug(
       "RETRY",
-      `${response.status}, Retry-After ${retryMs ? `too long (${Math.ceil(retryMs / 1000)}s)` : "missing"}, trying fallback`
+      `${response.status}, Retry-After ${retryMs ? `too long (${Math.ceil(retryMs / 1000)}s)` : "missing"}, ${response.status === HTTP_STATUS.RATE_LIMITED ? "switching account" : "trying fallback"}`
     );
 
-    if (urlIndex + 1 < fallbackCount) {
+    if (response.status !== HTTP_STATUS.RATE_LIMITED && urlIndex + 1 < fallbackCount) {
       return { action: "retryNextUrl", lastStatus: response.status };
     }
 

@@ -16,6 +16,7 @@ import {
   capThinkingBudget,
   getDefaultThinkingBudget,
 } from "../../../src/lib/modelCapabilities.ts";
+import { hasComboStepEffort } from "../../services/combo/comboStepEffort.ts";
 import { getModelSpec } from "../../../src/shared/constants/modelSpecs.ts";
 
 import {
@@ -221,38 +222,80 @@ function openaiToGeminiBase(
     // "none" maps to budget 0 — an explicit, documented off-switch (#6813 defect 2),
     // distinct from the no-knob-at-all default-injection case below (#4170).
     // Port of decolua/9router#2043 by @nguyenxvotanminh3.
-    if (body.reasoning_effort) {
+    const thinking = body.thinking as { type?: string; budget_tokens?: number } | undefined;
+    const isComboEffort = hasComboStepEffort(body);
+    const reasoningObjEffort =
+      body.reasoning &&
+      typeof body.reasoning === "object" &&
+      !Array.isArray(body.reasoning) &&
+      typeof (body.reasoning as Record<string, unknown>).effort === "string"
+        ? String((body.reasoning as Record<string, unknown>).effort)
+            .trim()
+            .toLowerCase()
+        : "";
+    const effectiveReasoningEffort =
+      typeof body.reasoning_effort === "string" && body.reasoning_effort.trim()
+        ? body.reasoning_effort.trim().toLowerCase()
+        : reasoningObjEffort;
+
+    const modelSpec = getModelSpec(model);
+    const applyMinThinkingFloor = () => {
+      const minBudget = modelSpec?.minThinkingBudget;
+      if (typeof minBudget === "number" && minBudget > 0 && modelSpec?.thinkingBudgetCap !== 0) {
+        result.generationConfig.thinkingConfig = {
+          thinkingBudget: capThinkingBudget(model, minBudget),
+          includeThoughts: false,
+        };
+        return true;
+      }
+      return false;
+    };
+
+    if (thinking?.type === "disabled") {
+      // Explicit thinking-off: clamp always-thinking models to minThinkingBudget (hidden)
+      // or emit budget 0 / includeThoughts false so #4170 default injection does not re-enable thinking
+      if (!applyMinThinkingFloor()) {
+        result.generationConfig.thinkingConfig = {
+          thinkingBudget: 0,
+          includeThoughts: false,
+        };
+      }
+    } else if (effectiveReasoningEffort) {
       const highBudget = capThinkingBudget(model, 32768);
       const budgetMap: Record<string, number> = {
         none: 0,
+        minimal: capThinkingBudget(model, 512),
         low: capThinkingBudget(model, 1024),
-        medium: capThinkingBudget(model, getDefaultThinkingBudget(model) || 8192),
+        medium: capThinkingBudget(
+          model,
+          getDefaultThinkingBudget(model) ||
+            (getModelSpec(model)?.thinkingBudgetCap === 8192 ||
+            /neon|carbon|orchestrator/i.test(model)
+              ? 2048
+              : 8192)
+        ),
         high: highBudget,
         auto: highBudget,
         max: highBudget,
         xhigh: highBudget,
       };
       const budget =
-        budgetMap[body.reasoning_effort as string] ??
+        budgetMap[effectiveReasoningEffort] ??
         capThinkingBudget(model, getDefaultThinkingBudget(model) ?? 8192);
-      // Always send thinkingConfig on this path — including for models with
-      // thinkingBudgetCap:0 (e.g. gemini-3-flash), where the cap collapses the
-      // requested budget down to 0. Omitting thinkingConfig entirely here regressed
-      // the pre-#6943 native-defaults contract (thinkingBudget 0 / includeThoughts
-      // false must still be present) and crashed callers that read
-      // .thinkingConfig.thinkingBudget unconditionally.
-      result.generationConfig.thinkingConfig = {
-        thinkingBudget: budget,
-        includeThoughts: budget !== 0,
-      };
+      if (budget !== 0 || !applyMinThinkingFloor()) {
+        result.generationConfig.thinkingConfig = {
+          thinkingBudget: budget,
+          includeThoughts: budget !== 0,
+        };
+      }
     }
     // 2. Claude format: thinking (type: enabled, budget_tokens)
-    // Use an explicit numeric check (not truthy) so an explicit `budget_tokens: 0` — the
-    // natural way to disable thinking — is honored as thinkingBudget 0 instead of being
-    // dropped and falling through to the default injection below (#6813). A zero budget
-    // yields no thoughts, so includeThoughts is only set for a non-zero budget.
-    const thinking = body.thinking as { type?: string; budget_tokens?: number } | undefined;
-    if (thinking?.type === "enabled" && typeof thinking.budget_tokens === "number") {
+    if (
+      thinking?.type !== "disabled" &&
+      !(isComboEffort && effectiveReasoningEffort) &&
+      thinking?.type === "enabled" &&
+      typeof thinking.budget_tokens === "number"
+    ) {
       // typeof check ensures only numeric budget_tokens triggers thinking path;
       // non-numeric values (e.g. string "auto") fall through to the effort-based path.
       const cappedBudget = capThinkingBudget(model, thinking.budget_tokens);
@@ -263,11 +306,18 @@ function openaiToGeminiBase(
       // as the reliable indicator (gemini-2.5-flash has supportsThinking:false
       // but thinkingBudgetCap:24576, meaning it supports thinking via budget).
       // Models not in MODEL_SPECS (thinkingBudgetCap=undefined) default to allowed.
-      if (cappedBudget > 0 || getModelSpec(model)?.thinkingBudgetCap !== 0) {
+      if (cappedBudget > 0) {
         result.generationConfig.thinkingConfig = {
           thinkingBudget: cappedBudget,
-          includeThoughts: cappedBudget !== 0,
+          includeThoughts: true,
         };
+      } else if (getModelSpec(model)?.thinkingBudgetCap !== 0) {
+        if (!applyMinThinkingFloor()) {
+          result.generationConfig.thinkingConfig = {
+            thinkingBudget: 0,
+            includeThoughts: false,
+          };
+        }
       }
     }
   }

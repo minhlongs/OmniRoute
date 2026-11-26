@@ -28,6 +28,13 @@ import {
 // docs/architecture/SSE_BOUNDARY.md and tests/unit/token-refresh-race-comprehensive.test.ts.
 
 export const TOKEN_EXPIRY_BUFFER_MS = BUFFER_MS;
+const BACKGROUND_PROACTIVE_REFRESH_MARGIN_MS = 120_000; // 2 min safety margin
+const NON_ROTATING_PROACTIVE_PROVIDERS = new Set(["antigravity", "agy", "gemini-cli"]);
+const inFlightBackgroundRefreshes = new Set<string>();
+
+export function __getBackgroundRefreshInFlightCountForTest(): number {
+  return inFlightBackgroundRefreshes.size;
+}
 
 async function resolveProxyForCredentials(provider: string, credentials?: any) {
   if (credentials?.connectionId) {
@@ -210,13 +217,8 @@ export async function checkAndRefreshToken(provider: string, credentials: any) {
     const refreshLead = _getRefreshLeadMs(provider, updatedCredentials.providerSpecificData);
 
     if (expiresAt - now < refreshLead) {
-      log.info("TOKEN_REFRESH", "Token expiring soon, refreshing proactively", {
-        provider,
-        expiresIn: Math.round((expiresAt - now) / 1000),
-        refreshLeadMs: refreshLead,
-      });
-
       const connectionId: string | undefined = updatedCredentials.connectionId;
+      const remainingMs = expiresAt - now;
 
       // Pass onPersist so the DB write happens INSIDE the open-sse per-connection
       // mutex, making [network call + DB write] one atomic step. This eliminates the
@@ -228,6 +230,40 @@ export async function checkAndRefreshToken(provider: string, credentials: any) {
             await updateProviderCredentials(connectionId, result);
           }
         : undefined;
+
+      if (
+        NON_ROTATING_PROACTIVE_PROVIDERS.has(provider) &&
+        connectionId &&
+        updatedCredentials.accessToken &&
+        remainingMs > BACKGROUND_PROACTIVE_REFRESH_MARGIN_MS
+      ) {
+        if (!inFlightBackgroundRefreshes.has(connectionId)) {
+          inFlightBackgroundRefreshes.add(connectionId);
+          log.info("TOKEN_REFRESH", "Token expiring soon, refreshing proactively in background", {
+            provider,
+            expiresIn: Math.round(remainingMs / 1000),
+            refreshLeadMs: refreshLead,
+          });
+          void getAccessToken(provider, { ...updatedCredentials }, persistCallback)
+            .catch((err) => {
+              log.warn("TOKEN_REFRESH", "Background proactive token refresh failed", {
+                provider,
+                connectionId,
+                error: err instanceof Error ? err.message : String(err),
+              });
+            })
+            .finally(() => {
+              inFlightBackgroundRefreshes.delete(connectionId);
+            });
+        }
+        return updatedCredentials;
+      }
+
+      log.info("TOKEN_REFRESH", "Token expiring soon, refreshing proactively", {
+        provider,
+        expiresIn: Math.round(remainingMs / 1000),
+        refreshLeadMs: refreshLead,
+      });
 
       const newCredentials = await getAccessToken(provider, updatedCredentials, persistCallback);
 

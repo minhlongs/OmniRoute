@@ -8,6 +8,9 @@ export interface ModelSpec {
   maxOutputTokens?: number;
   contextWindow?: number;
   defaultThinkingBudget?: number;
+  // Floor for always-thinking models (e.g. Gemini 4 Neon/Carbon) that default to heavy
+  // HIGH thinking (~2000 tokens) when thinkingConfig is omitted or thinkingBudget is 0.
+  minThinkingBudget?: number;
   thinkingBudgetCap?: number;
   thinkingOverhead?: number; // buffer de tokens para thinking
   adaptiveMaxTokens?: number; // tokens disponíveis para output quando thinking ativo
@@ -109,6 +112,42 @@ const GPT_5_6_MODEL_SPEC = {
   supportsVision: true,
 } satisfies ModelSpec;
 
+const GEMINI_4_CARBON_MODEL_SPEC = {
+  maxOutputTokens: 262144,
+  contextWindow: 1048576,
+  defaultThinkingBudget: 2048,
+  minThinkingBudget: 1024,
+  thinkingBudgetCap: 8192,
+  supportsThinking: true,
+  supportsTools: true,
+  supportsVision: true,
+  supportsAudio: true,
+  supportsVideo: true,
+} satisfies ModelSpec;
+
+const GEMINI_4_NEON_MODEL_SPEC = {
+  maxOutputTokens: 262144,
+  contextWindow: 1048576,
+  defaultThinkingBudget: 2048,
+  minThinkingBudget: 1024,
+  thinkingBudgetCap: 8192,
+  supportsThinking: true,
+  supportsTools: true,
+  supportsVision: true,
+  supportsAudio: true,
+  supportsVideo: true,
+} satisfies ModelSpec;
+
+const GEMINI_4_ARGON_MODEL_SPEC = {
+  maxOutputTokens: 65536,
+  contextWindow: 1048576,
+  supportsThinking: true,
+  supportsTools: true,
+  supportsVision: true,
+  supportsAudio: true,
+  supportsVideo: true,
+} satisfies ModelSpec;
+
 const GEMINI_36_FLASH_MODEL_SPEC = {
   maxOutputTokens: 65536,
   contextWindow: 1048576,
@@ -118,6 +157,74 @@ const GEMINI_36_FLASH_MODEL_SPEC = {
 } satisfies ModelSpec;
 
 export const MODEL_SPECS: Record<string, ModelSpec> = {
+  "gemini-pro-orchestrator": {
+    ...GEMINI_4_CARBON_MODEL_SPEC,
+    aliases: ["agy/gemini-pro-orchestrator", "antigravity/gemini-pro-orchestrator"],
+  },
+  "gemini-4-carbon": {
+    ...GEMINI_4_CARBON_MODEL_SPEC,
+    aliases: ["4-carbon", "agy/gemini-4-carbon", "antigravity/gemini-4-carbon"],
+  },
+  "gemini-4-carbon-high": {
+    ...GEMINI_4_CARBON_MODEL_SPEC,
+    aliases: ["agy/gemini-4-carbon-high", "antigravity/gemini-4-carbon-high"],
+  },
+  "gemini-4-carbon-medium": {
+    ...GEMINI_4_CARBON_MODEL_SPEC,
+    aliases: ["agy/gemini-4-carbon-medium", "antigravity/gemini-4-carbon-medium"],
+  },
+  "gemini-4-carbon-low": {
+    ...GEMINI_4_CARBON_MODEL_SPEC,
+    aliases: ["agy/gemini-4-carbon-low", "antigravity/gemini-4-carbon-low"],
+  },
+  "gemini-pro-orchestrator-neon": {
+    ...GEMINI_4_NEON_MODEL_SPEC,
+    aliases: [
+      "orchestrator-neon",
+      "agy/gemini-pro-orchestrator-neon",
+      "antigravity/gemini-pro-orchestrator-neon",
+    ],
+  },
+  "gemini-4-neon": {
+    ...GEMINI_4_NEON_MODEL_SPEC,
+    aliases: ["4-neon", "agy/gemini-4-neon", "antigravity/gemini-4-neon"],
+  },
+  "gemini-4-neon-xhigh": {
+    ...GEMINI_4_NEON_MODEL_SPEC,
+    aliases: ["agy/gemini-4-neon-xhigh", "antigravity/gemini-4-neon-xhigh"],
+  },
+  "gemini-4-neon-high": {
+    ...GEMINI_4_NEON_MODEL_SPEC,
+    aliases: ["agy/gemini-4-neon-high", "antigravity/gemini-4-neon-high"],
+  },
+  "gemini-4-neon-medium": {
+    ...GEMINI_4_NEON_MODEL_SPEC,
+    aliases: ["agy/gemini-4-neon-medium", "antigravity/gemini-4-neon-medium"],
+  },
+  "gemini-4-neon-low": {
+    ...GEMINI_4_NEON_MODEL_SPEC,
+    aliases: ["agy/gemini-4-neon-low", "antigravity/gemini-4-neon-low"],
+  },
+  "gemini-4-argon": {
+    ...GEMINI_4_ARGON_MODEL_SPEC,
+    aliases: ["4-argon", "argon/gemini-4-argon", "gemini-web/gemini-4-argon"],
+  },
+  "gemini-4-argon-high": {
+    ...GEMINI_4_ARGON_MODEL_SPEC,
+    aliases: [
+      "agy/gemini-4-argon-high",
+      "antigravity/gemini-4-argon-high",
+      "gemini-web/gemini-4-argon-high",
+    ],
+  },
+  "gemini-4-argon-medium": {
+    ...GEMINI_4_ARGON_MODEL_SPEC,
+    aliases: ["agy/gemini-4-argon-medium", "antigravity/gemini-4-argon-medium"],
+  },
+  "gemini-4-argon-low": {
+    ...GEMINI_4_ARGON_MODEL_SPEC,
+    aliases: ["agy/gemini-4-argon-low", "antigravity/gemini-4-argon-low"],
+  },
   "gpt-5.6": {
     ...GPT_5_6_MODEL_SPEC,
     aliases: ["openai/gpt-5.6"],

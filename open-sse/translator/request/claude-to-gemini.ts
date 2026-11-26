@@ -1,15 +1,17 @@
 import { register } from "../registry.ts";
 import { FORMATS } from "../formats.ts";
-import {
-  DEFAULT_SAFETY_SETTINGS,
-  cleanJSONSchemaForAntigravity,
-} from "../helpers/geminiHelper.ts";
+import { DEFAULT_SAFETY_SETTINGS, cleanJSONSchemaForAntigravity } from "../helpers/geminiHelper.ts";
 import { buildGeminiTools, sanitizeGeminiToolName } from "../helpers/geminiToolsSanitizer.ts";
 import {
   buildGeminiThoughtSignatureKey,
   resolveGeminiThoughtSignature,
 } from "../../services/geminiThoughtSignatureStore.ts";
-import { capMaxOutputTokens, capThinkingBudget } from "../../../src/lib/modelCapabilities.ts";
+import {
+  capMaxOutputTokens,
+  capThinkingBudget,
+  getDefaultThinkingBudget,
+} from "../../../src/lib/modelCapabilities.ts";
+import { hasComboStepEffort } from "../../services/combo/comboStepEffort.ts";
 import { getModelSpec } from "../../../src/shared/constants/modelSpecs.ts";
 import {
   buildChangedToolNameMap,
@@ -17,6 +19,15 @@ import {
   mergeConsecutiveSameRoleContents,
   type GeminiContent,
 } from "./openai-to-gemini/helpers.ts";
+
+/**
+ * Strip Anthropic's dynamic x-anthropic-billing-header from system instructions.
+ * Prevents prompt cache busts and unwanted header leakages into Gemini upstream.
+ */
+function stripAnthropicBillingHeader(text: unknown): string {
+  if (typeof text !== "string") return "";
+  return text.replace(/^x-anthropic-billing-header:[^\n]*(?:\r?\n)?/gim, "");
+}
 
 /**
  * Direct Claude → Gemini request translator.
@@ -85,11 +96,18 @@ export function claudeToGeminiRequest(model, body, stream, credentials = null) {
 
   // ── System instruction ─────────────────────────────────────────
   if (body.system) {
-    let systemText;
+    let systemText: string;
     if (Array.isArray(body.system)) {
-      systemText = body.system.map((s) => s.text || "").join("\n");
+      systemText = body.system
+        .map((s) => {
+          if (typeof s === "string") return stripAnthropicBillingHeader(s);
+          const raw = s && typeof s === "object" ? (s as { text?: string }).text || "" : "";
+          return stripAnthropicBillingHeader(raw);
+        })
+        .filter(Boolean)
+        .join("\n");
     } else {
-      systemText = String(body.system);
+      systemText = stripAnthropicBillingHeader(String(body.system));
     }
     if (systemText) {
       result.systemInstruction = {
@@ -241,9 +259,56 @@ export function claudeToGeminiRequest(model, body, stream, credentials = null) {
   }
 
   // ── Thinking config ────────────────────────────────────────────
-  // Priority: thinking.budget_tokens (Claude native) > output_config.effort (Claude Code).
+  // Priority:
+  //   1. Explicit client `thinking: { type: "disabled" }` (protocol contract: forbid thinking blocks)
+  //   2. Combo step `reasoningEffort` override (marked via WeakSet in comboStepEffort.ts)
+  //   3. Direct/non-combo precedence: `thinking.budget_tokens` > `output_config.effort` > `thinking: { type: "adaptive" }`
+  const modelSpec = getModelSpec(model);
+  const applyMinThinkingFloor = () => {
+    const minBudget = modelSpec?.minThinkingBudget;
+    if (typeof minBudget === "number" && minBudget > 0 && modelSpec?.thinkingBudgetCap !== 0) {
+      result.generationConfig.thinkingConfig = {
+        thinkingBudget: capThinkingBudget(model, minBudget),
+        includeThoughts: false,
+      };
+    }
+  };
+  const resolveEffortBudget = (eff: string): number | undefined => {
+    if (eff === "medium" && modelSpec?.thinkingBudgetCap === 8192) {
+      return getDefaultThinkingBudget(model) || 2048;
+    }
+    const baseMap: Record<string, number> = {
+      none: 0,
+      minimal: 512,
+      low: 1024,
+      medium: 10240,
+      high: 32768,
+      auto: 32768,
+      max: 131072,
+      xhigh: 131072,
+    };
+    return baseMap[eff];
+  };
+  const comboEffortOverride =
+    hasComboStepEffort(body) && typeof body.output_config?.effort === "string"
+      ? body.output_config.effort.trim().toLowerCase()
+      : "";
   if (model.startsWith("gemma-4")) {
     // gemma-4 models returns - 400: Thinking budget is not supported for this model
+  } else if (body.thinking?.type === "disabled") {
+    // Thinking explicitly disabled: clamp always-thinking models to minThinkingBudget (hidden)
+    applyMinThinkingFloor();
+  } else if (comboEffortOverride && resolveEffortBudget(comboEffortOverride) !== undefined) {
+    const rawBudget = resolveEffortBudget(comboEffortOverride)!;
+    const budget = capThinkingBudget(model, rawBudget);
+    if (budget > 0 && modelSpec?.thinkingBudgetCap !== 0) {
+      result.generationConfig.thinkingConfig = {
+        thinkingBudget: budget,
+        includeThoughts: true,
+      };
+    } else {
+      applyMinThinkingFloor();
+    }
   } else if (body.thinking?.type === "enabled" && typeof body.thinking.budget_tokens === "number") {
     // typeof check ensures only numeric budget_tokens triggers the thinking path;
     // non-numeric values (e.g. string "auto") fall through to the effort-based path.
@@ -258,9 +323,16 @@ export function claudeToGeminiRequest(model, body, stream, credentials = null) {
     // as the reliable indicator (gemini-2.5-flash has supportsThinking:false
     // but thinkingBudgetCap:24576, meaning it supports thinking via budget).
     // Models not in MODEL_SPECS (thinkingBudgetCap=undefined) default to allowed.
-    if (cappedBudget > 0 || getModelSpec(model)?.thinkingBudgetCap !== 0) {
+    const effectiveEnabledBudget =
+      cappedBudget === 0 &&
+      typeof modelSpec?.minThinkingBudget === "number" &&
+      modelSpec.minThinkingBudget > 0 &&
+      modelSpec.thinkingBudgetCap !== 0
+        ? capThinkingBudget(model, modelSpec.minThinkingBudget)
+        : cappedBudget;
+    if (effectiveEnabledBudget > 0 || modelSpec?.thinkingBudgetCap !== 0) {
       result.generationConfig.thinkingConfig = {
-        thinkingBudget: cappedBudget,
+        thinkingBudget: effectiveEnabledBudget,
         // #6813: `budget_tokens: 0` on this explicit path is the client's dynamic-thinking
         // sentinel, not an off-switch — includeThoughts stays true regardless of the
         // (possibly cap-clamped) budget value. Only the reasoning_effort/output_config.effort
@@ -268,34 +340,36 @@ export function claudeToGeminiRequest(model, body, stream, credentials = null) {
         includeThoughts: true,
       };
     }
-  } else if (typeof body.output_config?.effort === "string") {
-    const effort = body.output_config.effort.toLowerCase();
-    const effortBudgetMap: Record<string, number> = {
-      none: 0,
-      low: 1024,
-      medium: 10240,
-      high: 32768,
-      max: 131072,
-      xhigh: 131072,
-    };
-    const rawBudget = effortBudgetMap[effort];
-    // #3842: clamp to the model's real thinking-budget cap. This path previously
-    // sent the raw value with no cap, so a Claude-Code client hitting a Flash-tier
-    // Gemini target via output_config.effort="high" sent 32768 (> 24576) → 400.
-    // capThinkingBudget narrows 32768 to e.g. gemini-2.5-flash's 24576 while leaving
-    // pro-tier (real cap 32768) untouched.
+  } else if (
+    typeof body.output_config?.effort === "string" &&
+    resolveEffortBudget(body.output_config.effort.trim().toLowerCase()) !== undefined
+  ) {
+    const effort = body.output_config.effort.trim().toLowerCase();
+    const rawBudget = resolveEffortBudget(effort);
+    // #3842: clamp to the model's real thinking-budget cap.
     const budget = rawBudget !== undefined ? capThinkingBudget(model, rawBudget) : undefined;
-    if (budget !== undefined && budget > 0) {
-      // Only send thinkingConfig if the model supports thinking via budget.
-      // Models with thinkingBudgetCap:0 (e.g. gemini-3-flash) reject
-      // thinkingConfig even for effort-based paths.
-      if (getModelSpec(model)?.thinkingBudgetCap !== 0) {
-        result.generationConfig.thinkingConfig = {
-          thinkingBudget: budget,
-          includeThoughts: true,
-        };
-      }
+    if (budget !== undefined && budget > 0 && modelSpec?.thinkingBudgetCap !== 0) {
+      result.generationConfig.thinkingConfig = {
+        thinkingBudget: budget,
+        includeThoughts: true,
+      };
+    } else if (budget !== undefined) {
+      applyMinThinkingFloor();
     }
+  } else if (body.thinking?.type === "adaptive") {
+    if (modelSpec?.thinkingBudgetCap !== 0) {
+      const adaptiveBudget =
+        typeof modelSpec?.minThinkingBudget === "number" && modelSpec.minThinkingBudget > 0
+          ? capThinkingBudget(model, getDefaultThinkingBudget(model) || modelSpec.minThinkingBudget)
+          : undefined;
+      result.generationConfig.thinkingConfig =
+        adaptiveBudget !== undefined
+          ? { thinkingBudget: adaptiveBudget, includeThoughts: true }
+          : { includeThoughts: true };
+    }
+  }
+  if (!model.startsWith("gemma-4") && !result.generationConfig.thinkingConfig) {
+    applyMinThinkingFloor();
   }
 
   // Gemini lowercases tool names in its functionCall responses, so identity
