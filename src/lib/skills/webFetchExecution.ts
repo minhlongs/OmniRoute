@@ -8,6 +8,8 @@
 
 import { getProviderCredentialsWithQuotaPreflight } from "@/sse/services/auth";
 import { getInterceptionRules, type FetchInterceptionBackend } from "@/lib/db/interceptionRules";
+import { getSettings } from "@/lib/db/settings";
+import { isProviderBlockedByIdOrAlias } from "@/shared/utils/noAuthProviders";
 import {
   handleWebFetch,
   type WebFetchCredentials,
@@ -98,14 +100,22 @@ async function resolveCredentials(
   }
 }
 
-async function autoSelectProvider(): Promise<{
+async function autoSelectProvider(blockedProviders: string[]): Promise<{
   provider: WebFetchProviderId;
   credentials: WebFetchCredentials;
 } | null> {
   for (const providerId of WEB_FETCH_PROVIDERS) {
     if (EXPLICIT_ONLY_PROVIDERS.has(providerId)) continue;
+    if (isProviderBlockedByIdOrAlias(providerId, blockedProviders)) continue;
     const credentials = await resolveCredentials(providerId);
     if (credentials) return { provider: providerId, credentials };
+  }
+  for (const providerId of WEB_FETCH_PROVIDERS) {
+    if (EXPLICIT_ONLY_PROVIDERS.has(providerId)) continue;
+    if (isProviderBlockedByIdOrAlias(providerId, blockedProviders)) continue;
+    if (ANONYMOUS_CAPABLE_PROVIDERS.has(providerId)) {
+      return { provider: providerId, credentials: {} };
+    }
   }
   return null;
 }
@@ -113,19 +123,33 @@ async function autoSelectProvider(): Promise<{
 async function resolveProviderAndCredentials(
   input: ExecuteWebFetchInput
 ): Promise<{ provider: WebFetchProviderId; credentials: WebFetchCredentials }> {
+  const settings = await getSettings().catch(() => ({}) as any);
+  const blockedProviders: string[] = settings?.blockedProviders || [];
+
+  if (input.provider && isProviderBlockedByIdOrAlias(input.provider, blockedProviders)) {
+    throw new WebFetchExecutionError(
+      `Web-fetch provider ${input.provider} is blocked by security policy`,
+      403
+    );
+  }
+
   const pinnedProvider = resolvePinnedBackend(input);
-  const pinnedCredentials = pinnedProvider ? await resolveCredentials(pinnedProvider) : null;
-  if (pinnedProvider && pinnedCredentials) {
+  const isPinnedBlocked = pinnedProvider
+    ? isProviderBlockedByIdOrAlias(pinnedProvider, blockedProviders)
+    : false;
+  const pinnedCredentials =
+    pinnedProvider && !isPinnedBlocked ? await resolveCredentials(pinnedProvider) : null;
+  if (pinnedProvider && !isPinnedBlocked && pinnedCredentials) {
     return { provider: pinnedProvider, credentials: pinnedCredentials };
   }
-  if (pinnedProvider && ANONYMOUS_CAPABLE_PROVIDERS.has(pinnedProvider)) {
+  if (pinnedProvider && !isPinnedBlocked && ANONYMOUS_CAPABLE_PROVIDERS.has(pinnedProvider)) {
     // Anonymous tier: no connection configured (or the credential resolution
     // came back rate-limited — the anonymous tier does not consume key quota,
     // so a rate-limited key must not block the anonymous attempt either).
     return { provider: pinnedProvider, credentials: {} };
   }
 
-  const auto = await autoSelectProvider();
+  const auto = await autoSelectProvider(blockedProviders);
   if (!auto) {
     throw new WebFetchExecutionError(
       `No credentials configured for any web-fetch provider. Add an API key for one of: ${WEB_FETCH_PROVIDERS.join(", ")}.`,

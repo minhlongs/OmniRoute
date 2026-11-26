@@ -25,6 +25,7 @@ import { resolveSearchBaseUrl } from "./search/baseUrl.ts";
 
 import {
   getSearchProvider,
+  isAnonymousCapableSearchProvider,
   isUnconfiguredLoopbackSearchProvider,
   type SearchProviderConfig,
 } from "../config/searchRegistry.ts";
@@ -1552,11 +1553,19 @@ export async function handleSearch(options: SearchHandlerOptions): Promise<Searc
 
   if (result.success) return result;
 
-  // 5. Failover to alternate (only for retriable errors and auto-select mode)
+  // 5. Failover to alternate (retriable errors, plus upstream 401/403 when an
+  // anonymous keyless tier is throttled/blocked by WAF so free failover stays symmetric)
+  const isKeylessAnonymousAttempt =
+    isAnonymousCapableSearchProvider(primaryConfig.id) &&
+    !credentials?.apiKey &&
+    !credentials?.accessToken;
+  const canFailoverStatus =
+    !NON_RETRIABLE.has(result.status || 0) ||
+    (isKeylessAnonymousAttempt && (result.status === 401 || result.status === 403));
   if (
     alternateConfig &&
     alternateCredentials &&
-    !NON_RETRIABLE.has(result.status || 0) &&
+    canFailoverStatus &&
     Date.now() - startTime < GLOBAL_TIMEOUT_MS
   ) {
     if (log) {
@@ -1600,7 +1609,12 @@ async function tryDuckDuckGoFreeProvider(
 ): Promise<SearchHandlerResult> {
   const { query, searchType, maxResults } = params;
   const remainingGlobal = GLOBAL_TIMEOUT_MS - (Date.now() - globalStartTime);
-  const timeout = Math.min(config.timeoutMs, Math.max(remainingGlobal, 1000));
+  const ddgTimeoutEnv = Number(process.env.OMNIROUTE_DDG_FREE_TIMEOUT_MS);
+  const effectiveDdgTimeout =
+    Number.isFinite(ddgTimeoutEnv) && ddgTimeoutEnv > 0
+      ? Math.min(config.timeoutMs, ddgTimeoutEnv)
+      : Math.min(config.timeoutMs, 3_000);
+  const timeout = Math.min(effectiveDdgTimeout, Math.max(remainingGlobal, 1000));
 
   if (log) {
     log.info?.("SEARCH", `${config.id} | query: "${query.slice(0, 80)}" | type: ${searchType}`);
@@ -1698,7 +1712,7 @@ async function tryProvider(
       : undefined;
   const token = credentials.apiKey || credentials.accessToken || undefined;
 
-  if (config.authType !== "none" && !token) {
+  if (config.authType !== "none" && !isAnonymousCapableSearchProvider(config.id) && !token) {
     return {
       success: false,
       status: 401,

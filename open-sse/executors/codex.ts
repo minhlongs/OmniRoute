@@ -54,7 +54,8 @@ export {
 import { isCodexFreePlan, normalizeCodexTools } from "./codex/tools.ts";
 import {
   CODEX_EFFORT_ORDER as EFFORT_ORDER,
-  GPT_5_6_ULTRA_ALIAS_MODELS,
+  CODEX_MAX_EFFORT_BY_MODEL as MAX_EFFORT_BY_MODEL,
+  isCodexDelegationDependentModel,
   splitCodexReasoningSuffix,
   type CodexEffortLevel as EffortLevel,
 } from "./codex/reasoningSuffix.ts";
@@ -165,17 +166,6 @@ function isCodexResponsesLiteRequest(
   return isEnabledResponsesLiteFlag(
     (metadata as Record<string, unknown>)[CODEX_RESPONSES_LITE_WS_METADATA_KEY]
   );
-}
-
-// GPT-5.6 ultra-tier (sol/terra at "ultra") and luna at "max" coordinate delegation to
-// sub-agents via parallel tool calls (see the effort-clamp comment near clampEffort()).
-// Responses Lite must not strip parallel_tool_calls for those model/effort combos, or
-// delegation silently breaks while the request still returns HTTP 200 (issue #7821).
-function isCodexDelegationDependentModel(model: unknown): boolean {
-  const { baseModel, effort } = splitCodexReasoningSuffix(model);
-  if (effort === "ultra" && GPT_5_6_ULTRA_ALIAS_MODELS.has(baseModel)) return true;
-  if (effort === "max" && baseModel === "gpt-5.6-luna") return true;
-  return false;
 }
 
 function enforceCodexResponsesLiteParallelToolCalls(
@@ -323,22 +313,6 @@ function normalizeServiceTierValue(value: unknown): string | undefined {
   if (normalized === "fast") return CODEX_FAST_WIRE_VALUE;
   return normalized;
 }
-
-/**
- * Maximum reasoning effort allowed per Codex model.
- * Models not listed here retain the legacy xhigh cap.
- * Update this table when Codex releases new models with different caps.
- */
-const MAX_EFFORT_BY_MODEL: Record<string, EffortLevel> = {
-  "gpt-5.6-sol": "ultra",
-  "gpt-5.6-terra": "ultra",
-  "gpt-5.6-luna": "max",
-  "gpt-5.3-codex": "xhigh",
-  "gpt-5.1-codex-max": "xhigh",
-  "gpt-5-mini": "high",
-  "gpt-5.1-mini": "high",
-  "gpt-4.1-mini": "high",
-};
 
 /**
  * Clamp reasoning effort to the model's maximum allowed level.

@@ -1,5 +1,7 @@
 import { getProviderCredentials } from "@/sse/services/auth";
 import { recordCost } from "@/domain/costRules";
+import { getSettings } from "@/lib/db/settings";
+import { isProviderBlockedByIdOrAlias } from "@/shared/utils/noAuthProviders";
 import * as defaultLog from "@/sse/utils/logger";
 import {
   getAllSearchProviders,
@@ -7,11 +9,20 @@ import {
   resolveSearchProvider,
   selectProvider,
   supportsSearchType,
+  isAnonymousCapableSearchProvider,
+  isDocCorpusOnlySearchProvider,
+  isUnconfiguredLoopbackSearchProvider,
+  isUnconfiguredSearchProviderFallbackEnabled,
+  resolvePreferredFreeSearchProviderIds,
   getSearchCredentialFallbacks,
   SEARCH_PROVIDERS,
   type SearchProviderConfig,
 } from "@omniroute/open-sse/config/searchRegistry.ts";
-import { handleSearch, type SearchResponse } from "@omniroute/open-sse/handlers/search.ts";
+import {
+  handleSearch,
+  resolveSearchBaseUrl,
+  type SearchResponse,
+} from "@omniroute/open-sse/handlers/search.ts";
 import {
   computeCacheKey,
   getOrCoalesce,
@@ -136,7 +147,16 @@ export async function executeWebSearch(
   if (input.provider === "x-search" || input.provider === "xquik-search") input.search_type = "x";
   const searchType = input.search_type || "web";
 
+  const settings = await getSettings().catch(() => ({}) as any);
+  const blockedProviders: string[] = settings?.blockedProviders || [];
+
   if (input.provider) {
+    if (isProviderBlockedByIdOrAlias(input.provider, blockedProviders)) {
+      throw new WebSearchExecutionError(
+        `Search provider ${input.provider} is blocked by security policy`,
+        403
+      );
+    }
     const explicitProvider = resolveSearchProvider(input.provider);
     if (!explicitProvider) {
       throw new WebSearchExecutionError(`Unknown search provider: ${input.provider}`, 400);
@@ -165,6 +185,28 @@ export async function executeWebSearch(
   let alternateProviderId: string | undefined;
   let alternateCredentials: Record<string, any> | null = null;
 
+  const resolveFreeCandidates = async (
+    excludeId?: string,
+    options: { keylessOnly?: boolean } = {}
+  ) => {
+    const list: Array<{ config: SearchProviderConfig; credentials: Record<string, any> }> = [];
+    for (const freeId of resolvePreferredFreeSearchProviderIds()) {
+      if (freeId === excludeId) continue;
+      if (isProviderBlockedByIdOrAlias(freeId, blockedProviders)) continue;
+      const cfg = getSearchProvider(freeId);
+      if (!cfg || cfg.disabled || !supportsSearchType(cfg, searchType)) continue;
+      if (options.keylessOnly) {
+        if (cfg.authType === "none" || isAnonymousCapableSearchProvider(cfg.id)) {
+          list.push({ config: cfg, credentials: {} });
+        }
+        continue;
+      }
+      const stored = await resolveSearchCredentials(cfg.id);
+      list.push({ config: cfg, credentials: stored ?? {} });
+    }
+    return list;
+  };
+
   if (input.provider) {
     credentials = await resolveSearchCredentials(providerConfig.id);
     if (
@@ -176,6 +218,46 @@ export async function executeWebSearch(
       credentials = {
         providerSpecificData: { baseUrl: input.provider_options.baseUrl.trim() },
       };
+    }
+    if (
+      !credentials &&
+      ((providerConfig.authType === "none" &&
+        !isUnconfiguredLoopbackSearchProvider(providerConfig)) ||
+        isAnonymousCapableSearchProvider(providerConfig.id))
+    ) {
+      credentials = {};
+    }
+    if (
+      credentials &&
+      (providerConfig.id === "duckduckgo-free" || providerConfig.id === "anysearch-search")
+    ) {
+      const freeAlts = await resolveFreeCandidates(providerConfig.id, {
+        keylessOnly: providerConfig.id === "duckduckgo-free",
+      });
+      if (freeAlts.length > 0) {
+        alternateProviderId = freeAlts[0].config.id;
+        alternateCredentials = freeAlts[0].credentials;
+      }
+    }
+    if (
+      !credentials &&
+      isUnconfiguredSearchProviderFallbackEnabled() &&
+      providerConfig.authType !== "none" &&
+      !isDocCorpusOnlySearchProvider(providerConfig.id)
+    ) {
+      const freeFallbacks = await resolveFreeCandidates(providerConfig.id);
+      if (freeFallbacks.length > 0) {
+        log.warn(
+          "SEARCH",
+          `Provider ${providerConfig.id} has no credentials; falling back to ${freeFallbacks[0].config.id}`
+        );
+        providerConfig = freeFallbacks[0].config;
+        credentials = freeFallbacks[0].credentials;
+        if (freeFallbacks.length > 1) {
+          alternateProviderId = freeFallbacks[1].config.id;
+          alternateCredentials = freeFallbacks[1].credentials;
+        }
+      }
     }
     if (!credentials) {
       throw new WebSearchExecutionError(
@@ -191,7 +273,12 @@ export async function executeWebSearch(
     // configured paid provider is never skipped just because a cheaper
     // no-credentials provider appears first in the cost sort (issue #11524).
     const candidateProviders = Object.values(SEARCH_PROVIDERS)
-      .filter((provider) => !provider.fallbackOnly && supportsSearchType(provider, searchType))
+      .filter(
+        (provider) =>
+          !provider.fallbackOnly &&
+          supportsSearchType(provider, searchType) &&
+          !isProviderBlockedByIdOrAlias(provider.id, blockedProviders)
+      )
       .sort((a, b) => a.costPerQuery - b.costPerQuery);
 
     for (const candidate of candidateProviders) {
@@ -204,23 +291,51 @@ export async function executeWebSearch(
     }
 
     if (!credentials) {
-      // Last resort: fallback-only providers so out-of-the-box search
-      // still works when no credentialed provider is configured.
+      // Credentialed fallback-only providers (e.g. configured searxng-search or
+      // configured paid anysearch-search) take precedence over keyless free tiers.
       const fallbackProviders = Object.values(SEARCH_PROVIDERS)
-        .filter((provider) => provider.fallbackOnly && supportsSearchType(provider, searchType))
+        .filter(
+          (provider) =>
+            provider.fallbackOnly &&
+            !isDocCorpusOnlySearchProvider(provider.id) &&
+            supportsSearchType(provider, searchType) &&
+            !isProviderBlockedByIdOrAlias(provider.id, blockedProviders)
+        )
         .sort((a, b) => a.costPerQuery - b.costPerQuery);
 
       for (const fallbackProvider of fallbackProviders) {
-        providerConfig = fallbackProvider;
-        if (fallbackProvider.id === "duckduckgo-free") {
-          credentials = {};
-          break;
-        }
         const fallbackCredentials = await resolveSearchCredentials(fallbackProvider.id);
-        if (fallbackCredentials) {
-          credentials = fallbackCredentials;
-          break;
+        if (!fallbackCredentials) continue;
+        const effectiveBaseUrl = resolveSearchBaseUrl(fallbackProvider, {
+          query: input.query.trim(),
+          searchType,
+          maxResults: fallbackProvider.defaultMaxResults,
+          providerOptions: input.provider_options,
+          providerSpecificData:
+            fallbackCredentials.providerSpecificData &&
+            typeof fallbackCredentials.providerSpecificData === "object"
+              ? fallbackCredentials.providerSpecificData
+              : undefined,
+        });
+        if (
+          isUnconfiguredLoopbackSearchProvider({
+            ...fallbackProvider,
+            baseUrl: effectiveBaseUrl,
+          })
+        ) {
+          continue;
         }
+        providerConfig = fallbackProvider;
+        credentials = fallbackCredentials;
+        break;
+      }
+    }
+
+    if (!credentials) {
+      const preferredFree = await resolveFreeCandidates();
+      if (preferredFree.length > 0) {
+        providerConfig = preferredFree[0].config;
+        credentials = preferredFree[0].credentials;
       }
     }
 
@@ -233,10 +348,13 @@ export async function executeWebSearch(
       );
     }
 
-    // Exclude fallback-only providers from execution-time alternates.
-    // They are reserved for last-resort primary selection.
     const otherIds = Object.values(SEARCH_PROVIDERS)
-      .filter((provider) => !provider.fallbackOnly && supportsSearchType(provider, searchType))
+      .filter(
+        (provider) =>
+          !provider.fallbackOnly &&
+          supportsSearchType(provider, searchType) &&
+          !isProviderBlockedByIdOrAlias(provider.id, blockedProviders)
+      )
       .sort((a, b) => a.costPerQuery - b.costPerQuery)
       .map((provider) => provider.id)
       .filter((providerId) => providerId !== providerConfig!.id);
@@ -248,6 +366,41 @@ export async function executeWebSearch(
         alternateProviderId = providerId;
         alternateCredentials = altCreds;
         break;
+      }
+    }
+
+    if (!alternateProviderId) {
+      for (const provider of Object.values(SEARCH_PROVIDERS)) {
+        if (!provider.fallbackOnly || provider.id === providerConfig!.id) continue;
+        if (isDocCorpusOnlySearchProvider(provider.id)) continue;
+        if (isProviderBlockedByIdOrAlias(provider.id, blockedProviders)) continue;
+        if (!supportsSearchType(provider, searchType)) continue;
+        const storedCreds = await resolveSearchCredentials(provider.id);
+        if (!storedCreds) continue;
+        const effectiveBaseUrl = resolveSearchBaseUrl(provider, {
+          query: input.query.trim(),
+          searchType,
+          maxResults: provider.defaultMaxResults,
+          providerOptions: input.provider_options,
+          providerSpecificData:
+            storedCreds.providerSpecificData && typeof storedCreds.providerSpecificData === "object"
+              ? storedCreds.providerSpecificData
+              : undefined,
+        });
+        if (isUnconfiguredLoopbackSearchProvider({ ...provider, baseUrl: effectiveBaseUrl })) {
+          continue;
+        }
+        alternateProviderId = provider.id;
+        alternateCredentials = storedCreds;
+        break;
+      }
+    }
+
+    if (!alternateProviderId) {
+      const freeAlts = await resolveFreeCandidates(providerConfig.id);
+      if (freeAlts.length > 0) {
+        alternateProviderId = freeAlts[0].config.id;
+        alternateCredentials = freeAlts[0].credentials;
       }
     }
   }

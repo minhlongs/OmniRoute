@@ -96,7 +96,7 @@ export const EXPLICIT_ONLY_WEB_FETCH_PROVIDERS: ReadonlySet<WebFetchProviderId> 
  * Compile-time protection only (see the note above on ReadonlySet).
  */
 export const ANONYMOUS_CAPABLE_WEB_FETCH_PROVIDERS: ReadonlySet<WebFetchProviderId> =
-  new Set<WebFetchProviderId>(["context7"]);
+  new Set<WebFetchProviderId>(["context7", "anysearch-search"]);
 
 /**
  * Execute a web fetch request against the specified (or auto-selected) provider.

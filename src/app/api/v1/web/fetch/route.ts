@@ -40,6 +40,8 @@ import {
   rateLimitedProviderResponse,
   type RateLimitedCredentials,
 } from "@/app/api/v1/_shared/rateLimit";
+import { getSettings } from "@/lib/db/settings";
+import { isProviderBlockedByIdOrAlias } from "@/shared/utils/noAuthProviders";
 
 const CORS_HEADERS = {
   "Access-Control-Allow-Methods": "POST, OPTIONS",
@@ -56,6 +58,24 @@ const EXPLICIT_ONLY_PROVIDERS = EXPLICIT_ONLY_WEB_FETCH_PROVIDERS;
 // Providers whose upstream serves an anonymous tier without a key. When no
 // connection is configured they resolve to empty credentials instead of a 400.
 const ANONYMOUS_CAPABLE_PROVIDERS = ANONYMOUS_CAPABLE_WEB_FETCH_PROVIDERS;
+
+function isAnonymousWebFetchFallbackEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
+  const raw = env.OMNIROUTE_WEB_FETCH_ANONYMOUS_FALLBACK?.trim().toLowerCase();
+  return raw === "1" || raw === "true";
+}
+
+function findGeneralAnonymousWebFetchProvider(
+  blockedProviders: string[],
+  exclude?: ReadonlySet<WebFetchProviderId>
+): WebFetchProviderId | null {
+  for (const pid of WEB_FETCH_PROVIDERS) {
+    if (EXPLICIT_ONLY_PROVIDERS.has(pid)) continue;
+    if (isProviderBlockedByIdOrAlias(pid, blockedProviders)) continue;
+    if (exclude?.has(pid)) continue;
+    if (ANONYMOUS_CAPABLE_PROVIDERS.has(pid)) return pid;
+  }
+  return null;
+}
 
 // Providers whose free/low tiers surface quota exhaustion as 402/403 instead
 // of (or in addition to) 429. jina-reader has no such quota-status signal —
@@ -94,17 +114,28 @@ function isRetryableWebFetchStatus(providerId: WebFetchProviderId, status?: numb
   return false;
 }
 
-/** Find the next untried, non-rate-limited, credentialed provider in pool order. */
+/** Find the next untried, non-rate-limited provider in pool order. */
 async function findNextFallbackProvider(
-  tried: Set<WebFetchProviderId>
+  tried: Set<WebFetchProviderId>,
+  blockedProviders: string[]
 ): Promise<{ providerId: WebFetchProviderId; credentials: WebFetchCredentials } | null> {
   for (const pid of WEB_FETCH_PROVIDERS) {
     if (EXPLICIT_ONLY_PROVIDERS.has(pid)) continue;
+    if (isProviderBlockedByIdOrAlias(pid, blockedProviders)) continue;
     if (tried.has(pid)) continue;
     const creds = await resolveCredentials(pid);
-    tried.add(pid);
-    if (creds && !isAllRateLimitedCredentials(creds)) {
-      return { providerId: pid, credentials: creds };
+    if (creds) {
+      tried.add(pid);
+      if (!isAllRateLimitedCredentials(creds)) {
+        return { providerId: pid, credentials: creds };
+      }
+    }
+  }
+  if (isAnonymousWebFetchFallbackEnabled()) {
+    const anonFallback = findGeneralAnonymousWebFetchProvider(blockedProviders, tried);
+    if (anonFallback) {
+      tried.add(anonFallback);
+      return { providerId: anonFallback, credentials: {} };
     }
   }
   return null;
@@ -134,7 +165,8 @@ async function executeWithFallback(
   startProvider: WebFetchProviderId,
   startCredentials: WebFetchCredentials,
   allowFallback: boolean,
-  triedProviders: Set<WebFetchProviderId>
+  triedProviders: Set<WebFetchProviderId>,
+  blockedProviders: string[]
 ): Promise<WebFetchExecutionResult> {
   let provider = startProvider;
   let credentials = startCredentials;
@@ -145,7 +177,7 @@ async function executeWithFallback(
   }
 
   while (!result.success && isRetryableWebFetchStatus(provider, result.status)) {
-    const next = await findNextFallbackProvider(triedProviders);
+    const next = await findNextFallbackProvider(triedProviders, blockedProviders);
     if (!next) {
       return { result, provider, poolExhausted: true };
     }
@@ -169,8 +201,18 @@ type ResolvedWebFetchTarget =
 
 /** Resolve credentials for an explicitly requested provider (no fallback allowed). */
 async function resolveExplicitTarget(
-  providerId: WebFetchProviderId
+  providerId: WebFetchProviderId,
+  blockedProviders: string[]
 ): Promise<ResolvedWebFetchTarget> {
+  if (isProviderBlockedByIdOrAlias(providerId, blockedProviders)) {
+    return {
+      ok: false,
+      response: errorResponse(
+        HTTP_STATUS.FORBIDDEN,
+        `Web-fetch provider ${providerId} is blocked by security policy`
+      ),
+    };
+  }
   const creds = await resolveCredentials(providerId);
   // Anonymous-capable providers never hard-fail on credential problems: the
   // anonymous tier does not consume key quota, so a rate-limited (or absent)
@@ -188,6 +230,26 @@ async function resolveExplicitTarget(
     return { ok: false, response: rateLimitedProviderResponse(providerId, creds) };
   }
   if (!creds) {
+    if (isAnonymousWebFetchFallbackEnabled() && !EXPLICIT_ONLY_PROVIDERS.has(providerId)) {
+      const anonFallback = findGeneralAnonymousWebFetchProvider(
+        blockedProviders,
+        new Set([providerId])
+      );
+      if (anonFallback) {
+        const anonCreds = await resolveCredentials(anonFallback);
+        log.warn(
+          "WEB_FETCH",
+          `Provider ${providerId} has no credentials; falling back to anonymous ${anonFallback}`
+        );
+        return {
+          ok: true,
+          provider: anonFallback,
+          credentials: anonCreds && !isAllRateLimitedCredentials(anonCreds) ? anonCreds : {},
+          tried: new Set([providerId, anonFallback]),
+          isExplicit: false,
+        };
+      }
+    }
     return {
       ok: false,
       response: errorResponse(
@@ -210,7 +272,9 @@ async function resolveExplicitTarget(
  * Auto-select: walk the pool in fixed priority order (fill-first), skipping
  * rate-limited stubs instead of letting them short-circuit the loop (#8297).
  */
-async function resolveAutoSelectTarget(): Promise<ResolvedWebFetchTarget> {
+async function resolveAutoSelectTarget(
+  blockedProviders: string[]
+): Promise<ResolvedWebFetchTarget> {
   let firstRateLimited: {
     providerId: WebFetchProviderId;
     credentials: RateLimitedCredentials;
@@ -218,6 +282,7 @@ async function resolveAutoSelectTarget(): Promise<ResolvedWebFetchTarget> {
 
   for (const pid of WEB_FETCH_PROVIDERS) {
     if (EXPLICIT_ONLY_PROVIDERS.has(pid)) continue;
+    if (isProviderBlockedByIdOrAlias(pid, blockedProviders)) continue;
     const creds = await resolveCredentials(pid);
     if (isAllRateLimitedCredentials(creds)) {
       firstRateLimited ??= { providerId: pid, credentials: creds };
@@ -229,6 +294,19 @@ async function resolveAutoSelectTarget(): Promise<ResolvedWebFetchTarget> {
         provider: pid,
         credentials: creds,
         tried: new Set([pid]),
+        isExplicit: false,
+      };
+    }
+  }
+
+  if (isAnonymousWebFetchFallbackEnabled()) {
+    const anonFallback = findGeneralAnonymousWebFetchProvider(blockedProviders);
+    if (anonFallback) {
+      return {
+        ok: true,
+        provider: anonFallback,
+        credentials: {},
+        tried: new Set([anonFallback]),
         isExplicit: false,
       };
     }
@@ -255,12 +333,13 @@ async function resolveAutoSelectTarget(): Promise<ResolvedWebFetchTarget> {
 
 /** Resolve the provider + credentials to use for this request (explicit or auto-select). */
 async function resolveWebFetchTarget(
-  requestedProvider: string | undefined
+  requestedProvider: string | undefined,
+  blockedProviders: string[]
 ): Promise<ResolvedWebFetchTarget> {
   if (requestedProvider) {
-    return resolveExplicitTarget(requestedProvider as WebFetchProviderId);
+    return resolveExplicitTarget(requestedProvider as WebFetchProviderId, blockedProviders);
   }
-  return resolveAutoSelectTarget();
+  return resolveAutoSelectTarget(blockedProviders);
 }
 
 export async function POST(request: Request) {
@@ -293,8 +372,11 @@ export async function POST(request: Request) {
   const policy = await enforceApiKeyPolicy(request, "web-fetch");
   if (policy.rejection) return policy.rejection;
 
+  const settings = await getSettings().catch(() => ({}) as any);
+  const blockedProviders: string[] = settings?.blockedProviders || [];
+
   // Resolve provider + credentials (explicit provider never falls back; #8297)
-  const target = await resolveWebFetchTarget(body.provider);
+  const target = await resolveWebFetchTarget(body.provider, blockedProviders);
   if (!target.ok) return target.response;
 
   log.info("WEB_FETCH", `${target.provider} | ${body.url} | format=${body.format}`);
@@ -314,7 +396,8 @@ export async function POST(request: Request) {
     target.provider,
     target.credentials,
     !target.isExplicit,
-    target.tried
+    target.tried,
+    blockedProviders
   );
 
   if (poolExhausted) {

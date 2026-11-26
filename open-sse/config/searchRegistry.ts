@@ -412,6 +412,47 @@ export const SEARCH_PROVIDERS: Record<string, SearchProviderConfig> = {
  * Credential fallback mapping — search providers that can reuse credentials
  * from a related provider (e.g., perplexity-search uses the same API key as perplexity chat).
  */
+/**
+ * Search providers whose upstream serves an anonymous keyless tier when no API
+ * key connection is configured. Kept separate from `authType: "none"` so dashboard
+ * credential validation and Bearer injection still apply when a key IS configured.
+ */
+export const ANONYMOUS_CAPABLE_SEARCH_PROVIDERS: ReadonlySet<string> = new Set([
+  "anysearch-search",
+]);
+
+/**
+ * Search providers backed by specialized documentation corpora rather than the
+ * general web. They remain selectable when explicitly requested (`provider: "context7"`),
+ * never during generic web auto-selection or automatic failover.
+ */
+export const DOC_CORPUS_ONLY_SEARCH_PROVIDERS: ReadonlySet<string> = new Set(["context7"]);
+
+export function isAnonymousCapableSearchProvider(providerId: string | null | undefined): boolean {
+  return typeof providerId === "string" && ANONYMOUS_CAPABLE_SEARCH_PROVIDERS.has(providerId);
+}
+
+export function isDocCorpusOnlySearchProvider(providerId: string | null | undefined): boolean {
+  return typeof providerId === "string" && DOC_CORPUS_ONLY_SEARCH_PROVIDERS.has(providerId);
+}
+
+export function resolvePreferredFreeSearchProviderIds(
+  env: NodeJS.ProcessEnv = process.env
+): string[] {
+  const preferred = env.OMNIROUTE_PRIMARY_FREE_SEARCH_PROVIDER?.trim().toLowerCase();
+  if (preferred && resolveSearchProvider(preferred)?.id === "anysearch-search") {
+    return ["anysearch-search", "duckduckgo-free"];
+  }
+  return ["duckduckgo-free", "anysearch-search"];
+}
+
+export function isUnconfiguredSearchProviderFallbackEnabled(
+  env: NodeJS.ProcessEnv = process.env
+): boolean {
+  const raw = env.OMNIROUTE_SEARCH_FALLBACK_UNCONFIGURED_PROVIDER?.trim().toLowerCase();
+  return raw === "1" || raw === "true";
+}
+
 export const SEARCH_CREDENTIAL_FALLBACKS: Record<string, string | string[]> = {
   "perplexity-search": "perplexity",
   "ollama-search": "ollama-cloud",

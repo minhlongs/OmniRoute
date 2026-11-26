@@ -62,10 +62,28 @@ export function resolveCodexCatalogAppVersion(
   const buildSha = readNonEmptyTextFile(path.join(runtimeRoot, "BUILD_SHA"));
   if (buildSha) return `build:${buildSha}`;
 
-  for (const buildIdPath of [
+  const buildIdCandidates: string[] = [];
+  const resolvedRoot = path.resolve(runtimeRoot);
+  const nextDistDir = typeof env.NEXT_DIST_DIR === "string" ? env.NEXT_DIST_DIR.trim() : "";
+  if (nextDistDir && !path.isAbsolute(nextDistDir)) {
+    const candidateBuildId = path.resolve(resolvedRoot, nextDistDir, "BUILD_ID");
+    if (candidateBuildId.startsWith(resolvedRoot + path.sep)) {
+      buildIdCandidates.push(candidateBuildId);
+    }
+  }
+  const hasExplicitVersionInputs =
+    Boolean(options.runtimeRoot) || Object.prototype.hasOwnProperty.call(options, "packageVersion");
+  if (!hasExplicitVersionInputs && typeof process.argv[1] === "string" && process.argv[1].trim()) {
+    const scriptDir = path.dirname(path.resolve(process.argv[1]));
+    if (path.basename(scriptDir) === "standalone") {
+      buildIdCandidates.push(path.resolve(scriptDir, "..", "BUILD_ID"));
+    }
+  }
+  buildIdCandidates.push(
     path.join(runtimeRoot, ".build", "next", "BUILD_ID"),
-    path.join(runtimeRoot, ".next", "BUILD_ID"),
-  ]) {
+    path.join(runtimeRoot, ".next", "BUILD_ID")
+  );
+  for (const buildIdPath of buildIdCandidates) {
     const buildId = readNonEmptyTextFile(buildIdPath);
     if (buildId) return `next:${buildId}`;
   }

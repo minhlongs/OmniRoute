@@ -37,6 +37,8 @@ const isCloud = typeof globalThis.caches === "object" && globalThis.caches !== n
 
 const DEFAULT_WAL_TRUNCATE_INTERVAL_MS = 6 * 60 * 60 * 1000;
 const RETRY_DELAY_MS = 60_000;
+const DEFAULT_PERIODIC_TRUNCATE_BUSY_TIMEOUT_MS = 50;
+const FALLBACK_RESTORE_BUSY_TIMEOUT_MS = 5_000;
 
 let walTimer: NodeJS.Timeout | null = null;
 let retryTimer: NodeJS.Timeout | null = null;
@@ -122,6 +124,60 @@ export function runCheckpointNow(
   }
 }
 
+function readBusyTimeoutMs(result: unknown, fallbackMs: number): number {
+  const row = Array.isArray(result) ? result[0] : result;
+  if (typeof row === "number" && Number.isFinite(row) && row >= 0) {
+    return row;
+  }
+  if (row && typeof row === "object") {
+    const record = row as Record<string, unknown>;
+    const candidate = toFiniteNumber(record.timeout ?? record.busy_timeout);
+    if (candidate !== null && candidate >= 0) {
+      return candidate;
+    }
+  }
+  return fallbackMs;
+}
+
+export function runNonBlockingPeriodicTruncate(
+  db: SqliteAdapter,
+  truncateBusyTimeoutMs: number = DEFAULT_PERIODIC_TRUNCATE_BUSY_TIMEOUT_MS,
+  fallbackRestoreBusyTimeoutMs: number = FALLBACK_RESTORE_BUSY_TIMEOUT_MS,
+  ctx: WalCheckpointContext = {}
+): WalCheckpointOutcome {
+  if (ctx.sqliteFile === null || ctx.isCloud === true || ctx.isBuildPhase === true) {
+    return runCheckpointNow(db, "TRUNCATE", ctx);
+  }
+  const boundedMs =
+    Number.isFinite(truncateBusyTimeoutMs) && truncateBusyTimeoutMs >= 0
+      ? Math.floor(truncateBusyTimeoutMs)
+      : DEFAULT_PERIODIC_TRUNCATE_BUSY_TIMEOUT_MS;
+  const safeFallbackRestoreMs =
+    Number.isFinite(fallbackRestoreBusyTimeoutMs) && fallbackRestoreBusyTimeoutMs >= 0
+      ? Math.floor(fallbackRestoreBusyTimeoutMs)
+      : FALLBACK_RESTORE_BUSY_TIMEOUT_MS;
+  let previousBusyTimeoutMs = safeFallbackRestoreMs;
+  let lowered = false;
+  try {
+    previousBusyTimeoutMs = readBusyTimeoutMs(db.pragma("busy_timeout"), safeFallbackRestoreMs);
+    db.pragma(`busy_timeout = ${boundedMs}`);
+    lowered = true;
+  } catch {
+    // Adapter may not expose busy_timeout pragma; proceed with checkpoint.
+  }
+  try {
+    return runCheckpointNow(db, "TRUNCATE", ctx);
+  } finally {
+    if (lowered) {
+      try {
+        db.pragma(`busy_timeout = ${Math.max(0, Math.floor(previousBusyTimeoutMs))}`);
+      } catch {
+        // Never throw from periodic WAL maintenance restoration.
+      }
+    }
+  }
+}
+
 export function getWalMaintenanceIntervalMs(env: NodeJS.ProcessEnv = process.env): number {
   const rawValue = env.OMNIROUTE_WAL_TRUNCATE_INTERVAL_MS;
   if (typeof rawValue === "string" && rawValue.trim().length > 0) {
@@ -190,7 +246,7 @@ export function startWalMaintenance(
   walTimer = setInterval(() => {
     try {
       if (!db.open) return;
-      const outcome = runCheckpointNow(db, "TRUNCATE");
+      const outcome = runNonBlockingPeriodicTruncate(db);
       if (outcome.skipped) return;
       ticks++;
       if (outcome.busy) {
